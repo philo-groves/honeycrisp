@@ -9,15 +9,79 @@ import {
   createFirstRunMemoryController,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
+  createResearchEventId,
   createResearchFlowCapture,
   createResearchTraceEvents,
   createResearchGoalFrame,
+  createResearchMemoryProvenance,
+  createResearchMemoryRecordId,
   extractResearchTraceFromText,
+  formatResearchEventSequence,
   isAcceptedRawEventKind,
+  isResearchDerivedMemoryStatus,
+  isResearchEventId,
+  isResearchMemoryRecordKind,
+  normalizeResearchEventSequence,
   planResearchLoop,
   processResearchLoop,
+  RESEARCH_DERIVED_MEMORY_STATUSES,
+  RESEARCH_MEMORY_RECORD_KINDS,
   routeEventsToMemorySnapshot,
+  routeEventToMemory,
 } from "../packages/research-agent/dist/index.js";
+
+test("phase 1 memory contracts define canonical ids, sequences, statuses, and provenance", () => {
+  const eventId = createResearchEventId();
+  const stableRecordId = createResearchMemoryRecordId({
+    kind: "semantic_claim",
+    sourceEventIds: ["evt_source"],
+    discriminator: "claim:parser-reachability",
+  });
+  const repeatedRecordId = createResearchMemoryRecordId({
+    kind: "semantic_claim",
+    sourceEventIds: ["evt_source"],
+    discriminator: "claim:parser-reachability",
+  });
+  const provenance = createResearchMemoryProvenance({
+    sourceEventIds: ["evt_source"],
+    derivation: "model_visible_inference",
+    evidenceFor: [
+      {
+        id: "evidence_source",
+        relationship: "supports",
+        sourceEventId: "evt_source",
+      },
+    ],
+    evidenceAgainst: [
+      {
+        id: "evidence_gap",
+        relationship: "weakens",
+        summary: "Reachability not yet proven.",
+      },
+    ],
+  });
+
+  assert.equal(isResearchEventId(eventId), true);
+  assert.equal(formatResearchEventSequence(normalizeResearchEventSequence(7)), "000000000007");
+  assert.equal(stableRecordId, repeatedRecordId);
+  assert.match(stableRecordId, /^mem_semantic_claim_[0-9a-f]{24}$/);
+  assert.deepEqual(RESEARCH_DERIVED_MEMORY_STATUSES, [
+    "candidate",
+    "active",
+    "confirmed",
+    "contradicted",
+    "superseded",
+    "stale",
+    "tombstoned",
+  ]);
+  assert.equal(isResearchDerivedMemoryStatus("superseded"), true);
+  assert.equal(isResearchMemoryRecordKind("procedure"), true);
+  assert.ok(RESEARCH_MEMORY_RECORD_KINDS.includes("prospective_check"));
+  assert.deepEqual(provenance.sourceEventIds, ["evt_source"]);
+  assert.equal(provenance.evidenceFor[0]?.relationship, "supports");
+  assert.equal(provenance.evidenceAgainst[0]?.relationship, "weakens");
+  assert.throws(() => normalizeResearchEventSequence(0), /positive safe integer/);
+});
 
 test("first-run controller compiles a typed context packet without recalled memory", () => {
   const goalFrame = createResearchGoalFrame(
@@ -46,6 +110,47 @@ test("first-run controller compiles a typed context packet without recalled memo
     ),
   );
   assert.deepEqual(decision.writeback, ["event", "working", "episodic"]);
+});
+
+test("memory routes expose stable typed derived-record references", () => {
+  const claimEvent = {
+    id: "evt_claim_fixture",
+    kind: "model.claim",
+    timestamp: "2026-06-24T00:00:00.000Z",
+    payload: {
+      summary: "The parser may normalize nested substitution syntax.",
+    },
+  };
+
+  const routes = routeEventToMemory(claimEvent);
+  const memory = routeEventsToMemorySnapshot([claimEvent]);
+  const ref = memory.currentHypotheses[0];
+
+  assert.equal(routes.length, 1);
+  assert.equal(routes[0]?.sourceEventId, claimEvent.id);
+  assert.equal(ref?.store, "semantic");
+  assert.equal(ref?.recordKind, "semantic_claim");
+  assert.equal(ref?.status, "candidate");
+  assert.deepEqual(ref?.sourceEventIds, [claimEvent.id]);
+  assert.match(ref?.id ?? "", /^mem_semantic_claim_[0-9a-f]{24}$/);
+});
+
+test("tool observations route as confirmed evidence records", () => {
+  const observationEvent = {
+    id: "evt_observation_fixture",
+    kind: "tool.observed",
+    timestamp: "2026-06-24T00:00:00.000Z",
+    payload: {
+      summary: "Read parser fixture with substitution grammar examples.",
+    },
+  };
+  const memory = routeEventsToMemorySnapshot([observationEvent]);
+  const ref = memory.directEvidence[0];
+
+  assert.equal(ref?.store, "evidence");
+  assert.equal(ref?.recordKind, "evidence");
+  assert.equal(ref?.status, "confirmed");
+  assert.deepEqual(ref?.sourceEventIds, [observationEvent.id]);
 });
 
 test("first-run controller asks for scope before security-sensitive work", () => {

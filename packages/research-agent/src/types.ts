@@ -23,6 +23,7 @@ export type ResearchGatePolarity = "success" | "failure" | "stop";
 
 export type ResearchMemoryStoreKind =
   | "event"
+  | "evidence"
   | "working"
   | "episodic"
   | "semantic"
@@ -62,6 +63,76 @@ export type ResearchMemoryRouteTarget =
   | "prospectiveCommitments"
   | "userCommitments";
 
+export type ResearchEventId = `evt_${string}`;
+
+export type ResearchEventSequence = number;
+
+export type ResearchMemoryRecordId = `mem_${string}`;
+
+export type ResearchDerivedMemoryStatus =
+  | "candidate"
+  | "active"
+  | "confirmed"
+  | "contradicted"
+  | "superseded"
+  | "stale"
+  | "tombstoned";
+
+export type ResearchMemoryRecordKind =
+  | "evidence"
+  | "episodic"
+  | "semantic_claim"
+  | "hypothesis"
+  | "belief"
+  | "procedure"
+  | "prospective_check"
+  | "working";
+
+export type ResearchMemoryEvidenceRelationship =
+  | "supports"
+  | "weakens"
+  | "contradicts"
+  | "mentions"
+  | "derived_from";
+
+export interface ResearchArtifactRef {
+  id: string;
+  kind: string;
+  uri?: string;
+  summary?: string;
+  contentHash?: string;
+}
+
+export interface ResearchMemoryEvidenceRef {
+  id: string;
+  relationship: ResearchMemoryEvidenceRelationship;
+  sourceEventId?: string;
+  recordId?: string;
+  artifactRefId?: string;
+  summary?: string;
+  confidence?: number;
+}
+
+export type ResearchMemoryDerivationKind =
+  | "direct_evidence"
+  | "model_visible_inference"
+  | "model_visible_hypothesis"
+  | "user_commitment"
+  | "runtime_consolidation"
+  | "context_reference";
+
+export interface ResearchMemoryProvenance {
+  sourceEventIds: readonly string[];
+  evidenceFor: readonly ResearchMemoryEvidenceRef[];
+  evidenceAgainst: readonly ResearchMemoryEvidenceRef[];
+  artifactRefs: readonly ResearchArtifactRef[];
+  derivedFromRecordIds: readonly string[];
+  derivation: ResearchMemoryDerivationKind;
+  note?: string;
+}
+
+export type ResearchRawEventPayload = unknown;
+
 export interface ResearchCompletionGate {
   id: string;
   description: string;
@@ -73,16 +144,135 @@ export interface ResearchCompletionGate {
 export interface ResearchMemoryRef {
   store: ResearchMemoryStoreKind;
   id: string;
+  recordKind?: ResearchMemoryRecordKind;
+  status?: ResearchDerivedMemoryStatus;
+  sourceEventIds?: readonly string[];
   summary?: string;
   confidence?: number;
 }
 
 export interface ResearchEvent {
   id: string;
+  sequence?: ResearchEventSequence;
   kind: ResearchAcceptedRawEventKind;
   timestamp: string;
   goalId?: string;
-  payload: unknown;
+  loopId?: string;
+  subGoalId?: string;
+  payload: ResearchRawEventPayload;
+  payloadHash?: string;
+  artifactRefs?: readonly ResearchArtifactRef[];
+  schemaVersion?: number;
+}
+
+export interface ResearchBaseMemoryRecord {
+  id: string;
+  kind: ResearchMemoryRecordKind;
+  status: ResearchDerivedMemoryStatus;
+  summary: string;
+  provenance: ResearchMemoryProvenance;
+  goalId?: string;
+  subGoalId?: string;
+  confidence?: number;
+  tags: readonly string[];
+  entities: readonly string[];
+  createdAt: string;
+  updatedAt: string;
+  validFrom?: string;
+  validUntil?: string;
+}
+
+export interface ResearchEvidenceMemoryRecord
+  extends ResearchBaseMemoryRecord {
+  kind: "evidence";
+  evidenceKind: "tool_observation" | "user_statement" | "artifact" | "runtime";
+  payloadRef: {
+    sourceEventId: string;
+    payloadHash?: string;
+  };
+}
+
+export interface ResearchEpisodicMemoryRecord
+  extends ResearchBaseMemoryRecord {
+  kind: "episodic";
+  episodeKind: "goal_transition" | "loop_result" | "visible_note" | "error";
+}
+
+export interface ResearchSemanticClaimRecord
+  extends ResearchBaseMemoryRecord {
+  kind: "semantic_claim";
+  claim: string;
+}
+
+export interface ResearchHypothesisMemoryRecord
+  extends ResearchBaseMemoryRecord {
+  kind: "hypothesis";
+  hypothesis: string;
+}
+
+export interface ResearchBeliefMemoryRecord extends ResearchBaseMemoryRecord {
+  kind: "belief";
+  belief: string;
+}
+
+export interface ResearchProcedureMemoryRecord
+  extends ResearchBaseMemoryRecord {
+  kind: "procedure";
+  procedure: string;
+  guidance:
+    | {
+        durability: "candidate";
+        promotionRequired: "repeated_usefulness_or_explicit_promotion";
+        observedUsefulCount?: number;
+      }
+    | {
+        durability: "durable";
+        promotionReason: "repeated_usefulness";
+        usefulCount: number;
+        supportingEventIds: readonly string[];
+      }
+    | {
+        durability: "durable";
+        promotionReason: "explicit_promotion";
+        promotedByEventId: string;
+      };
+}
+
+export interface ResearchProspectiveMemoryRecord
+  extends ResearchBaseMemoryRecord {
+  kind: "prospective_check";
+  check: string;
+  trigger: string;
+}
+
+export interface ResearchWorkingMemoryRecord extends ResearchBaseMemoryRecord {
+  kind: "working";
+  expiresAfterLoopId?: string;
+}
+
+export type ResearchDerivedMemoryRecord =
+  | ResearchEvidenceMemoryRecord
+  | ResearchEpisodicMemoryRecord
+  | ResearchSemanticClaimRecord
+  | ResearchHypothesisMemoryRecord
+  | ResearchBeliefMemoryRecord
+  | ResearchProcedureMemoryRecord
+  | ResearchProspectiveMemoryRecord
+  | ResearchWorkingMemoryRecord;
+
+export interface ResearchContextPacketRef {
+  refId: string;
+  target:
+    | "event"
+    | "memory_record"
+    | "artifact"
+    | "goal"
+    | "sub_goal"
+    | "context_section";
+  summary: string;
+  sourceEventIds?: readonly string[];
+  recordIds?: readonly string[];
+  confidence?: number;
 }
 
 export interface ResearchMemoryRoute {

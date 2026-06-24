@@ -1,4 +1,4 @@
-import { createId, nowIso } from "./ids.js";
+import { createResearchEventId, nowIso } from "./ids.js";
 import type {
   ResearchEvent,
   ResearchEvidenceLink,
@@ -172,7 +172,7 @@ function createTraceAssessmentEvent(input: {
   sourceLoopPlanId?: string;
 }): ResearchEvent {
   return {
-    id: createId("event"),
+    id: createResearchEventId(),
     kind:
       input.assessment.status === "complete" ||
       input.assessment.status === "blocked"
@@ -243,7 +243,7 @@ function createTraceItemEvent(input: {
   };
 
   return {
-    id: createId("event"),
+    id: createResearchEventId(),
     kind: eventKind,
     timestamp: input.timestamp,
     ...(input.goalId ? { goalId: input.goalId } : {}),
@@ -261,7 +261,7 @@ function createTraceLinkEvent(input: {
   const summary = createEvidenceLinkSummary(input.link);
 
   return {
-    id: createId("event"),
+    id: createResearchEventId(),
     kind: "model.visible_note",
     timestamp: input.timestamp,
     ...(input.goalId ? { goalId: input.goalId } : {}),

@@ -7,7 +7,7 @@ import {
   shouldContinueGoal,
   updateGoalFrameFromRunState,
 } from "./goal-runtime.js";
-import { createId, nowIso } from "./ids.js";
+import { createResearchEventId, nowIso } from "./ids.js";
 import { planResearchLoop } from "./loop-planner.js";
 import { processResearchLoop } from "./loop-processor.js";
 import { routeEventsToMemorySnapshot } from "./memory-routing.js";
@@ -62,7 +62,7 @@ export async function bootstrapResearchRun(
   const events: ResearchEvent[] = [
     ...(input.events ?? []),
     {
-      id: createId("event"),
+      id: createResearchEventId(),
       kind: "goal.created",
       timestamp: nowIso(),
       goalId: goalFrame.root.id,
@@ -188,7 +188,7 @@ function createMemoryDecisionEvent(
   decision: ResearchMemoryControllerDecision,
 ): ResearchEvent {
   return {
-    id: createId("event"),
+    id: createResearchEventId(),
     kind: "memory.decision",
     timestamp: nowIso(),
     goalId,
@@ -207,7 +207,7 @@ function createContextCompiledEvent(
   decision: ResearchMemoryControllerDecision,
 ): ResearchEvent {
   return {
-    id: createId("event"),
+    id: createResearchEventId(),
     kind: "context.compiled",
     timestamp: nowIso(),
     goalId,
@@ -225,7 +225,7 @@ function createLoopPlannedEvent(
   loopPlan: ResearchLoopPlan,
 ): ResearchEvent {
   return {
-    id: createId("event"),
+    id: createResearchEventId(),
     kind: "loop.planned",
     timestamp: nowIso(),
     goalId,
@@ -245,7 +245,7 @@ function createLoopProcessedEvent(
   loopResult: ResearchLoopProcessingResult,
 ): ResearchEvent {
   return {
-    id: createId("event"),
+    id: createResearchEventId(),
     kind: "loop.processed",
     timestamp: nowIso(),
     goalId,

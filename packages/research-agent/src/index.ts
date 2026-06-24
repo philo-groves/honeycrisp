@@ -33,6 +33,13 @@ export {
   normalizeMemorySnapshot,
 } from "./context-packet.js";
 export type { CompileContextPacketInput } from "./context-packet.js";
+export {
+  createResearchEventId,
+  createResearchMemoryRecordId,
+  formatResearchEventSequence,
+  isResearchEventId,
+  normalizeResearchEventSequence,
+} from "./ids.js";
 export { createResearchFlowCapture } from "./flow-capture.js";
 export type {
   ResearchFlowCapture,
@@ -77,6 +84,13 @@ export {
   FirstRunMemoryController,
 } from "./memory-controller.js";
 export {
+  createResearchMemoryProvenance,
+  isResearchDerivedMemoryStatus,
+  isResearchMemoryRecordKind,
+  RESEARCH_DERIVED_MEMORY_STATUSES,
+  RESEARCH_MEMORY_RECORD_KINDS,
+} from "./memory-contracts.js";
+export {
   ACCEPTED_RAW_EVENT_KINDS,
   isAcceptedRawEventKind,
   routeEventsToMemorySnapshot,
@@ -100,9 +114,19 @@ export type {
   ResearchAcceptedRawEventKind,
   ResearchActionClass,
   ResearchActionScore,
+  ResearchArtifactRef,
+  ResearchBaseMemoryRecord,
+  ResearchBeliefMemoryRecord,
   ResearchCompletionGate,
+  ResearchContextPacketRef,
   ResearchContextPacket,
+  ResearchDerivedMemoryRecord,
+  ResearchDerivedMemoryStatus,
+  ResearchEpisodicMemoryRecord,
+  ResearchEvidenceMemoryRecord,
   ResearchEvent,
+  ResearchEventId,
+  ResearchEventSequence,
   ResearchEvidenceLink,
   ResearchGatePolarity,
   ResearchGovernancePolicy,
@@ -117,14 +141,25 @@ export type {
   ResearchGoalRunState,
   ResearchGoalRunTerminalReason,
   ResearchGoalStatus,
+  ResearchHypothesisMemoryRecord,
   ResearchMemoryControllerDecision,
   ResearchMemoryControllerInput,
+  ResearchMemoryDerivationKind,
+  ResearchMemoryEvidenceRef,
+  ResearchMemoryEvidenceRelationship,
+  ResearchMemoryProvenance,
   ResearchMemoryRef,
+  ResearchMemoryRecordId,
+  ResearchMemoryRecordKind,
   ResearchMemoryRoute,
   ResearchMemoryRouteTarget,
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
+  ResearchProcedureMemoryRecord,
   ResearchPromptFrame,
+  ResearchProspectiveMemoryRecord,
+  ResearchRawEventPayload,
+  ResearchSemanticClaimRecord,
   ResearchLoopPlan,
   ResearchLoopContextSection,
   ResearchLoopExecutionInput,
@@ -142,4 +177,5 @@ export type {
   ResearchToolSideEffect,
   ResearchTrace,
   ResearchTraceItem,
+  ResearchWorkingMemoryRecord,
 } from "./types.js";

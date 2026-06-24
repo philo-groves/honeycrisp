@@ -5,7 +5,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import { createId, nowIso } from "./ids.js";
+import { createResearchEventId, nowIso } from "./ids.js";
 import type {
   ResearchEvent,
   ResearchToolDescriptor,
@@ -153,7 +153,7 @@ export function createLocalInspectionObservationEvent(
   } = {},
 ): ResearchEvent {
   return {
-    id: options.id ?? createId("event"),
+    id: options.id ?? createResearchEventId(),
     kind: "tool.observed",
     timestamp: options.timestamp ?? nowIso(),
     ...(options.goalId ? { goalId: options.goalId } : {}),

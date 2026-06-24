@@ -1,8 +1,11 @@
 import { normalizeMemorySnapshot } from "./context-packet.js";
+import { createResearchMemoryRecordId } from "./ids.js";
 import type {
   ResearchAcceptedRawEventKind,
+  ResearchDerivedMemoryStatus,
   ResearchEvent,
   ResearchMemoryRef,
+  ResearchMemoryRecordKind,
   ResearchMemoryRoute,
   ResearchMemoryRouteTarget,
   ResearchMemorySnapshot,
@@ -43,7 +46,9 @@ export function routeEventToMemory(
         createRefRoute({
           event,
           target: "directEvidence",
-          store: "event",
+          store: "evidence",
+          recordKind: "evidence",
+          status: "confirmed",
           reason: "Tool observations are direct evidence for later loops.",
           confidence: 0.95,
         }),
@@ -55,6 +60,8 @@ export function routeEventToMemory(
           event,
           target: "priorEpisodes",
           store: "episodic",
+          recordKind: "episodic",
+          status: "active",
           reason:
             event.kind === "goal.updated"
               ? "Goal status transitions are part of the research trajectory."
@@ -69,6 +76,8 @@ export function routeEventToMemory(
           event,
           target: "priorEpisodes",
           store: "working",
+          recordKind: "working",
+          status: "active",
           reason:
             "Visible notes and tool requests are model-visible process observations.",
           confidence: 0.7,
@@ -80,6 +89,8 @@ export function routeEventToMemory(
           event,
           target: "currentHypotheses",
           store: "semantic",
+          recordKind: "semantic_claim",
+          status: "candidate",
           reason:
             "Model-visible claims should be preserved as candidates until validated.",
           confidence: 0.55,
@@ -91,6 +102,8 @@ export function routeEventToMemory(
           event,
           target: "currentHypotheses",
           store: "hypothesis",
+          recordKind: "hypothesis",
+          status: "candidate",
           reason: "Hypotheses should be available to the next loop.",
           confidence: 0.65,
         }),
@@ -110,6 +123,8 @@ export function routeEventToMemory(
           event,
           target: "contradictions",
           store: "event",
+          recordKind: "evidence",
+          status: "active",
           reason:
             "Observed errors may contradict assumptions or block planned paths.",
           confidence: 0.85,
@@ -151,19 +166,29 @@ function createRefRoute(input: {
   event: ResearchEvent;
   target: ResearchMemoryRouteTarget;
   store: ResearchMemoryStoreKind;
+  recordKind: ResearchMemoryRecordKind;
+  status: ResearchDerivedMemoryStatus;
   reason: string;
   confidence: number;
 }): ResearchMemoryRoute {
   const summary = summarizeEvent(input.event);
+  const recordId = createResearchMemoryRecordId({
+    kind: input.recordKind,
+    sourceEventIds: [input.event.id],
+    discriminator: input.target,
+  });
   const memoryRef: ResearchMemoryRef = {
     store: input.store,
-    id: `${input.event.id}:${input.target}`,
+    id: recordId,
+    recordKind: input.recordKind,
+    status: input.status,
+    sourceEventIds: [input.event.id],
     summary,
     confidence: input.confidence,
   };
 
   return {
-    id: `${input.event.id}:${input.target}`,
+    id: `${recordId}:${input.target}`,
     sourceEventId: input.event.id,
     target: input.target,
     reason: input.reason,

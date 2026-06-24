@@ -1,4 +1,4 @@
-import { createId, nowIso } from "./ids.js";
+import { createResearchEventId, nowIso } from "./ids.js";
 import type {
   ResearchEvent,
   ResearchGoalFrame,
@@ -282,7 +282,7 @@ function createGoalUpdatedEvent(input: {
   rationale: string;
 }): ResearchEvent {
   return {
-    id: createId("event"),
+    id: createResearchEventId(),
     kind: "goal.updated",
     timestamp: input.state.updatedAt,
     goalId: input.goalId,
