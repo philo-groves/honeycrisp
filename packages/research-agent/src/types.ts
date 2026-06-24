@@ -103,6 +103,15 @@ export type ResearchClaimGraphRelationship =
   | "supersedes"
   | "depends_on";
 
+export type ResearchMemoryAuditOperation =
+  | "write"
+  | "promotion"
+  | "contradiction"
+  | "tombstone"
+  | "supersede"
+  | "expire"
+  | "deletion";
+
 export interface ResearchArtifactRef {
   id: string;
   kind: string;
@@ -301,6 +310,16 @@ export interface ResearchClaimGraphEdge {
   evidenceRefId?: string;
   summary?: string;
   createdAt: string;
+}
+
+export interface ResearchMemoryAuditRecord {
+  id: string;
+  recordId: string;
+  operation: ResearchMemoryAuditOperation;
+  timestamp: string;
+  summary: string;
+  policy?: string;
+  relatedRecordId?: string;
 }
 
 export interface ResearchMemoryRoute {

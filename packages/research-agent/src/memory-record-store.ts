@@ -18,6 +18,8 @@ import type {
   ResearchDerivedMemoryRecord,
   ResearchDerivedMemoryStatus,
   ResearchEvent,
+  ResearchMemoryAuditOperation,
+  ResearchMemoryAuditRecord,
   ResearchMemoryRef,
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
@@ -54,6 +56,18 @@ export interface ListClaimGraphEdgesOptions {
   includeEvidenceEdges?: boolean;
 }
 
+export interface ListMemoryAuditRecordsOptions {
+  recordId?: string;
+  operation?: ResearchMemoryAuditOperation;
+}
+
+export interface DeleteMemoryRecordForPolicyInput {
+  recordId: string;
+  policy: string;
+  timestamp: string;
+  summary: string;
+}
+
 export interface MemoryRecordStore {
   write(record: ResearchDerivedMemoryRecord): ResearchDerivedMemoryRecord;
   writeMany(
@@ -71,6 +85,10 @@ export interface MemoryRecordStore {
   listClaimGraphEdges(
     options?: ListClaimGraphEdgesOptions,
   ): readonly ResearchClaimGraphEdge[];
+  listAuditRecords(
+    options?: ListMemoryAuditRecordsOptions,
+  ): readonly ResearchMemoryAuditRecord[];
+  deleteRecordForPolicy(input: DeleteMemoryRecordForPolicyInput): void;
   close(): void;
 }
 
@@ -90,7 +108,11 @@ export function createMemorySnapshotFromRecords(
   const snapshot = createEmptyMemorySnapshot(eventLog);
 
   for (const record of records) {
-    if (record.status === "tombstoned" || record.status === "superseded") {
+    if (
+      record.status === "tombstoned" ||
+      record.status === "superseded" ||
+      record.status === "stale"
+    ) {
       continue;
     }
 
@@ -183,6 +205,14 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
         seen.add(record.id);
         validateMemoryRecord(record);
         this.insertRecord(record);
+        this.appendAuditRecord(createAuditRecord({
+          recordId: record.id,
+          operation: isPromotedProcedure(record) ? "promotion" : "write",
+          timestamp: record.createdAt,
+          summary: isPromotedProcedure(record)
+            ? `Promoted procedure record ${record.id}.`
+            : `Wrote memory record ${record.id}.`,
+        }));
       }
 
       return [...records];
@@ -211,7 +241,7 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
       clauses.push("r.status = ?");
       params.push(options.status);
     } else if (!options.includeAudited) {
-      clauses.push("r.status NOT IN ('superseded', 'tombstoned')");
+      clauses.push("r.status NOT IN ('superseded', 'tombstoned', 'stale')");
     }
     if (options.goalId) {
       clauses.push("r.goal_id = ?");
@@ -302,6 +332,15 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
           createdAt: input.updatedAt,
         });
       }
+      this.appendAuditRecord(createAuditRecord({
+        recordId: input.recordId,
+        operation: operationForStatus(input.status),
+        timestamp: input.updatedAt,
+        summary: `Updated memory record ${input.recordId} to ${input.status}.`,
+        ...(input.supersededByRecordId
+          ? { relatedRecordId: input.supersededByRecordId }
+          : {}),
+      }));
 
       return next;
     });
@@ -392,6 +431,56 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
     return rows.map(rowToClaimGraphEdge);
   }
 
+  listAuditRecords(
+    options: ListMemoryAuditRecordsOptions = {},
+  ): readonly ResearchMemoryAuditRecord[] {
+    const clauses: string[] = [];
+    const params: string[] = [];
+
+    if (options.recordId) {
+      clauses.push("record_id = ?");
+      params.push(options.recordId);
+    }
+    if (options.operation) {
+      clauses.push("operation = ?");
+      params.push(options.operation);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.database
+      .prepare(
+        [
+          "SELECT audit_id, record_id, operation, timestamp, summary, policy, related_record_id",
+          "FROM memory_record_audit",
+          where,
+          "ORDER BY timestamp ASC, audit_id ASC",
+        ].join(" "),
+      )
+      .all(...params);
+
+    return rows.map(rowToAuditRecord);
+  }
+
+  deleteRecordForPolicy(input: DeleteMemoryRecordForPolicyInput): void {
+    this.withTransaction(() => {
+      const existing = this.getById(input.recordId);
+      if (!existing) {
+        throw new Error(`Memory record not found: ${input.recordId}`);
+      }
+
+      this.database
+        .prepare("DELETE FROM memory_records WHERE record_id = ?")
+        .run(input.recordId);
+      this.appendAuditRecord(createAuditRecord({
+        recordId: input.recordId,
+        operation: "deletion",
+        timestamp: input.timestamp,
+        summary: input.summary,
+        policy: input.policy,
+      }));
+    });
+  }
+
   close(): void {
     this.database.close();
   }
@@ -457,6 +546,16 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS memory_record_audit (
+        audit_id TEXT PRIMARY KEY,
+        record_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        policy TEXT,
+        related_record_id TEXT
+      );
+
       CREATE INDEX IF NOT EXISTS memory_records_source_event_idx ON memory_record_source_events(source_event_id, record_id);
       CREATE INDEX IF NOT EXISTS memory_records_goal_id_idx ON memory_records(goal_id);
       CREATE INDEX IF NOT EXISTS memory_records_sub_goal_id_idx ON memory_records(sub_goal_id);
@@ -469,6 +568,8 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
       CREATE INDEX IF NOT EXISTS memory_claim_graph_source_idx ON memory_claim_graph_edges(source_record_id);
       CREATE INDEX IF NOT EXISTS memory_claim_graph_target_idx ON memory_claim_graph_edges(target_record_id);
       CREATE INDEX IF NOT EXISTS memory_claim_graph_relationship_idx ON memory_claim_graph_edges(relationship);
+      CREATE INDEX IF NOT EXISTS memory_record_audit_record_idx ON memory_record_audit(record_id);
+      CREATE INDEX IF NOT EXISTS memory_record_audit_operation_idx ON memory_record_audit(operation);
 
       INSERT OR IGNORE INTO memory_schema_migrations(version, name, applied_at)
       VALUES (2, 'phase_4_record_store', datetime('now'));
@@ -589,6 +690,26 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
       throw error;
     }
   }
+
+  private appendAuditRecord(record: ResearchMemoryAuditRecord): void {
+    this.database
+      .prepare(
+        [
+          "INSERT OR IGNORE INTO memory_record_audit (",
+          "audit_id, record_id, operation, timestamp, summary, policy, related_record_id",
+          ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ].join(" "),
+      )
+      .run(
+        record.id,
+        record.recordId,
+        record.operation,
+        record.timestamp,
+        record.summary,
+        record.policy ?? null,
+        record.relatedRecordId ?? null,
+      );
+  }
 }
 
 function validateMemoryRecord(record: ResearchDerivedMemoryRecord): void {
@@ -658,6 +779,21 @@ function rowToClaimGraphEdge(
   };
 }
 
+function rowToAuditRecord(row: Record<string, unknown>): ResearchMemoryAuditRecord {
+  const policy = readNullableString(row, "policy");
+  const relatedRecordId = readNullableString(row, "related_record_id");
+
+  return {
+    id: readString(row, "audit_id"),
+    recordId: readString(row, "record_id"),
+    operation: readString(row, "operation") as ResearchMemoryAuditOperation,
+    timestamp: readString(row, "timestamp"),
+    summary: readString(row, "summary"),
+    ...(policy ? { policy } : {}),
+    ...(relatedRecordId ? { relatedRecordId } : {}),
+  };
+}
+
 function readString(row: Record<string, unknown>, key: string): string {
   const value = row[key];
   if (typeof value !== "string") {
@@ -722,6 +858,64 @@ function createClaimGraphEdgeId(input: {
     .slice(0, 24);
 
   return `edge_${hash}`;
+}
+
+function createAuditRecord(input: {
+  recordId: string;
+  operation: ResearchMemoryAuditOperation;
+  timestamp: string;
+  summary: string;
+  policy?: string;
+  relatedRecordId?: string;
+}): ResearchMemoryAuditRecord {
+  const hash = createHash("sha256")
+    .update(input.recordId)
+    .update("\0")
+    .update(input.operation)
+    .update("\0")
+    .update(input.timestamp)
+    .update("\0")
+    .update(input.summary)
+    .update("\0")
+    .update(input.policy ?? "")
+    .update("\0")
+    .update(input.relatedRecordId ?? "")
+    .digest("hex")
+    .slice(0, 24);
+
+  return {
+    id: `audit_${hash}`,
+    recordId: input.recordId,
+    operation: input.operation,
+    timestamp: input.timestamp,
+    summary: input.summary,
+    ...(input.policy ? { policy: input.policy } : {}),
+    ...(input.relatedRecordId ? { relatedRecordId: input.relatedRecordId } : {}),
+  };
+}
+
+function operationForStatus(
+  status: ResearchDerivedMemoryStatus,
+): ResearchMemoryAuditOperation {
+  switch (status) {
+    case "tombstoned":
+      return "tombstone";
+    case "superseded":
+      return "supersede";
+    case "stale":
+      return "expire";
+    case "contradicted":
+      return "contradiction";
+    default:
+      return "write";
+  }
+}
+
+function isPromotedProcedure(record: ResearchDerivedMemoryRecord): boolean {
+  return (
+    record.kind === "procedure" &&
+    record.guidance.durability === "durable"
+  );
 }
 
 function createMemoryRef(record: ResearchDerivedMemoryRecord): ResearchMemoryRef {

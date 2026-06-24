@@ -76,6 +76,17 @@ export type {
   LocalInspectionTool,
   LocalInspectionToolOptions,
 } from "./local-inspection.js";
+export {
+  deleteMemoryRecordUnderPolicy,
+  expireMemoryRecord,
+  supersedeMemoryRecord,
+  tombstoneMemoryRecord,
+} from "./memory-lifecycle.js";
+export type {
+  DeleteMemoryRecordUnderPolicyInput,
+  MemoryLifecycleInput,
+  SupersedeMemoryRecordInput,
+} from "./memory-lifecycle.js";
 export { planResearchLoop } from "./loop-planner.js";
 export type { PlanResearchLoopInput } from "./loop-planner.js";
 export {
@@ -123,8 +134,10 @@ export {
 } from "./memory-record-store.js";
 export type {
   ListClaimGraphEdgesOptions,
+  ListMemoryAuditRecordsOptions,
   ListMemoryRecordsOptions,
   MemoryRecordStore,
+  DeleteMemoryRecordForPolicyInput,
   SqliteMemoryRecordStoreOptions,
   UpdateMemoryRecordStatusInput,
 } from "./memory-record-store.js";
@@ -220,6 +233,8 @@ export type {
   ResearchMemoryEvidenceRef,
   ResearchMemoryEvidenceRelationship,
   ResearchMemoryProvenance,
+  ResearchMemoryAuditOperation,
+  ResearchMemoryAuditRecord,
   ResearchMemoryRef,
   ResearchMemoryRecordId,
   ResearchMemoryRecordKind,

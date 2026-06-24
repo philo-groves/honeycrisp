@@ -19,7 +19,7 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 ## Current Baseline
 
-The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, a phase-6 context packet v2 compiler, a phase-7 memory-driven controller, and phase-8 deterministic reflection. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
+The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, a phase-6 context packet v2 compiler, a phase-7 memory-driven controller, phase-8 deterministic reflection, and phase-9 lifecycle/audit controls. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
 
 Known limitations to address:
 
@@ -29,7 +29,7 @@ Known limitations to address:
 - Recall is not yet a scored retrieval step.
 - Context compilation does not distinguish a larger preconscious candidate set from the bounded conscious packet.
 - Reflection and consolidation are deterministic loop-boundary operations.
-- Forgetting, tombstoning, superseding, and audit behavior are not yet implemented.
+- Forgetting, tombstoning, superseding, expiration, policy deletion, and audit behavior are implemented for derived memory records.
 
 ## Phase 1: Stabilize Memory Contracts
 
@@ -481,6 +481,8 @@ Checklist:
 
 Add explicit lifecycle controls for memory records.
 
+Status: completed on 2026-06-24.
+
 Capabilities:
 
 - tombstone
@@ -501,21 +503,21 @@ Rules:
 
 Checklist:
 
-- [ ] Add tombstone operation.
-- [ ] Add supersede operation.
-- [ ] Add expiration operation.
-- [ ] Add policy-controlled deletion operation.
-- [ ] Add audit events for writes.
-- [ ] Add audit events for promotion.
-- [ ] Add audit events for contradiction.
-- [ ] Add audit events for deletion.
-- [ ] Exclude tombstoned records from recall and context.
-- [ ] Link superseded records to replacements.
-- [ ] Preserve raw event auditability by default.
-- [ ] Add tests for tombstoned context exclusion.
-- [ ] Add tests for superseded audit views.
-- [ ] Add tests for expired retrieval exclusion.
-- [ ] Add tests for policy deletion behavior.
+- [x] Add tombstone operation.
+- [x] Add supersede operation.
+- [x] Add expiration operation.
+- [x] Add policy-controlled deletion operation.
+- [x] Add audit events for writes.
+- [x] Add audit events for promotion.
+- [x] Add audit events for contradiction.
+- [x] Add audit events for deletion.
+- [x] Exclude tombstoned records from recall and context.
+- [x] Link superseded records to replacements.
+- [x] Preserve raw event auditability by default.
+- [x] Add tests for tombstoned context exclusion.
+- [x] Add tests for superseded audit views.
+- [x] Add tests for expired retrieval exclusion.
+- [x] Add tests for policy deletion behavior.
 
 ## Phase 10: Local Inspectability
 
@@ -566,19 +568,18 @@ Checklist:
 
 ## Next Implementation Increment
 
-The next implementation slice should be phase 9 only:
+The next implementation slice should be phase 10 only:
 
-1. Add explicit lifecycle operations for tombstone, supersede, expire, and policy deletion.
-2. Add audit events or audit records for writes, promotion, contradiction, and deletion.
-3. Exclude tombstoned and expired records from recall and context.
-4. Keep superseded records reachable through audit views.
-5. Preserve raw event auditability unless policy or user instruction requires deletion.
+1. Add CLI or debug APIs for event timelines, event lookup, derived-record lookup, recall queries, context inspection, decision explanation, hypotheses, claim graph, and prospective checks.
+2. Include accepted and rejected raw event information where available.
+3. Include candidate/committed writes, retrieval results, context selections, and controller decision reasons in captured debug output.
+4. Keep inspectability read-only by default.
+5. Add tests for the inspectability commands or debug API.
 
 Acceptance criteria:
 
 - Existing tests continue to pass.
-- Tombstoned records do not enter context packets.
-- Superseded records remain reachable through audit views.
-- Expired records are excluded from normal retrieval.
-- Policy deletion removes the allowed stores while preserving required audit facts.
-- Lifecycle operations produce audit records.
+- Memory behavior can be inspected without reading SQLite or internal files by hand.
+- Event timeline and event lookup are available.
+- Derived records, recall results, context selections, controller decisions, hypotheses, claim graph, and prospective checks are inspectable.
+- Captured debug output includes accepted events, rejected events when supplied, candidate writes, committed writes, retrieval results, context selections, and decision reasons.
