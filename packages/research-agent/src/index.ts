@@ -91,7 +91,19 @@ export type {
   ResearchToolExecutionRecord,
   ResearchToolExecutionResult,
   ResearchToolExecutionStatus,
+  ResearchToolRegistryOptions,
+  ResearchToolValidationHook,
+  ResearchToolValidationHookInput,
 } from "./tool-registry.js";
+export { createMcpResearchTools } from "./mcp-tools.js";
+export type {
+  CreateMcpResearchToolsOptions,
+  McpResearchToolDiscovery,
+  ResearchMcpClient,
+  ResearchMcpResourceDescription,
+  ResearchMcpResourceTemplateDescription,
+  ResearchMcpToolDescription,
+} from "./mcp-tools.js";
 export {
   deleteMemoryRecordUnderPolicy,
   expireMemoryRecord,

@@ -36,11 +36,12 @@ The project already has a first executable tool slice:
 - Top-level CLI runs append runtime events to the SQLite `MemoryEventLog` by default.
 - Large `tool.observed.result` payloads spill to `.honeycrisp/memory/artifacts/tool-results/` with `rawOutputRef`, byte count, and SHA-256 hash metadata while preserving summaries and evidence extracts inline.
 - Artifact lifecycle cleanup has an auditable `artifact.tombstoned` event helper with optional local file deletion.
+- MCP clients can be adapted into Honeycrisp tools through an allowlisted connector abstraction. MCP tools, resource reads, and resource-template discovery preserve MCP provenance and normalize external content as untrusted output.
 
 Known limitations to address:
 
-- Only local inspection is executable.
-- MCP servers and skills are not yet represented in Honeycrisp's own tool/skill registries.
+- Only local inspection is wired into the CLI by default.
+- Skills are not yet represented in Honeycrisp's own skill registry.
 - The runtime uses Pi model tool calls through `completeSimple`, not the fuller Pi `Agent` lifecycle.
 
 ## Phase 1: Core Tool Contract And Local Inspection Bridge
@@ -145,20 +146,29 @@ Verification:
 
 Add MCP as a first-class tool source so Honeycrisp can use external and local capability providers without hard-coding every integration.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Add an MCP connector abstraction that can list available servers, tools, resources, and resource templates.
-- [ ] Map MCP tools into `ResearchToolDescriptor` and `ResearchExecutableTool`.
-- [ ] Preserve MCP server name, tool name, schema, permissions, and provenance in descriptors.
-- [ ] Support allowlisted MCP servers only by default.
-- [ ] Treat MCP tool outputs and resource contents as untrusted external content.
-- [ ] Normalize MCP results into tool execution results and events.
-- [ ] Add support for MCP resource reads as `inspect` actions.
-- [ ] Add support for MCP tool calls as `search`, `analyze`, `experiment`, or `synthesize` actions based on descriptor metadata.
-- [ ] Add timeout, cancellation, and error handling around MCP calls.
-- [ ] Add MCP capability discovery to debug output.
-- [ ] Add tests using a fake MCP server/tool.
-- [ ] Add tests proving denied MCP servers or tools cannot execute.
+- [x] Add an MCP connector abstraction that can list available servers, tools, resources, and resource templates.
+- [x] Map MCP tools into `ResearchToolDescriptor` and `ResearchExecutableTool`.
+- [x] Preserve MCP server name, tool name, schema, permissions, and provenance in descriptors.
+- [x] Support allowlisted MCP servers only by default.
+- [x] Treat MCP tool outputs and resource contents as untrusted external content.
+- [x] Normalize MCP results into tool execution results and events.
+- [x] Add support for MCP resource reads as `inspect` actions.
+- [x] Add support for MCP tool calls as `search`, `analyze`, `experiment`, or `synthesize` actions based on descriptor metadata.
+- [x] Add timeout, cancellation, and error handling around MCP calls.
+- [x] Add MCP capability discovery to debug output.
+- [x] Add tests using a fake MCP server/tool.
+- [x] Add tests proving denied MCP servers or tools cannot execute.
+
+Verification:
+
+- `pnpm test` passed with 86 tests on 2026-06-24.
+- Fake MCP tests cover allowlisted tool execution, resource reads, resource-template discovery, untrusted output normalization, denied servers, and timeout handling.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/11-real-mcp-layer-health.json`.
+- The health check showed the existing real local inspection path still completed with `plannedToolCallCount: 1`, no skipped candidates, and direct evidence routed into memory after adding the MCP adapter layer.
 
 ## Phase 6: Skill Support And Domain Alignment
 

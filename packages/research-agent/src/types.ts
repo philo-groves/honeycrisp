@@ -438,6 +438,7 @@ export interface ResearchToolDescriptor {
   validationHooks?: readonly string[];
   artifactLocations?: readonly string[];
   memoryWritebackDefaults?: readonly ResearchMemoryStoreKind[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface ResearchToolPermission {
