@@ -4,6 +4,7 @@ import { planResearchLoop } from "./loop-planner.js";
 import { processResearchLoop } from "./loop-processor.js";
 import { routeEventsToMemorySnapshot } from "./memory-routing.js";
 import { createFirstRunMemoryController } from "./memory-controller.js";
+import { createResearchTraceEventsFromLoopResult } from "./research-trace.js";
 import type {
   ResearchEvent,
   ResearchGoalFrame,
@@ -118,12 +119,19 @@ export async function bootstrapResearchRun(
       loopPlanId: loopResult.loopPlanId,
       status: loopResult.status,
       executorName: loopResult.executorName,
+      summary: loopResult.output.text,
       artifacts: loopResult.output.artifacts,
       evidenceRefs: loopResult.output.evidenceRefs,
       claimRefs: loopResult.output.claimRefs,
+      researchTrace: loopResult.output.researchTrace,
       followUpRecommendation: loopResult.followUpRecommendation,
     },
   });
+  events.push(
+    ...createResearchTraceEventsFromLoopResult(loopResult, {
+      goalId: goalFrame.root.id,
+    }),
+  );
   const memory = routeEventsToMemorySnapshot(events, initialMemory);
 
   const response = [

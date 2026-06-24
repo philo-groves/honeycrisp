@@ -45,6 +45,23 @@ pnpm start --real \
   -p "Goal: Produce a first-run research plan..."
 ```
 
+For local practice runs, Honeycrisp can seed the raw event log from a bounded
+read-only inspection and write a flow-capture artifact:
+
+```sh
+pnpm start \
+  --inspect-root /path/to/project \
+  --inspect-path /path/to/project/src/file.c \
+  --inspect-bytes 1024 \
+  --capture .honeycrisp-runs/example-flow.json \
+  -p "Goal: Triage local source evidence"
+```
+
+The capture JSON records the event timeline, routed memory counts, context
+packet view, loop result, and visible research trace. It preserves reasoning
+consequences such as observations, inferences, hypotheses, assumptions, and
+uncertainty, not private model thought traces.
+
 ## Auth
 
 Honeycrisp stores provider credentials in `~/.honeycrisp/auth.json` by default, or the path set in `HONEYCRISP_AUTH_FILE`.

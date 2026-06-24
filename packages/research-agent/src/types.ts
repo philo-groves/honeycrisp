@@ -90,6 +90,30 @@ export interface ResearchMemoryRoute {
   value?: string;
 }
 
+export interface ResearchTraceItem {
+  text: string;
+  evidenceRefIds?: readonly string[];
+  confidence?: number;
+}
+
+export interface ResearchEvidenceLink {
+  evidenceRefId: string;
+  supports?: readonly string[];
+  weakens?: readonly string[];
+  note?: string;
+}
+
+export interface ResearchTrace {
+  observations: readonly ResearchTraceItem[];
+  inferences: readonly ResearchTraceItem[];
+  hypotheses: readonly ResearchTraceItem[];
+  assumptions: readonly ResearchTraceItem[];
+  rejectedPaths: readonly ResearchTraceItem[];
+  uncertainty: readonly ResearchTraceItem[];
+  nextQuestions: readonly ResearchTraceItem[];
+  evidenceLinks: readonly ResearchEvidenceLink[];
+}
+
 export interface ResearchGoalNode {
   id: string;
   parentId?: string;
@@ -300,6 +324,7 @@ export interface ResearchLoopExecutionOutput {
   evidenceRefs: readonly ResearchMemoryRef[];
   claimRefs: readonly ResearchMemoryRef[];
   followUpActions: readonly string[];
+  researchTrace?: ResearchTrace;
   raw?: unknown;
 }
 

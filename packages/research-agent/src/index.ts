@@ -33,6 +33,11 @@ export {
   normalizeMemorySnapshot,
 } from "./context-packet.js";
 export type { CompileContextPacketInput } from "./context-packet.js";
+export { createResearchFlowCapture } from "./flow-capture.js";
+export type {
+  ResearchFlowCapture,
+  ResearchFlowEventCapture,
+} from "./flow-capture.js";
 export { createResearchGoalFrame } from "./goal.js";
 export {
   createLocalInspectionObservationEvent,
@@ -70,6 +75,14 @@ export {
 } from "./memory-routing.js";
 export { parseResearchPrompt } from "./prompt.js";
 export {
+  createEmptyResearchTrace,
+  createResearchTraceEvents,
+  createResearchTraceEventsFromLoopResult,
+  extractResearchTraceFromText,
+  normalizeResearchTrace,
+  renderResearchTraceContract,
+} from "./research-trace.js";
+export {
   createResearchPiAgent,
   createResearchSystemPrompt,
 } from "./pi-runtime.js";
@@ -81,6 +94,7 @@ export type {
   ResearchCompletionGate,
   ResearchContextPacket,
   ResearchEvent,
+  ResearchEvidenceLink,
   ResearchGatePolarity,
   ResearchGovernancePolicy,
   ResearchGoalFrame,
@@ -110,4 +124,6 @@ export type {
   ResearchToolDescriptor,
   ResearchToolPermission,
   ResearchToolSideEffect,
+  ResearchTrace,
+  ResearchTraceItem,
 } from "./types.js";

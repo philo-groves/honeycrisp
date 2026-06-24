@@ -1,5 +1,10 @@
 import { createId, nowIso } from "./ids.js";
 import { createAuthenticatedModels } from "./auth.js";
+import {
+  extractResearchTraceFromText,
+  normalizeResearchTrace,
+  renderResearchTraceContract,
+} from "./research-trace.js";
 import type {
   Context,
   Model,
@@ -17,6 +22,7 @@ import type {
   ResearchLoopModelInput,
   ResearchLoopPlan,
   ResearchLoopProcessingResult,
+  ResearchTrace,
 } from "./types.js";
 
 export interface ProcessResearchLoopInput {
@@ -98,6 +104,7 @@ export function createDeterministicLoopExecutor(): ResearchLoopExecutor {
     async execute(input: ResearchLoopExecutionInput) {
       const { loopPlan } = input;
       const text = renderDeterministicLoopOutput(loopPlan);
+      const researchTrace = createDeterministicResearchTrace(loopPlan);
 
       return {
         text,
@@ -105,6 +112,7 @@ export function createDeterministicLoopExecutor(): ResearchLoopExecutor {
         evidenceRefs: [],
         claimRefs: [],
         followUpActions: createFollowUpActions(loopPlan),
+        researchTrace,
         raw: {
           mode: "deterministic",
           note: "No model call was made.",
@@ -145,9 +153,12 @@ export function createPiLoopExecutor(
       const streamOptions = createPiStreamOptions(options, input.signal);
       const message = await models.completeSimple(model, context, streamOptions);
       const text = extractAssistantText(message.content);
+      const researchTrace = extractResearchTraceFromText(text);
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
-        throw new Error(message.errorMessage ?? `Model stopped: ${message.stopReason}`);
+        throw new Error(
+          message.errorMessage ?? `Model stopped: ${message.stopReason}`,
+        );
       }
 
       return {
@@ -158,6 +169,7 @@ export function createPiLoopExecutor(
         followUpActions: [
           "Ask the memory controller whether to continue this branch, create a sibling, refine the goal tree, or respond.",
         ],
+        ...(researchTrace ? { researchTrace } : {}),
         raw: {
           provider: model.provider,
           model: model.id,
@@ -253,6 +265,9 @@ function createPiContext(modelInput: ResearchLoopModelInput): Context {
           "",
           "## Output Shape",
           "Return concise markdown with: Result, Evidence Used, Assumptions, Open Questions, Suggested Next Step.",
+          "",
+          "## Visible Research Trace",
+          renderResearchTraceContract(),
         ].join("\n"),
       },
     ],
@@ -315,13 +330,62 @@ function renderDeterministicLoopOutput(loopPlan: ResearchLoopPlan): string {
   return lines.join("\n");
 }
 
+function createDeterministicResearchTrace(
+  loopPlan: ResearchLoopPlan,
+): ResearchTrace {
+  return normalizeResearchTrace({
+    observations:
+      loopPlan.contextPacket.directEvidence.length > 0
+        ? [
+            {
+              text: `The context packet contains ${loopPlan.contextPacket.directEvidence.length} direct evidence reference(s).`,
+              evidenceRefIds: loopPlan.contextPacket.directEvidence.map(
+                (ref) => ref.id,
+              ),
+              confidence: 1,
+            },
+          ]
+        : [
+            {
+              text: "No direct evidence references were supplied to this loop.",
+              confidence: 1,
+            },
+          ],
+    inferences: [
+      {
+        text: `The selected bounded action is ${loopPlan.subGoal.actionClass}.`,
+        confidence: 0.8,
+      },
+    ],
+    assumptions: loopPlan.contextPacket.userCommitments.map((commitment) => ({
+      text: commitment,
+      confidence: 1,
+    })),
+    uncertainty: loopPlan.contextPacket.openQuestions.map((question) => ({
+      text: question,
+      confidence: 0.9,
+    })),
+    nextQuestions: loopPlan.contextPacket.openQuestions.map((question) => ({
+      text: question,
+      confidence: 0.9,
+    })),
+    evidenceLinks: loopPlan.contextPacket.directEvidence.map((ref) => ({
+      evidenceRefId: ref.id,
+      supports: [loopPlan.subGoal.id],
+      note: "Direct evidence supplied to the current bounded loop.",
+    })),
+  });
+}
+
 function createFollowUpActions(loopPlan: ResearchLoopPlan): string[] {
   if (loopPlan.subGoal.actionClass === "ask_user") {
     return ["Ask the user for the missing scope or constraints."];
   }
 
   if (loopPlan.permittedToolClasses.length === 0) {
-    return ["Respond with the initial plan, or register tools before continuing."];
+    return [
+      "Respond with the initial plan, or register tools before continuing.",
+    ];
   }
 
   return [
@@ -363,6 +427,14 @@ function recommendFollowUp(
       followUpRecommendation: "continue_branch",
       followUpRationale:
         "The loop produced memory references that can drive another bounded step.",
+    };
+  }
+
+  if ((output.researchTrace?.hypotheses.length ?? 0) > 0) {
+    return {
+      followUpRecommendation: "continue_branch",
+      followUpRationale:
+        "The loop produced visible hypotheses that can drive another bounded step.",
     };
   }
 

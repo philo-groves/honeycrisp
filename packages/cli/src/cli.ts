@@ -1,19 +1,29 @@
 #!/usr/bin/env node
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import {
   bootstrapResearchRun,
+  createLocalInspectionObservationEvent,
+  createLocalInspectionTool,
   createPiLoopExecutor,
+  createResearchFlowCapture,
   getAuthStatus,
   listAuthProviders,
   loginAuthProvider,
   logoutAuthProvider,
+  routeEventsToMemorySnapshot,
   verifyProviderAuth,
 } from "@honeycrisp/research-agent";
 import type {
   AuthEvent,
   AuthLoginCallbacks,
   AuthPrompt,
+  LocalInspectionAction,
+  ResearchEvent,
+  ResearchMemorySnapshot,
+  ResearchToolDescriptor,
 } from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
@@ -31,6 +41,11 @@ interface ParsedArgs {
   model: string;
   maxTokens: number | undefined;
   reasoning: "minimal" | "low" | "medium" | "high" | "xhigh" | undefined;
+  inspectRoots: string[];
+  inspectPaths: string[];
+  inspectAction: LocalInspectionAction;
+  inspectBytes: number | undefined;
+  capturePath: string | undefined;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -46,12 +61,17 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let model = "gpt-5.3-codex-spark";
   let maxTokens: number | undefined;
   let reasoning: ParsedArgs["reasoning"];
+  let inspectAction: LocalInspectionAction = "read_text";
+  let inspectBytes: number | undefined;
+  let capturePath: string | undefined;
   const successGates: string[] = [];
   const failureOrStopGates: string[] = [];
   const scopeConstraints: string[] = [];
   const evidenceRequirements: string[] = [];
   const initialRiskFlags: string[] = [];
   const userPreferences: string[] = [];
+  const inspectRoots: string[] = [];
+  const inspectPaths: string[] = [];
   const positionals: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -96,6 +116,25 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--reasoning") {
       reasoning = parseReasoning(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--inspect-root") {
+      inspectRoots.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--inspect-path") {
+      inspectPaths.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--inspect-action") {
+      inspectAction = parseInspectionAction(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--inspect-bytes") {
+      const value = Number.parseInt(readOptionValue(argv, index, arg), 10);
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new Error("--inspect-bytes requires a positive integer.");
+      }
+      inspectBytes = value;
+      index += 1;
+    } else if (arg === "--capture") {
+      capturePath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "-h" || arg === "--help") {
@@ -126,6 +165,11 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     model,
     maxTokens,
     reasoning,
+    inspectRoots,
+    inspectPaths,
+    inspectAction,
+    inspectBytes,
+    capturePath,
     json,
     help,
     version,
@@ -144,6 +188,14 @@ function parseReasoning(value: string): ParsedArgs["reasoning"] {
   }
 
   throw new Error("--reasoning must be one of minimal, low, medium, high, xhigh.");
+}
+
+function parseInspectionAction(value: string): LocalInspectionAction {
+  if (value === "list" || value === "read_text") {
+    return value;
+  }
+
+  throw new Error("--inspect-action must be one of list, read_text.");
 }
 
 function readOptionValue(
@@ -176,6 +228,11 @@ function usage(): string {
     "  --model <model>        Model id for --real (default: gpt-5.3-codex-spark)",
     "  --max-tokens <n>       Max output tokens for --real",
     "  --reasoning <level>    Reasoning level for --real",
+    "  --inspect-root <path>  Allow a local root for read-only inspection",
+    "  --inspect-path <path>  Inspect a local path before the loop",
+    "  --inspect-action <a>   Inspection action: read_text or list",
+    "  --inspect-bytes <n>    Max bytes for read_text inspection",
+    "  --capture <path>       Write a local flow-capture JSON artifact",
     "  --json                 Print the initialized run as JSON",
     "  -h, --help             Show help",
     "  -v, --version          Show version",
@@ -207,6 +264,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       return;
     }
 
+    const inspectionSeed = await createInspectionSeed(args);
+
     const loopExecutor = args.real
       ? createPiLoopExecutor({
           provider: args.provider,
@@ -216,6 +275,14 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         })
       : undefined;
 
+    const inspectionState =
+      inspectionSeed.events.length > 0 && inspectionSeed.memory
+        ? {
+            events: inspectionSeed.events,
+            memory: inspectionSeed.memory,
+          }
+        : {};
+
     const result = await bootstrapResearchRun({
       prompt: args.prompt,
       successGates: args.successGates,
@@ -224,8 +291,17 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       evidenceRequirements: args.evidenceRequirements,
       initialRiskFlags: args.initialRiskFlags,
       userPreferences: args.userPreferences,
+      ...inspectionState,
+      ...(inspectionSeed.tools.length > 0 ? { tools: inspectionSeed.tools } : {}),
       ...(loopExecutor ? { loopExecutor } : {}),
     });
+
+    if (args.capturePath) {
+      const capturePath = await writeFlowCapture(args.capturePath, result);
+      if (!args.json) {
+        console.log(`Flow capture: ${capturePath}`);
+      }
+    }
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -241,6 +317,60 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 }
 
 await main();
+
+async function createInspectionSeed(args: ParsedArgs): Promise<{
+  events: ResearchEvent[];
+  memory: ResearchMemorySnapshot | undefined;
+  tools: ResearchToolDescriptor[];
+}> {
+  if (args.inspectPaths.length > 0 && args.inspectRoots.length === 0) {
+    throw new Error("--inspect-path requires at least one --inspect-root.");
+  }
+
+  if (args.inspectRoots.length === 0) {
+    return {
+      events: [],
+      memory: undefined,
+      tools: [],
+    };
+  }
+
+  const tool = createLocalInspectionTool({
+    allowedRoots: args.inspectRoots,
+    ...(args.inspectBytes ? { maxBytes: args.inspectBytes } : {}),
+  });
+  const events: ResearchEvent[] = [];
+
+  for (const path of args.inspectPaths) {
+    const result = await tool.inspect({
+      action: args.inspectAction,
+      path,
+      ...(args.inspectBytes ? { maxBytes: args.inspectBytes } : {}),
+    });
+    events.push(createLocalInspectionObservationEvent(result));
+  }
+
+  return {
+    events,
+    memory: events.length > 0 ? routeEventsToMemorySnapshot(events) : undefined,
+    tools: [tool.descriptor],
+  };
+}
+
+async function writeFlowCapture(
+  capturePath: string,
+  result: Awaited<ReturnType<typeof bootstrapResearchRun>>,
+): Promise<string> {
+  const absolutePath = resolve(capturePath);
+  await mkdir(dirname(absolutePath), { recursive: true });
+  await writeFile(
+    absolutePath,
+    `${JSON.stringify(createResearchFlowCapture(result), null, 2)}\n`,
+    "utf8",
+  );
+
+  return absolutePath;
+}
 
 async function handleAuthCommand(argv: readonly string[]): Promise<void> {
   const command = argv[0] ?? "status";

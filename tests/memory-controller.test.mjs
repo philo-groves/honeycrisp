@@ -9,7 +9,10 @@ import {
   createFirstRunMemoryController,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
+  createResearchFlowCapture,
+  createResearchTraceEvents,
   createResearchGoalFrame,
+  extractResearchTraceFromText,
   isAcceptedRawEventKind,
   planResearchLoop,
   processResearchLoop,
@@ -67,9 +70,9 @@ test("bootstrap output includes memory decision and context event records", asyn
   assert.equal(result.decision.actionClass, "synthesize");
   assert.equal(result.loopResult.status, "complete");
   assert.equal(result.loopResult.executorName, "deterministic-first-run");
-  assert.equal(result.events.length, 5);
+  assert.ok(result.events.length > 5);
   assert.deepEqual(
-    result.events.map((event) => event.kind),
+    result.events.slice(0, 5).map((event) => event.kind),
     [
       "goal.created",
       "memory.decision",
@@ -84,12 +87,124 @@ test("bootstrap output includes memory decision and context event records", asyn
   );
   assert.equal(result.loopPlan.subGoal.id, result.decision.subGoal.id);
   assert.equal(result.memory.eventLog.length, result.events.length);
+  assert.ok(
+    result.events.some((event) => event.kind === "model.visible_note"),
+  );
+  assert.ok(result.events.some((event) => event.kind === "model.claim"));
+  assert.ok(result.loopResult.output.researchTrace);
+});
+
+test("flow capture exposes event memory context and trace snapshots", async () => {
+  const result = await bootstrapResearchRun({
+    prompt: "Goal: Capture a local flow\nScope constraints: no external search",
+  });
+  const capture = createResearchFlowCapture(result, {
+    capturedAt: "2026-06-24T00:00:00.000Z",
+  });
+
+  assert.equal(capture.schemaVersion, 1);
+  assert.equal(capture.capturedAt, "2026-06-24T00:00:00.000Z");
+  assert.equal(capture.goal.objective, "Capture a local flow");
+  assert.equal(capture.memory.counts.eventLog, capture.eventTimeline.length);
+  assert.equal(capture.context.openQuestions.length > 0, true);
+  assert.ok(capture.loop.researchTrace);
+  assert.ok(
+    capture.eventTimeline.some((event) => event.kind === "model.visible_note"),
+  );
 });
 
 test("raw event acceptance excludes private thought traces", () => {
   assert.equal(isAcceptedRawEventKind("model.visible_note"), true);
   assert.equal(isAcceptedRawEventKind("model.hypothesis"), true);
   assert.equal(isAcceptedRawEventKind("model.private_thought"), false);
+});
+
+test("visible research trace consequences route through memory", () => {
+  const trace = {
+    observations: [
+      {
+        text: "The parser source was inspected.",
+        evidenceRefIds: ["evidence_parse"],
+        confidence: 0.9,
+      },
+    ],
+    inferences: [
+      {
+        text: "Parser entrypoints are the next useful review area.",
+        evidenceRefIds: ["evidence_parse"],
+        confidence: 0.7,
+      },
+    ],
+    hypotheses: [
+      {
+        text: "Nested substitutions may expose a state-machine edge case.",
+        evidenceRefIds: ["evidence_parse"],
+        confidence: 0.45,
+      },
+    ],
+    assumptions: [],
+    rejectedPaths: [
+      {
+        text: "Network probing is out of scope.",
+        confidence: 1,
+      },
+    ],
+    uncertainty: [
+      {
+        text: "Reachability is not yet established.",
+        confidence: 0.8,
+      },
+    ],
+    nextQuestions: [
+      {
+        text: "Which parser states consume attacker-controlled text?",
+        confidence: 0.8,
+      },
+    ],
+    evidenceLinks: [
+      {
+        evidenceRefId: "evidence_parse",
+        supports: ["hypothesis_parser_state"],
+        note: "Initial source evidence.",
+      },
+    ],
+  };
+  const events = createResearchTraceEvents(trace, {
+    timestamp: "2026-06-24T00:00:00.000Z",
+  });
+  const memory = routeEventsToMemorySnapshot(events);
+
+  assert.ok(events.some((event) => event.kind === "model.hypothesis"));
+  assert.ok(events.some((event) => event.kind === "model.claim"));
+  assert.ok(events.some((event) => event.kind === "model.visible_note"));
+  assert.ok(
+    memory.currentHypotheses.some((ref) =>
+      ref.summary?.includes("Nested substitutions"),
+    ),
+  );
+  assert.ok(
+    memory.priorEpisodes.some((ref) =>
+      ref.summary?.includes("Reachability is not yet established"),
+    ),
+  );
+});
+
+test("model trace extraction reads only visible trace JSON", () => {
+  const trace = extractResearchTraceFromText(
+    [
+      "Result text.",
+      "```honeycrisp-research-trace-json",
+      JSON.stringify({
+        observations: [{ text: "Visible observation", confidence: 0.9 }],
+        hypotheses: [{ text: "Visible hypothesis" }],
+      }),
+      "```",
+    ].join("\n"),
+  );
+
+  assert.equal(trace?.observations[0]?.text, "Visible observation");
+  assert.equal(trace?.hypotheses[0]?.text, "Visible hypothesis");
+  assert.deepEqual(trace?.inferences, []);
 });
 
 test("local inspection observations route into direct evidence context", async () => {
