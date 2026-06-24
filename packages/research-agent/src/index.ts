@@ -1,3 +1,27 @@
+export {
+  createAuthenticatedModels,
+  createCredentialStore,
+  FileCredentialStore,
+  getAuthStatus,
+  getDefaultAuthFile,
+  listAuthProviders,
+  loginAuthProvider,
+  logoutAuthProvider,
+  removeAuthFile,
+  verifyProviderAuth,
+} from "./auth.js";
+export type {
+  AuthEvent,
+  AuthLoginCallbacks,
+  AuthPrompt,
+} from "@earendil-works/pi-ai";
+export type {
+  AuthLoginResult,
+  AuthProviderSummary,
+  AuthStatus,
+  AuthVerifyResult,
+  FileCredentialStoreOptions,
+} from "./auth.js";
 export { bootstrapResearchRun } from "./bootstrap.js";
 export type {
   BootstrapResearchRunInput,

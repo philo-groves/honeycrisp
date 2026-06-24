@@ -32,3 +32,14 @@ pnpm start -p "Investigate parser behavior" \
   --evidence "preserve repro provenance" \
   --json
 ```
+
+## Auth
+
+Honeycrisp stores provider credentials in `~/.honeycrisp/auth.json` by default, or the path set in `HONEYCRISP_AUTH_FILE`.
+
+```sh
+pnpm start auth list
+pnpm start auth login openai-codex
+pnpm start auth status openai-codex
+pnpm start auth verify openai-codex
+```

@@ -1,5 +1,19 @@
 #!/usr/bin/env node
-import { bootstrapResearchRun } from "@honeycrisp/research-agent";
+import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
+import {
+  bootstrapResearchRun,
+  getAuthStatus,
+  listAuthProviders,
+  loginAuthProvider,
+  logoutAuthProvider,
+  verifyProviderAuth,
+} from "@honeycrisp/research-agent";
+import type {
+  AuthEvent,
+  AuthLoginCallbacks,
+  AuthPrompt,
+} from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
 
@@ -117,6 +131,11 @@ function usage(): string {
 
 export async function main(argv: readonly string[] = process.argv.slice(2)) {
   try {
+    if (argv[0] === "auth") {
+      await handleAuthCommand(argv.slice(1));
+      return;
+    }
+
     const args = parseArgs(argv);
 
     if (args.help) {
@@ -159,3 +178,188 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 }
 
 await main();
+
+async function handleAuthCommand(argv: readonly string[]): Promise<void> {
+  const command = argv[0] ?? "status";
+
+  if (command === "list") {
+    for (const provider of listAuthProviders()) {
+      console.log(
+        `${provider.id}\t${provider.name}\t${provider.authMethods.join(", ")}`,
+      );
+    }
+    return;
+  }
+
+  if (command === "status") {
+    const status = await getAuthStatus(argv[1]);
+    console.log(`Auth file: ${status.authFile}`);
+    if (status.providers.length === 0) {
+      console.log(argv[1] ? `No provider found: ${argv[1]}` : "No providers found.");
+      return;
+    }
+
+    for (const provider of status.providers) {
+      const stored = provider.storedCredentialType ?? "not stored";
+      console.log(
+        `${provider.id}\t${provider.name}\t${provider.authMethods.join(", ")}\t${stored}`,
+      );
+    }
+    return;
+  }
+
+  if (command === "login") {
+    const providerId = argv[1];
+    if (!providerId) {
+      throw new Error("Usage: honeycrisp auth login <provider>");
+    }
+
+    const callbacks = createTerminalAuthCallbacks();
+    try {
+      const result = await loginAuthProvider(providerId, callbacks);
+      console.log(
+        `Logged in to ${result.providerName} (${result.providerId}) using ${result.credentialType}.`,
+      );
+      console.log(`Credentials saved to ${result.authFile}`);
+    } finally {
+      callbacks.close();
+    }
+    return;
+  }
+
+  if (command === "logout") {
+    const providerId = argv[1];
+    if (!providerId) {
+      throw new Error("Usage: honeycrisp auth logout <provider>");
+    }
+
+    await logoutAuthProvider(providerId);
+    console.log(`Removed stored credentials for ${providerId}.`);
+    return;
+  }
+
+  if (command === "verify") {
+    const providerId = argv[1];
+    if (!providerId) {
+      throw new Error("Usage: honeycrisp auth verify <provider> [model]");
+    }
+
+    const result = await verifyProviderAuth(providerId, argv[2]);
+    const source = result.source ? ` via ${result.source}` : "";
+    console.log(
+      `${result.providerName} (${result.providerId}) model ${result.modelId}: ${
+        result.configured ? `configured${source}` : "not configured"
+      }`,
+    );
+    return;
+  }
+
+  throw new Error(
+    "Usage: honeycrisp auth <list|status|login|logout|verify> [provider] [model]",
+  );
+}
+
+function createTerminalAuthCallbacks(): AuthLoginCallbacks & { close(): void } {
+  const rl = createInterface({ input, output });
+
+  return {
+    async prompt(prompt: AuthPrompt): Promise<string> {
+      if (prompt.signal?.aborted) {
+        throw new Error("Prompt cancelled");
+      }
+
+      if (prompt.type === "select") {
+        console.log(`\n${prompt.message}`);
+        prompt.options.forEach((option, index) => {
+          const description = option.description ? ` - ${option.description}` : "";
+          console.log(`  ${index + 1}. ${option.label}${description}`);
+        });
+        const answer = await rl.question(`Enter number (1-${prompt.options.length}): `);
+        const selected = prompt.options[Number.parseInt(answer, 10) - 1];
+        if (!selected) {
+          throw new Error("Invalid selection");
+        }
+
+        return selected.id;
+      }
+
+      const label = prompt.placeholder
+        ? `${prompt.message} (${prompt.placeholder}): `
+        : `${prompt.message}: `;
+
+      if (prompt.type === "secret" && input.isTTY) {
+        return readSecret(label);
+      }
+
+      if (prompt.signal) {
+        return rl.question(label, { signal: prompt.signal });
+      }
+
+      return rl.question(label);
+    },
+    notify(event: AuthEvent): void {
+      if (event.type === "auth_url") {
+        console.log(`\nOpen this URL in your browser:\n${event.url}`);
+        if (event.instructions) {
+          console.log(event.instructions);
+        }
+        console.log();
+      } else if (event.type === "device_code") {
+        console.log(`\nOpen this URL in your browser:\n${event.verificationUri}`);
+        console.log(`Enter code: ${event.userCode}`);
+        console.log();
+      } else {
+        console.log(event.message);
+      }
+    },
+    close(): void {
+      rl.close();
+    },
+  };
+}
+
+function readSecret(message: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let value = "";
+    const wasRaw = input.isRaw;
+
+    const cleanup = () => {
+      input.off("data", onData);
+      if (input.isTTY) {
+        input.setRawMode(wasRaw);
+      }
+    };
+
+    const finish = () => {
+      cleanup();
+      output.write("\n");
+      resolve(value);
+    };
+
+    const onData = (data: Buffer) => {
+      const chunk = data.toString("utf8");
+      if (chunk === "\u0003") {
+        cleanup();
+        reject(new Error("Input cancelled"));
+        return;
+      }
+
+      if (chunk === "\r" || chunk === "\n") {
+        finish();
+        return;
+      }
+
+      if (chunk === "\u007f") {
+        value = value.slice(0, -1);
+        return;
+      }
+
+      value += chunk;
+    };
+
+    output.write(message);
+    input.setRawMode(true);
+    input.resume();
+    input.on("data", onData);
+  });
+}
