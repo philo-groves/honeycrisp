@@ -38,10 +38,11 @@ The project already has a first executable tool slice:
 - Artifact lifecycle cleanup has an auditable `artifact.tombstoned` event helper with optional local file deletion.
 - MCP clients can be adapted into Honeycrisp tools through an allowlisted connector abstraction. MCP tools, resource reads, and resource-template discovery preserve MCP provenance and normalize external content as untrusted output.
 - Skills can be registered, loaded from local `SKILL.md` directories, created from MCP metadata, selected from prompt/memory/user ids, and injected as auditable context. Skill runbooks can appear as candidate procedural refs, but skills cannot grant tool permission or override governance.
+- Built-in tool families can now be registered from the library layer for memory recall, repository search, structured file reads, deterministic analysis transforms, allowlisted experiments, and deterministic synthesis. Each built-in preserves a canonical dotted Honeycrisp name plus a provider-safe transport alias.
 
 Known limitations to address:
 
-- Only local inspection is wired into the CLI by default.
+- Only local inspection is wired into the CLI by default; broader built-in tool family configuration is still library-only until the operator UX phase.
 - The runtime uses Pi model tool calls through `completeSimple`, not the fuller Pi `Agent` lifecycle.
 
 ## Phase 1: Core Tool Contract And Local Inspection Bridge
@@ -202,16 +203,25 @@ Verification:
 
 Grow the default tool surface beyond local inspection while preserving the small action-class vocabulary.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Add a memory recall tool that exposes retriever results as a `recall` action.
-- [ ] Add a repository search tool for local source and artifact search.
-- [ ] Add a structured file read tool that supports ranges, offsets, and binary-safe metadata.
-- [ ] Add an analysis tool surface for transforms such as call graphs, metrics, summaries, and diffs.
-- [ ] Add an experiment tool surface for tests, scripts, probes, fuzzing, and simulation under policy.
-- [ ] Add a synthesis tool surface for reports, patches, and generated artifacts.
-- [ ] Add per-tool safety profiles and default budgets.
-- [ ] Add tests for each built-in tool family.
+- [x] Add a memory recall tool that exposes retriever results as a `recall` action.
+- [x] Add a repository search tool for local source and artifact search.
+- [x] Add a structured file read tool that supports ranges, offsets, and binary-safe metadata.
+- [x] Add an analysis tool surface for transforms such as call graphs, metrics, summaries, and diffs.
+- [x] Add an experiment tool surface for tests, scripts, probes, fuzzing, and simulation under policy.
+- [x] Add a synthesis tool surface for reports, patches, and generated artifacts.
+- [x] Add per-tool safety profiles and default budgets.
+- [x] Add tests for each built-in tool family.
+
+Verification:
+
+- `pnpm test` passed with 96 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/13-real-built-in-repo-search.json`.
+- The first live health attempt exposed that dotted canonical tool names are not provider-safe. Built-ins now expose safe transport aliases such as `repository_search` while events retain canonical names such as `repository.search`.
+- The successful health check used the real `openai-codex/gpt-5.3-codex-spark` path with `repository.search` against `/Users/philogroves/maxtac-resources/zsh/zsh/Src`. The model made two search calls: the first over-specific query produced zero matches, then `parse_context_save` found `context.c:67` and `parse.c:295`. This is enough evidence for a focused follow-up inspection step and a useful quirk to keep watching in later evaluation harnesses.
 
 ## Phase 8: Pi Agent Lifecycle Integration
 

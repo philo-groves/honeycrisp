@@ -28,6 +28,22 @@ export type {
   BootstrapResearchRunResult,
 } from "./bootstrap.js";
 export {
+  createAnalysisTool,
+  createDefaultBuiltInToolFamily,
+  createExperimentTool,
+  createMemoryRecallTool,
+  createRepositorySearchTool,
+  createStructuredFileReadTool,
+  createSynthesisTool,
+} from "./built-in-tools.js";
+export type {
+  BuiltInExperimentToolOptions,
+  BuiltInMemoryRecallToolOptions,
+  BuiltInRepositorySearchToolOptions,
+  BuiltInStructuredFileReadToolOptions,
+  DefaultBuiltInToolFamilyOptions,
+} from "./built-in-tools.js";
+export {
   compileContextPacket,
   createEmptyMemorySnapshot,
   normalizeMemorySnapshot,
