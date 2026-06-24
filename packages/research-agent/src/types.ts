@@ -50,7 +50,11 @@ export interface ResearchMemoryRef {
 
 export interface ResearchEvent {
   id: string;
-  kind: "goal.created" | "memory.decision" | "context.compiled";
+  kind:
+    | "goal.created"
+    | "memory.decision"
+    | "context.compiled"
+    | "loop.planned";
   timestamp: string;
   goalId?: string;
   payload: unknown;
@@ -198,4 +202,36 @@ export interface ResearchMemoryControllerDecision {
   toolBudget: ResearchToolBudget;
   completionGates: readonly ResearchCompletionGate[];
   writeback: readonly ResearchMemoryStoreKind[];
+}
+
+export interface ResearchRequiredContextSection {
+  label:
+    | "goal_frame"
+    | "active_sub_goal"
+    | "direct_evidence"
+    | "prior_observations"
+    | "candidate_procedures"
+    | "current_hypotheses"
+    | "contradictions"
+    | "open_questions"
+    | "user_commitments"
+    | "tool_permissions";
+  description: string;
+  itemCount: number;
+  required: boolean;
+}
+
+export interface ResearchLoopPlan {
+  id: string;
+  rootGoalId: string;
+  subGoal: ResearchSubGoal;
+  reason: string;
+  requiredContext: readonly ResearchRequiredContextSection[];
+  permittedToolClasses: readonly ResearchActionClass[];
+  actionBudget: ResearchToolBudget;
+  expectedArtifacts: readonly string[];
+  completionGates: readonly ResearchCompletionGate[];
+  writebackRequirements: readonly ResearchMemoryStoreKind[];
+  contextPacket: ResearchContextPacket;
+  loopPrompt: string;
 }

@@ -5,6 +5,7 @@ import {
   bootstrapResearchRun,
   createFirstRunMemoryController,
   createResearchGoalFrame,
+  planResearchLoop,
 } from "../packages/research-agent/dist/index.js";
 
 test("first-run controller compiles a typed context packet without recalled memory", () => {
@@ -56,13 +57,39 @@ test("bootstrap output includes memory decision and context event records", () =
   });
 
   assert.equal(result.decision.actionClass, "synthesize");
-  assert.equal(result.events.length, 3);
+  assert.equal(result.events.length, 4);
   assert.deepEqual(
     result.events.map((event) => event.kind),
-    ["goal.created", "memory.decision", "context.compiled"],
+    ["goal.created", "memory.decision", "context.compiled", "loop.planned"],
   );
   assert.equal(
     result.decision.contextPacket.activeGoal.id,
     result.goalFrame.root.id,
   );
+  assert.equal(result.loopPlan.subGoal.id, result.decision.subGoal.id);
+});
+
+test("loop planner turns a memory decision into an executable bounded plan", () => {
+  const goalFrame = createResearchGoalFrame(
+    [
+      "Goal: Compare two puzzle-solving strategies",
+      "Success gates: explain tradeoffs; recommend next step",
+      "Scope constraints: no external search",
+      "Evidence: preserve assumptions",
+    ].join("\n"),
+  );
+  const decision = createFirstRunMemoryController().decide({ goalFrame });
+  const loopPlan = planResearchLoop({ decision });
+
+  assert.equal(loopPlan.subGoal.id, decision.subGoal.id);
+  assert.equal(loopPlan.reason, decision.subGoal.rationale);
+  assert.deepEqual(loopPlan.actionBudget, decision.toolBudget);
+  assert.deepEqual(loopPlan.writebackRequirements, decision.writeback);
+  assert.ok(
+    loopPlan.requiredContext.some(
+      (section) => section.label === "goal_frame" && section.required,
+    ),
+  );
+  assert.ok(loopPlan.loopPrompt.includes("Loop sub-goal:"));
+  assert.ok(loopPlan.loopPrompt.includes("Required context manifest:"));
 });

@@ -34,6 +34,8 @@ export {
 } from "./context-packet.js";
 export type { CompileContextPacketInput } from "./context-packet.js";
 export { createResearchGoalFrame } from "./goal.js";
+export { planResearchLoop } from "./loop-planner.js";
+export type { PlanResearchLoopInput } from "./loop-planner.js";
 export {
   createFirstRunMemoryController,
   FirstRunMemoryController,
@@ -62,6 +64,8 @@ export type {
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
   ResearchPromptFrame,
+  ResearchLoopPlan,
+  ResearchRequiredContextSection,
   ResearchSubGoal,
   ResearchToolBudget,
   ResearchToolDescriptor,
