@@ -1,4 +1,8 @@
 import type { BootstrapResearchRunResult } from "./bootstrap.js";
+import type {
+  ResearchContextPacketV2,
+  ResearchContextPacketV2SectionLabel,
+} from "./context-packet-v2.js";
 import { nowIso } from "./ids.js";
 import type {
   ResearchContextPacket,
@@ -65,6 +69,22 @@ export interface ResearchFlowCapture {
     toolPermissions: readonly ResearchToolPermission[];
     toolBudget: ResearchToolBudget;
   };
+  contextV2?: {
+    preconsciousCandidateCount: number;
+    sections: readonly {
+      label: ResearchContextPacketV2SectionLabel;
+      itemCount: number;
+      tokenBudget: number;
+      estimatedTokens: number;
+      selectedRecordIds: readonly string[];
+      droppedRecordIds: readonly string[];
+      selectionReasons: readonly {
+        recordId: string;
+        reasons: readonly string[];
+        warnings: readonly string[];
+      }[];
+    }[];
+  };
   memory: {
     counts: {
       eventLog: number;
@@ -90,6 +110,7 @@ export function createResearchFlowCapture(
   result: BootstrapResearchRunResult,
   options: {
     capturedAt?: string;
+    contextPacketV2?: ResearchContextPacketV2;
   } = {},
 ): ResearchFlowCapture {
   return {
@@ -124,6 +145,9 @@ export function createResearchFlowCapture(
     },
     loop: createLoopCapture(result.loopResult),
     context: createContextCapture(result.decision.contextPacket),
+    ...(options.contextPacketV2
+      ? { contextV2: createContextV2Capture(options.contextPacketV2) }
+      : {}),
     memory: createMemoryCapture(result.memory),
     eventTimeline: result.events.map(captureEvent),
   };
@@ -157,6 +181,27 @@ function createContextCapture(
     userCommitments: contextPacket.userCommitments,
     toolPermissions: contextPacket.toolPermissions,
     toolBudget: contextPacket.toolBudget,
+  };
+}
+
+function createContextV2Capture(
+  contextPacket: ResearchContextPacketV2,
+): NonNullable<ResearchFlowCapture["contextV2"]> {
+  return {
+    preconsciousCandidateCount: contextPacket.preconsciousCandidateCount,
+    sections: contextPacket.sections.map((section) => ({
+      label: section.label,
+      itemCount: section.items.length,
+      tokenBudget: section.tokenBudget,
+      estimatedTokens: section.estimatedTokens,
+      selectedRecordIds: section.items.map((item) => item.recordId),
+      droppedRecordIds: section.droppedRecordIds,
+      selectionReasons: section.items.map((item) => ({
+        recordId: item.recordId,
+        reasons: item.selectionReasons,
+        warnings: item.warnings,
+      })),
+    })),
   };
 }
 

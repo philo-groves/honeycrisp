@@ -19,7 +19,7 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 ## Current Baseline
 
-The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, and a phase-5 deterministic memory retriever. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
+The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, and a phase-6 context packet v2 compiler. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
 
 Known limitations to address:
 
@@ -332,6 +332,8 @@ Checklist:
 
 Split memory selection into two layers:
 
+Status: completed on 2026-06-24.
+
 - Preconscious memory: the larger retrieved candidate set.
 - Conscious context: the bounded packet injected into a model call.
 
@@ -358,19 +360,19 @@ Compiler responsibilities:
 
 Checklist:
 
-- [ ] Add preconscious-memory input type.
-- [ ] Add conscious-context packet v2 type.
-- [ ] Enforce section-level token budgets.
-- [ ] Prefer direct evidence over inference when budget is tight.
-- [ ] Preserve labels for evidence, inference, belief, and uncertainty.
-- [ ] Include selection reasons in context packet metadata.
-- [ ] Include contradictions and uncertainty when relevant.
-- [ ] Keep context packet references and summaries separate from durable memory.
-- [ ] Update flow capture to expose selection reasons.
-- [ ] Add tests for token budget behavior.
-- [ ] Add tests for evidence/inference labeling.
-- [ ] Add tests for contradiction retention.
-- [ ] Add tests for captured selection reasons.
+- [x] Add preconscious-memory input type.
+- [x] Add conscious-context packet v2 type.
+- [x] Enforce section-level token budgets.
+- [x] Prefer direct evidence over inference when budget is tight.
+- [x] Preserve labels for evidence, inference, belief, and uncertainty.
+- [x] Include selection reasons in context packet metadata.
+- [x] Include contradictions and uncertainty when relevant.
+- [x] Keep context packet references and summaries separate from durable memory.
+- [x] Update flow capture to expose selection reasons.
+- [x] Add tests for token budget behavior.
+- [x] Add tests for evidence/inference labeling.
+- [x] Add tests for contradiction retention.
+- [x] Add tests for captured selection reasons.
 
 ## Phase 7: Memory Controller v2
 
@@ -560,19 +562,19 @@ Checklist:
 
 ## Next Implementation Increment
 
-The next implementation slice should be phase 6 only:
+The next implementation slice should be phase 7 only:
 
-1. Split memory selection into preconscious retrieval results and a bounded conscious context packet.
-2. Add context packet v2 metadata for selection reasons and warnings.
-3. Enforce section-level token budgets.
-4. Preserve labels for evidence, inference, belief, contradiction, and uncertainty.
-5. Update flow capture to expose selection reasons.
+1. Add a memory-driven controller alongside the first-run controller.
+2. Feed retrieved preconscious memory and context packet v2 into action selection.
+3. Select bounded subgoals from memory, goal gates, and available tools.
+4. Explain controller decisions from retrieved records and goal gates.
+5. Preserve first-run fallback behavior.
 
 Acceptance criteria:
 
 - Existing tests continue to pass.
-- Packet compilation respects token budgets.
-- Evidence and inference remain separately labeled.
-- Important contradictions are not dropped when relevant.
-- Selection reasons are visible in captured flow output.
-- Context packet references and summaries remain separate from durable memory.
+- Function-walk goals create one bounded subgoal per function.
+- Stop conditions halt after requested maximum function count.
+- Completion gates are evaluated from memory state, not loop count alone.
+- Controller decisions can be explained from retrieved records and goal gates.
+- First-run fallback behavior remains available.

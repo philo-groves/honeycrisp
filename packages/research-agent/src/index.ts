@@ -33,6 +33,15 @@ export {
   normalizeMemorySnapshot,
 } from "./context-packet.js";
 export type { CompileContextPacketInput } from "./context-packet.js";
+export { compileContextPacketV2 } from "./context-packet-v2.js";
+export type {
+  CompileContextPacketV2Input,
+  ResearchContextPacketV2,
+  ResearchContextPacketV2Item,
+  ResearchContextPacketV2ItemLabel,
+  ResearchContextPacketV2Section,
+  ResearchContextPacketV2SectionLabel,
+} from "./context-packet-v2.js";
 export {
   createResearchEventId,
   createResearchMemoryRecordId,
