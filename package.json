@@ -1,0 +1,24 @@
+{
+  "name": "honeycrisp-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Goal-oriented research agent workspace.",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false",
+    "clean": "tsc -b --clean",
+    "start": "node packages/cli/dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@honeycrisp/research-agent",
+  "version": "0.1.0",
+  "description": "Research-agent layer built on Pi agent core and Pi AI.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.80.2",
+    "@earendil-works/pi-ai": "0.80.2"
+  },
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
