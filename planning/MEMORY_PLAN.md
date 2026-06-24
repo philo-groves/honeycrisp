@@ -19,7 +19,7 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 ## Current Baseline
 
-The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, and a phase-6 context packet v2 compiler. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
+The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, a phase-6 context packet v2 compiler, and a phase-7 memory-driven controller. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
 
 Known limitations to address:
 
@@ -378,6 +378,8 @@ Checklist:
 
 Replace or augment the first-run controller with a memory-driven controller.
 
+Status: completed on 2026-06-24.
+
 Controller inputs:
 
 - goal tree
@@ -420,23 +422,23 @@ Decision principles:
 
 Checklist:
 
-- [ ] Add memory-driven controller input type.
-- [ ] Add memory-driven controller output type.
-- [ ] Feed retrieved preconscious memory into action selection.
-- [ ] Select bounded subgoals from memory, gates, and available tools.
-- [ ] Explain controller decisions from retrieved records and goal gates.
-- [ ] Preserve first-run fallback behavior.
-- [ ] Ask the user when scope, authorization, or safety is missing.
-- [ ] Inspect when direct evidence is missing and local tools are available.
-- [ ] Analyze when evidence exists but claims or hypotheses are weak.
-- [ ] Experiment when a hypothesis has falsification criteria and tools are available.
-- [ ] Synthesize only when enough evidence exists to update the goal state.
-- [ ] Respond only when supported by memory and gates.
-- [ ] Stop immediately when a stop gate is triggered.
-- [ ] Add tests for function-walk bounded subgoals.
-- [ ] Add tests for maximum function-count stop conditions.
-- [ ] Add tests for memory-backed completion-gate evaluation.
-- [ ] Add tests for decision explanation.
+- [x] Add memory-driven controller input type.
+- [x] Add memory-driven controller output type.
+- [x] Feed retrieved preconscious memory into action selection.
+- [x] Select bounded subgoals from memory, gates, and available tools.
+- [x] Explain controller decisions from retrieved records and goal gates.
+- [x] Preserve first-run fallback behavior.
+- [x] Ask the user when scope, authorization, or safety is missing.
+- [x] Inspect when direct evidence is missing and local tools are available.
+- [x] Analyze when evidence exists but claims or hypotheses are weak.
+- [x] Experiment when a hypothesis has falsification criteria and tools are available.
+- [x] Synthesize only when enough evidence exists to update the goal state.
+- [x] Respond only when supported by memory and gates.
+- [x] Stop immediately when a stop gate is triggered.
+- [x] Add tests for function-walk bounded subgoals.
+- [x] Add tests for maximum function-count stop conditions.
+- [x] Add tests for memory-backed completion-gate evaluation.
+- [x] Add tests for decision explanation.
 
 ## Phase 8: Reflection And Consolidation
 
@@ -562,19 +564,19 @@ Checklist:
 
 ## Next Implementation Increment
 
-The next implementation slice should be phase 7 only:
+The next implementation slice should be phase 8 only:
 
-1. Add a memory-driven controller alongside the first-run controller.
-2. Feed retrieved preconscious memory and context packet v2 into action selection.
-3. Select bounded subgoals from memory, goal gates, and available tools.
-4. Explain controller decisions from retrieved records and goal gates.
-5. Preserve first-run fallback behavior.
+1. Add deterministic reflection boundary detection.
+2. Summarize meaningful loops as episodic records.
+3. Revise hypothesis status and confidence from evidence links.
+4. Promote repeated successful patterns into procedures.
+5. Schedule prospective checks from unresolved follow-up needs.
 
 Acceptance criteria:
 
 - Existing tests continue to pass.
-- Function-walk goals create one bounded subgoal per function.
-- Stop conditions halt after requested maximum function count.
-- Completion gates are evaluated from memory state, not loop count alone.
-- Controller decisions can be explained from retrieved records and goal gates.
-- First-run fallback behavior remains available.
+- A loop result updates relevant hypothesis state.
+- Repeated useful behavior can promote a procedure.
+- Contradictory evidence lowers confidence or status.
+- Prospective checks are scheduled from unresolved follow-up needs.
+- Reflection remains deterministic and schema-driven.

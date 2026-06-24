@@ -93,6 +93,14 @@ export {
   FirstRunMemoryController,
 } from "./memory-controller.js";
 export {
+  createMemoryDrivenController,
+  MemoryDrivenController,
+} from "./memory-controller-v2.js";
+export type {
+  MemoryDrivenControllerDecision,
+  MemoryDrivenControllerInput,
+} from "./memory-controller-v2.js";
+export {
   computeMemoryEventPayloadHash,
   createMemorySnapshotFromEventLog,
   createSqliteMemoryEventLog,

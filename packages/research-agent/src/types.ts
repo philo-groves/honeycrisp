@@ -17,7 +17,8 @@ export type ResearchActionClass =
   | "experiment"
   | "synthesize"
   | "ask_user"
-  | "respond";
+  | "respond"
+  | "stop";
 
 export type ResearchGatePolarity = "success" | "failure" | "stop";
 
