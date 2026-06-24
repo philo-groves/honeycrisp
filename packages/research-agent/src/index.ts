@@ -112,6 +112,16 @@ export type {
   UpdateMemoryRecordStatusInput,
 } from "./memory-record-store.js";
 export {
+  createDeterministicMemoryRetriever,
+  DeterministicMemoryRetriever,
+} from "./memory-retriever.js";
+export type {
+  MemoryRetrievalCandidate,
+  MemoryRetrievalInput,
+  MemoryRetrievalResult,
+  MemoryRetriever,
+} from "./memory-retriever.js";
+export {
   createResearchMemoryProvenance,
   isResearchDerivedMemoryStatus,
   isResearchMemoryRecordKind,

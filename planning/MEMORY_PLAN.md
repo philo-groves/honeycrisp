@@ -19,13 +19,13 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 ## Current Baseline
 
-The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, and a phase-4 SQLite derived-record store. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
+The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, and a phase-5 deterministic memory retriever. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
 
 Known limitations to address:
 
 - Memory still exposes an in-memory snapshot compatibility layer derived from recent events.
 - Raw events have a durable append-only event log, but runtime bootstrapping has not yet fully adopted it as the default event source.
-- Derived memory records are typed and persisted, but recall is not yet a scored retrieval step.
+- Derived memory records are typed, persisted, and retrievable through scored recall.
 - Recall is not yet a scored retrieval step.
 - Context compilation does not distinguish a larger preconscious candidate set from the bounded conscious packet.
 - Reflection and consolidation are not yet explicit loop-boundary operations.
@@ -274,6 +274,8 @@ Checklist:
 
 Implement a `MemoryRetriever` that returns a larger staged candidate set before context packet compilation.
 
+Status: completed on 2026-06-24.
+
 Inputs:
 
 - active root goal
@@ -308,23 +310,23 @@ Scoring factors:
 
 Checklist:
 
-- [ ] Add `MemoryRetriever` interface.
-- [ ] Add retrieval input shape.
-- [ ] Add scored retrieval output shape.
-- [ ] Score relevance to active goal.
-- [ ] Score relevance to active subgoal.
-- [ ] Score recency.
-- [ ] Score confidence.
-- [ ] Score evidence quality.
-- [ ] Penalize or warn on contradiction risk.
-- [ ] Include relevant contradictions even when they lower confidence.
-- [ ] Score procedural applicability by action class.
-- [ ] Include prospective checks when trigger conditions are met.
-- [ ] Include selection reasons for every returned record.
-- [ ] Add tests proving direct evidence outranks stale weak evidence.
-- [ ] Add tests proving relevant contradictions are included.
-- [ ] Add tests proving procedures are action-class scoped.
-- [ ] Add tests proving prospective triggers surface.
+- [x] Add `MemoryRetriever` interface.
+- [x] Add retrieval input shape.
+- [x] Add scored retrieval output shape.
+- [x] Score relevance to active goal.
+- [x] Score relevance to active subgoal.
+- [x] Score recency.
+- [x] Score confidence.
+- [x] Score evidence quality.
+- [x] Penalize or warn on contradiction risk.
+- [x] Include relevant contradictions even when they lower confidence.
+- [x] Score procedural applicability by action class.
+- [x] Include prospective checks when trigger conditions are met.
+- [x] Include selection reasons for every returned record.
+- [x] Add tests proving direct evidence outranks stale weak evidence.
+- [x] Add tests proving relevant contradictions are included.
+- [x] Add tests proving procedures are action-class scoped.
+- [x] Add tests proving prospective triggers surface.
 
 ## Phase 6: Context Packet Compiler v2
 
@@ -558,19 +560,19 @@ Checklist:
 
 ## Next Implementation Increment
 
-The next implementation slice should be phase 5 only:
+The next implementation slice should be phase 6 only:
 
-1. Add the `MemoryRetriever` interface.
-2. Score records from the phase-4 store into a larger preconscious candidate set.
-3. Include selection reasons and warnings for contradictions, staleness, or weak evidence.
-4. Scope procedures to the current action class.
-5. Surface prospective checks when their trigger conditions are met.
+1. Split memory selection into preconscious retrieval results and a bounded conscious context packet.
+2. Add context packet v2 metadata for selection reasons and warnings.
+3. Enforce section-level token budgets.
+4. Preserve labels for evidence, inference, belief, contradiction, and uncertainty.
+5. Update flow capture to expose selection reasons.
 
 Acceptance criteria:
 
 - Existing tests continue to pass.
-- Relevant direct evidence outranks stale weak evidence.
-- Contradictions are included when they affect an active claim or hypothesis.
-- Procedures are only returned when applicable to the current action class.
-- Prospective checks surface when their trigger conditions are met.
-- Retrieval results include scores, selection reasons, and warnings.
+- Packet compilation respects token budgets.
+- Evidence and inference remain separately labeled.
+- Important contradictions are not dropped when relevant.
+- Selection reasons are visible in captured flow output.
+- Context packet references and summaries remain separate from durable memory.
