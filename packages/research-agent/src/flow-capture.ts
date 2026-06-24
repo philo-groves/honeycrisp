@@ -12,7 +12,9 @@ import type {
   ResearchLoopProcessingResult,
   ResearchMemoryRef,
   ResearchMemorySnapshot,
+  ResearchSkippedToolAction,
   ResearchToolBudget,
+  ResearchToolAction,
   ResearchToolPermission,
   ResearchTrace,
 } from "./types.js";
@@ -72,6 +74,8 @@ export interface ResearchFlowCapture {
     userCommitments: readonly string[];
     toolPermissions: readonly ResearchToolPermission[];
     toolBudget: ResearchToolBudget;
+    candidateToolActions: readonly ResearchToolAction[];
+    skippedToolActions: readonly ResearchSkippedToolAction[];
   };
   contextV2?: {
     preconsciousCandidateCount: number;
@@ -187,6 +191,8 @@ function createContextCapture(
     userCommitments: contextPacket.userCommitments,
     toolPermissions: contextPacket.toolPermissions,
     toolBudget: contextPacket.toolBudget,
+    candidateToolActions: contextPacket.candidateToolActions,
+    skippedToolActions: contextPacket.skippedToolActions,
   };
 }
 

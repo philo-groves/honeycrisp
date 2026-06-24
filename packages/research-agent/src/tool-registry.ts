@@ -8,22 +8,11 @@ import type {
   ResearchActionClass,
   ResearchArtifactRef,
   ResearchEvent,
-  ResearchMemoryStoreKind,
-  ResearchToolBudget,
+  ResearchToolAction,
   ResearchToolDescriptor,
 } from "./types.js";
 
 export type ResearchToolExecutionStatus = "complete" | "error" | "blocked";
-
-export interface ResearchToolAction {
-  id: string;
-  actionClass: ResearchActionClass;
-  toolName: string;
-  input: Record<string, unknown>;
-  expectedOutputs?: readonly string[];
-  budget?: Partial<ResearchToolBudget>;
-  memoryWritebackTargets?: readonly ResearchMemoryStoreKind[];
-}
 
 export interface ResearchToolExecutionContext {
   goalId?: string;

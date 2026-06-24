@@ -5,8 +5,10 @@ import type {
   ResearchGoalNode,
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
+  ResearchSkippedToolAction,
   ResearchSubGoal,
   ResearchToolBudget,
+  ResearchToolAction,
   ResearchToolDescriptor,
   ResearchToolPermission,
 } from "./types.js";
@@ -18,6 +20,8 @@ export interface CompileContextPacketInput {
   memory: ResearchMemorySnapshot;
   tools: readonly ResearchToolDescriptor[];
   governance?: ResearchGovernancePolicy;
+  candidateToolActions?: readonly ResearchToolAction[];
+  skippedToolActions?: readonly ResearchSkippedToolAction[];
   writebackExpectations?: readonly ResearchMemoryStoreKind[];
 }
 
@@ -43,6 +47,8 @@ export function compileContextPacket(
     ],
     toolPermissions: createToolPermissions(input.tools, input.governance),
     toolBudget,
+    candidateToolActions: input.candidateToolActions ?? [],
+    skippedToolActions: input.skippedToolActions ?? [],
     writebackExpectations: input.writebackExpectations ?? [
       "event",
       "working",

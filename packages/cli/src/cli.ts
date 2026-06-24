@@ -8,6 +8,7 @@ import {
   compileContextPacketV2,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
+  createDeterministicLoopExecutor,
   createMemoryDrivenController,
   createMemoryInspector,
   createPiLoopExecutor,
@@ -389,7 +390,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     const inspectionSeed = await createInspectionSeed(args);
 
     const loopExecutor = args.mock
-      ? undefined
+      ? createDeterministicLoopExecutor(
+          inspectionSeed.toolRegistry
+            ? { toolRegistry: inspectionSeed.toolRegistry }
+            : {},
+        )
       : await createRealLoopExecutor(args, inspectionSeed.toolRegistry);
 
     const inspectionState =
@@ -410,7 +415,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       userPreferences: args.userPreferences,
       ...inspectionState,
       ...(inspectionSeed.tools.length > 0 ? { tools: inspectionSeed.tools } : {}),
-      ...(loopExecutor ? { loopExecutor } : {}),
+      loopExecutor,
       ...(args.goalLoops !== undefined
         ? { goalRun: { maxLoops: args.goalLoops } }
         : {}),

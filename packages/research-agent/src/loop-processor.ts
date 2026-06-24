@@ -16,11 +16,11 @@ import type {
 import {
   createToolResultMessage,
   type ResearchToolExecutionResult,
+  type ResearchToolExecutionRecord,
   type ResearchToolRegistry,
 } from "./tool-registry.js";
 import type {
   ResearchCompletionGateResult,
-  ResearchContextPacket,
   ResearchEvent,
   ResearchLoopContextSection,
   ResearchLoopExecutionMode,
@@ -101,19 +101,34 @@ export function compileLoopModelInput(
 ): ResearchLoopModelInput {
   return {
     loopPrompt: loopPlan.loopPrompt,
-    contextSections: createLoopContextSections(loopPlan.contextPacket),
+    contextSections: createLoopContextSections(loopPlan),
     permittedToolClasses: loopPlan.permittedToolClasses,
     toolBudget: loopPlan.actionBudget,
   };
 }
 
-export function createDeterministicLoopExecutor(): ResearchLoopExecutor {
+export interface CreateDeterministicLoopExecutorOptions {
+  toolRegistry?: ResearchToolRegistry;
+}
+
+export function createDeterministicLoopExecutor(
+  options: CreateDeterministicLoopExecutorOptions = {},
+): ResearchLoopExecutor {
   return {
     name: "deterministic-first-run",
     async execute(input: ResearchLoopExecutionInput) {
       const { loopPlan } = input;
-      const text = renderDeterministicLoopOutput(loopPlan);
-      const researchTrace = createDeterministicResearchTrace(loopPlan);
+      const plannedExecutions = await executeControllerPlannedToolActions({
+        loopPlan,
+        ...(options.toolRegistry ? { toolRegistry: options.toolRegistry } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+      const text = renderDeterministicLoopOutput(loopPlan, plannedExecutions);
+      const researchTrace = createDeterministicResearchTrace(
+        loopPlan,
+        plannedExecutions,
+      );
+      const toolEvents = plannedExecutions.flatMap((record) => record.events);
 
       return {
         text,
@@ -121,10 +136,14 @@ export function createDeterministicLoopExecutor(): ResearchLoopExecutor {
         evidenceRefs: [],
         claimRefs: [],
         followUpActions: createFollowUpActions(loopPlan),
+        ...(toolEvents.length > 0 ? { toolEvents } : {}),
         researchTrace,
         raw: {
           mode: "deterministic",
           note: "No model call was made.",
+          toolCallCount: plannedExecutions.length,
+          plannedToolCallCount: plannedExecutions.length,
+          skippedCandidateToolActions: loopPlan.skippedToolActions,
         },
       };
     },
@@ -164,12 +183,33 @@ export function createPiLoopExecutor(
         );
       }
 
-      const context = createPiContext(input.modelInput, options.toolRegistry);
       const streamOptions = createPiStreamOptions(options, input.signal);
       const toolEvents: ResearchEvent[] = [];
+      let toolCallCount = 0;
+      const plannedExecutions = await executeControllerPlannedToolActions({
+        loopPlan: input.loopPlan,
+        ...(options.toolRegistry ? { toolRegistry: options.toolRegistry } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+      toolCallCount += plannedExecutions.length;
+      toolEvents.push(...plannedExecutions.flatMap((record) => record.events));
+
+      const context = createPiContext(
+        input.modelInput,
+        createFreeFormToolRegistry(
+          options.toolRegistry,
+          input.modelInput,
+          input.loopPlan.actionBudget.maxToolCalls - toolCallCount,
+        ),
+      );
+      if (plannedExecutions.length > 0) {
+        context.messages.push(
+          createPlannedToolResultContextMessage(plannedExecutions),
+        );
+      }
+
       let message = await models.completeSimple(model, context, streamOptions);
       const modelCalls = [createModelCallMetadata(message)];
-      let toolCallCount = 0;
 
       for (
         let turnIndex = 0;
@@ -177,6 +217,10 @@ export function createPiLoopExecutor(
         turnIndex += 1
       ) {
         if (message.stopReason === "error" || message.stopReason === "aborted") {
+          break;
+        }
+
+        if (toolCallCount >= input.loopPlan.actionBudget.maxToolCalls) {
           break;
         }
 
@@ -203,6 +247,9 @@ export function createPiLoopExecutor(
           context.messages.push(createToolResultContextMessage(toolCall, execution.result));
         }
 
+        if (toolCallCount >= input.loopPlan.actionBudget.maxToolCalls) {
+          delete context.tools;
+        }
         message = await models.completeSimple(model, context, streamOptions);
         modelCalls.push(createModelCallMetadata(message));
       }
@@ -234,6 +281,8 @@ export function createPiLoopExecutor(
           responseId: message.responseId,
           usage: message.usage,
           toolCallCount,
+          plannedToolCallCount: plannedExecutions.length,
+          skippedCandidateToolActions: input.loopPlan.skippedToolActions,
           modelCalls,
         },
       };
@@ -267,8 +316,9 @@ export function inferResearchLoopExecutionMode(
 }
 
 function createLoopContextSections(
-  packet: ResearchContextPacket,
+  loopPlan: ResearchLoopPlan,
 ): ResearchLoopContextSection[] {
+  const packet = loopPlan.contextPacket;
   return [
     {
       label: "goal_frame",
@@ -320,7 +370,63 @@ function createLoopContextSections(
       required: false,
       content: packet.toolPermissions,
     },
+    {
+      label: "candidate_tool_actions",
+      required: false,
+      content: loopPlan.candidateToolActions,
+    },
+    {
+      label: "skipped_tool_actions",
+      required: false,
+      content: loopPlan.skippedToolActions,
+    },
   ];
+}
+
+function createFreeFormToolRegistry(
+  toolRegistry: ResearchToolRegistry | undefined,
+  modelInput: ResearchLoopModelInput,
+  remainingToolCalls: number,
+): ResearchToolRegistry | undefined {
+  if (
+    !toolRegistry ||
+    toolRegistry.size === 0 ||
+    modelInput.permittedToolClasses.length === 0 ||
+    remainingToolCalls <= 0
+  ) {
+    return undefined;
+  }
+
+  return toolRegistry;
+}
+
+async function executeControllerPlannedToolActions(input: {
+  loopPlan: ResearchLoopPlan;
+  toolRegistry?: ResearchToolRegistry;
+  signal?: AbortSignal;
+}): Promise<ResearchToolExecutionRecord[]> {
+  if (!input.toolRegistry || input.loopPlan.candidateToolActions.length === 0) {
+    return [];
+  }
+
+  const records: ResearchToolExecutionRecord[] = [];
+  for (const action of input.loopPlan.candidateToolActions) {
+    if (records.length >= input.loopPlan.actionBudget.maxToolCalls) {
+      break;
+    }
+
+    records.push(
+      await input.toolRegistry.execute(action, {
+        goalId: input.loopPlan.rootGoalId,
+        subGoalId: input.loopPlan.subGoal.id,
+        permittedActionClasses: input.loopPlan.permittedToolClasses,
+        defaultActionClass: input.loopPlan.subGoal.actionClass,
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    );
+  }
+
+  return records;
 }
 
 function createPiContext(
@@ -517,6 +623,33 @@ function extractFirstJsonObject(text: string): string | undefined {
   return undefined;
 }
 
+function createPlannedToolResultContextMessage(
+  records: readonly ResearchToolExecutionRecord[],
+): Message {
+  return {
+    role: "user",
+    timestamp: Date.now(),
+    content: [
+      "Controller-planned tool results were executed before the model call:",
+      JSON.stringify(
+        records.map((record) => ({
+          toolActionId: record.action.id,
+          toolName: record.action.toolName,
+          actionClass: record.action.actionClass,
+          input: record.action.input,
+          status: record.result.status,
+          summary: record.result.summary,
+          output: record.result.output,
+          error: record.result.error,
+          followUpActions: record.result.followUpActions,
+        })),
+        null,
+        2,
+      ),
+    ].join("\n"),
+  };
+}
+
 function createToolResultContextMessage(
   toolCall: ExtractedToolCall,
   result: ResearchToolExecutionResult,
@@ -547,7 +680,10 @@ function createToolResultContextMessage(
   };
 }
 
-function renderDeterministicLoopOutput(loopPlan: ResearchLoopPlan): string {
+function renderDeterministicLoopOutput(
+  loopPlan: ResearchLoopPlan,
+  plannedExecutions: readonly ResearchToolExecutionRecord[] = [],
+): string {
   const lines = [
     `Sub-goal: ${loopPlan.subGoal.objective}`,
     "",
@@ -559,6 +695,25 @@ function renderDeterministicLoopOutput(loopPlan: ResearchLoopPlan): string {
     "Evidence checklist:",
     ...loopPlan.contextPacket.openQuestions.map((question) => `- ${question}`),
   ];
+
+  if (plannedExecutions.length > 0) {
+    lines.push("", "Controller-planned tool results:");
+    lines.push(
+      ...plannedExecutions.map(
+        (record) =>
+          `- ${record.action.toolName} (${record.result.status}): ${record.result.summary}`,
+      ),
+    );
+  }
+
+  if (loopPlan.skippedToolActions.length > 0) {
+    lines.push("", "Skipped candidate tool actions:");
+    lines.push(
+      ...loopPlan.skippedToolActions.map(
+        (skipped) => `- ${skipped.code}: ${skipped.reason}`,
+      ),
+    );
+  }
 
   if (loopPlan.contextPacket.userCommitments.length > 0) {
     lines.push("", "User commitments to preserve:");
@@ -574,10 +729,18 @@ function renderDeterministicLoopOutput(loopPlan: ResearchLoopPlan): string {
 
 function createDeterministicResearchTrace(
   loopPlan: ResearchLoopPlan,
+  plannedExecutions: readonly ResearchToolExecutionRecord[] = [],
 ): ResearchTrace {
+  const plannedObservations = plannedExecutions.map((record) => ({
+    text: `Controller-planned tool ${record.action.toolName} returned ${record.result.status}: ${record.result.summary}`,
+    confidence: record.result.status === "complete" ? 1 : 0.6,
+  }));
+
   return normalizeResearchTrace({
     observations:
-      loopPlan.contextPacket.directEvidence.length > 0
+      plannedObservations.length > 0
+        ? plannedObservations
+        : loopPlan.contextPacket.directEvidence.length > 0
         ? [
             {
               text: `The context packet contains ${loopPlan.contextPacket.directEvidence.length} direct evidence reference(s).`,

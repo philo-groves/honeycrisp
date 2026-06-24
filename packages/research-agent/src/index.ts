@@ -87,7 +87,6 @@ export {
 export type {
   ExecuteToolCallOptions,
   ResearchExecutableTool,
-  ResearchToolAction,
   ResearchToolExecutionContext,
   ResearchToolExecutionRecord,
   ResearchToolExecutionResult,
@@ -125,6 +124,7 @@ export {
   processResearchLoop,
 } from "./loop-processor.js";
 export type {
+  CreateDeterministicLoopExecutorOptions,
   CreatePiLoopExecutorOptions,
   ProcessResearchLoopInput,
 } from "./loop-processor.js";
@@ -289,8 +289,11 @@ export type {
   ResearchRequiredContextSection,
   ResearchSubGoal,
   ResearchToolBudget,
+  ResearchToolAction,
   ResearchToolDescriptor,
   ResearchToolPermission,
+  ResearchSkippedToolAction,
+  ResearchSkippedToolActionCode,
   ResearchToolSideEffect,
   ResearchTrace,
   ResearchTraceItem,

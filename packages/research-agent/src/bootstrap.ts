@@ -202,6 +202,8 @@ function createMemoryDecisionEvent(
       actionClass: decision.actionClass,
       subGoal: decision.subGoal,
       actionScores: decision.actionScores,
+      candidateToolActions: decision.candidateToolActions,
+      skippedToolActions: decision.skippedToolActions,
       toolBudget: decision.toolBudget,
       writeback: decision.writeback,
     },
@@ -222,6 +224,8 @@ function createContextCompiledEvent(
       evidenceRefs: decision.contextPacket.directEvidence.length,
       openQuestions: decision.contextPacket.openQuestions,
       toolPermissions: decision.contextPacket.toolPermissions,
+      candidateToolActions: decision.contextPacket.candidateToolActions,
+      skippedToolActions: decision.contextPacket.skippedToolActions,
     },
   };
 }
@@ -239,6 +243,8 @@ function createLoopPlannedEvent(
       loopPlanId: loopPlan.id,
       subGoalId: loopPlan.subGoal.id,
       permittedToolClasses: loopPlan.permittedToolClasses,
+      candidateToolActions: loopPlan.candidateToolActions,
+      skippedToolActions: loopPlan.skippedToolActions,
       actionBudget: loopPlan.actionBudget,
       expectedArtifacts: loopPlan.expectedArtifacts,
       writebackRequirements: loopPlan.writebackRequirements,

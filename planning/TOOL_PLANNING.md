@@ -30,10 +30,11 @@ The project already has a first executable tool slice:
 - Tool execution emits `tool.requested` and `tool.observed` events.
 - Bootstrap appends tool events before `loop.processed`, allowing memory routing to treat tool observations as direct evidence.
 - Real smoke testing has proven one model-initiated local inspection call against the zsh corpus.
+- The memory controller can propose obvious local inspection actions from prompt paths, and the loop processor executes accepted controller-planned evidence tools before the first model call.
+- Deterministic mock mode can execute controller-planned evidence tools without a model call when an executable registry is supplied.
 
 Known limitations to address:
 
-- The memory controller selects an action class but does not yet propose concrete tool actions or inputs.
 - Registry validation is still shallow: action class and tool existence are checked, but schemas, side effects, permissions, latency, cost, and hooks need stronger enforcement.
 - Durable SQLite event-log integration is not yet the default runtime write path for every top-level run.
 - Tool outputs can still be large inline event payloads; storage-backed raw output pointers and artifact refs are needed.
@@ -68,17 +69,25 @@ Checklist:
 
 Move tool choice from opportunistic model behavior toward the architecture's intended flow: the memory controller proposes candidate tool actions and the processing layer validates and executes them.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Extend `ResearchMemoryControllerDecision` with candidate tool actions.
-- [ ] Include concrete tool name and normalized inputs in controller decisions when obvious from prompt, memory, and available tools.
-- [ ] Preserve the selected action class as the primary policy decision.
-- [ ] Teach loop planning to include proposed tool actions in the loop prompt and context packet.
-- [ ] Make the Pi loop prefer controller-proposed actions before free-form tool choice.
-- [ ] Add a no-model execution path for deterministic controller-planned tools when the action is purely evidence gathering.
-- [ ] Record rejected or skipped candidate tool actions with explicit reasons.
-- [ ] Add tests for controller-planned local inspection.
-- [ ] Add tests proving tools do not execute when their action class is not selected or permitted.
+- [x] Extend `ResearchMemoryControllerDecision` with candidate tool actions.
+- [x] Include concrete tool name and normalized inputs in controller decisions when obvious from prompt, memory, and available tools.
+- [x] Preserve the selected action class as the primary policy decision.
+- [x] Teach loop planning to include proposed tool actions in the loop prompt and context packet.
+- [x] Make the Pi loop prefer controller-proposed actions before free-form tool choice.
+- [x] Add a no-model execution path for deterministic controller-planned tools when the action is purely evidence gathering.
+- [x] Record rejected or skipped candidate tool actions with explicit reasons.
+- [x] Add tests for controller-planned local inspection.
+- [x] Add tests proving tools do not execute when their action class is not selected or permitted.
+
+Verification:
+
+- `pnpm test` passed with 78 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/08-real-controller-planned-tool.json`.
+- The health check showed one controller-planned `local.inspection` action, `plannedToolCallCount: 1`, one model call, and tool evidence routed into direct memory evidence.
 
 ## Phase 3: Tool Validation, Permissions, And Budgets
 

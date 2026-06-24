@@ -452,6 +452,29 @@ export interface ResearchToolBudget {
   maxTokens?: number;
 }
 
+export interface ResearchToolAction {
+  id: string;
+  actionClass: ResearchActionClass;
+  toolName: string;
+  input: Record<string, unknown>;
+  expectedOutputs?: readonly string[];
+  budget?: Partial<ResearchToolBudget>;
+  memoryWritebackTargets?: readonly ResearchMemoryStoreKind[];
+}
+
+export type ResearchSkippedToolActionCode =
+  | "action_class_not_selected"
+  | "action_class_not_permitted"
+  | "tool_unavailable"
+  | "tool_does_not_support_action"
+  | "tool_budget_exhausted";
+
+export interface ResearchSkippedToolAction {
+  action: ResearchToolAction;
+  code: ResearchSkippedToolActionCode;
+  reason: string;
+}
+
 export interface ResearchSubGoal {
   id: string;
   parentGoalId: string;
@@ -501,6 +524,8 @@ export interface ResearchContextPacket {
   userCommitments: readonly string[];
   toolPermissions: readonly ResearchToolPermission[];
   toolBudget: ResearchToolBudget;
+  candidateToolActions: readonly ResearchToolAction[];
+  skippedToolActions: readonly ResearchSkippedToolAction[];
   writebackExpectations: readonly ResearchMemoryStoreKind[];
 }
 
@@ -518,6 +543,8 @@ export interface ResearchMemoryControllerDecision {
   actionClass: ResearchActionClass;
   rationale: string;
   actionScores: readonly ResearchActionScore[];
+  candidateToolActions: readonly ResearchToolAction[];
+  skippedToolActions: readonly ResearchSkippedToolAction[];
   contextPacket: ResearchContextPacket;
   toolBudget: ResearchToolBudget;
   completionGates: readonly ResearchCompletionGate[];
@@ -535,7 +562,9 @@ export interface ResearchRequiredContextSection {
     | "contradictions"
     | "open_questions"
     | "user_commitments"
-    | "tool_permissions";
+    | "tool_permissions"
+    | "candidate_tool_actions"
+    | "skipped_tool_actions";
   description: string;
   itemCount: number;
   required: boolean;
@@ -549,6 +578,8 @@ export interface ResearchLoopPlan {
   requiredContext: readonly ResearchRequiredContextSection[];
   permittedToolClasses: readonly ResearchActionClass[];
   actionBudget: ResearchToolBudget;
+  candidateToolActions: readonly ResearchToolAction[];
+  skippedToolActions: readonly ResearchSkippedToolAction[];
   expectedArtifacts: readonly string[];
   completionGates: readonly ResearchCompletionGate[];
   writebackRequirements: readonly ResearchMemoryStoreKind[];

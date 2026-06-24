@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   bootstrapResearchRun,
+  createDeterministicLoopExecutor,
   createFirstRunMemoryController,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
@@ -999,6 +1000,191 @@ test("local inspection observations route into direct evidence context", async (
     () => inspectionTool.inspect({ action: "read_text", path: outsideFile }),
     /outside allowed inspection roots/,
   );
+});
+
+test("first-run controller proposes local inspection when a prompt path is obvious", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-planned-controller-"));
+  const fixtureFile = join(fixtureRoot, "parse.c");
+  await writeFile(fixtureFile, "planned parser note\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const goalFrame = createResearchGoalFrame(
+    [
+      `Goal: Inspect local parser evidence in ${fixtureFile}`,
+      "Scope constraints: local fixture only",
+      "Evidence: use local source evidence",
+    ].join("\n"),
+  );
+
+  const decision = createFirstRunMemoryController().decide({
+    goalFrame,
+    tools: [inspectionTool.descriptor],
+  });
+  const loopPlan = planResearchLoop({ decision });
+
+  assert.equal(decision.actionClass, "inspect");
+  assert.equal(decision.candidateToolActions.length, 1);
+  assert.equal(decision.skippedToolActions.length, 0);
+  assert.equal(decision.candidateToolActions[0]?.toolName, "local.inspection");
+  assert.deepEqual(decision.candidateToolActions[0]?.input, {
+    action: "read_text",
+    path: fixtureFile,
+  });
+  assert.deepEqual(
+    decision.contextPacket.candidateToolActions,
+    decision.candidateToolActions,
+  );
+  assert.equal(loopPlan.candidateToolActions.length, 1);
+  assert.ok(loopPlan.loopPrompt.includes("Controller-proposed tool actions:"));
+  assert.ok(loopPlan.loopPrompt.includes(fixtureFile));
+});
+
+test("Pi loop executor executes controller-planned local inspection before the first model call", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-planned-pi-"));
+  const fixtureFile = join(fixtureRoot, "parse.c");
+  await writeFile(fixtureFile, "planned parser note\nstate transition note\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const toolRegistry = createResearchToolRegistry([inspectionTool.executable]);
+  let callCount = 0;
+  let capturedContext;
+  const executor = createPiLoopExecutor({
+    provider: "mock-provider",
+    model: "mock-model",
+    toolRegistry,
+    models: {
+      getModel(provider, model) {
+        return {
+          provider,
+          id: model,
+          api: "responses",
+        };
+      },
+      async completeSimple(model, context) {
+        callCount += 1;
+        capturedContext = context;
+        return {
+          content: [
+            {
+              type: "text",
+              text: "## Result\nController-planned evidence was available before model reasoning.",
+            },
+          ],
+          stopReason: "stop",
+          responseId: "resp_planned_final",
+          usage: createMockUsage(),
+        };
+      },
+    },
+  });
+
+  const result = await bootstrapResearchRun({
+    prompt: [
+      `Goal: Inspect local parser evidence in ${fixtureFile}`,
+      "Scope constraints: local fixture only",
+      "Evidence: use local source evidence",
+    ].join("\n"),
+    tools: [inspectionTool.descriptor],
+    loopExecutor: executor,
+    goalRun: {
+      maxLoops: 1,
+    },
+  });
+  const contextText = capturedContext.messages
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : JSON.stringify(message.content),
+    )
+    .join("\n");
+
+  assert.equal(callCount, 1);
+  assert.equal(result.loopResult.output.raw.toolCallCount, 1);
+  assert.equal(result.loopResult.output.raw.plannedToolCallCount, 1);
+  assert.equal(result.loopResult.output.raw.modelCalls.length, 1);
+  assert.equal(result.loopResult.output.toolEvents?.length, 2);
+  assert.match(contextText, /Controller-planned tool results/);
+  assert.match(contextText, /planned parser note/);
+  assert.ok(
+    result.memory.directEvidence.some((ref) =>
+      ref.summary?.includes("planned parser note"),
+    ),
+  );
+});
+
+test("deterministic loop executor can run controller-planned evidence tools without a model call", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-planned-deterministic-"));
+  const fixtureFile = join(fixtureRoot, "parse.c");
+  await writeFile(fixtureFile, "deterministic parser evidence\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const toolRegistry = createResearchToolRegistry([inspectionTool.executable]);
+  const goalFrame = createResearchGoalFrame(
+    [
+      `Goal: Inspect local parser evidence in ${fixtureFile}`,
+      "Scope constraints: local fixture only",
+    ].join("\n"),
+  );
+  const decision = createFirstRunMemoryController().decide({
+    goalFrame,
+    tools: [inspectionTool.descriptor],
+  });
+  const loopPlan = planResearchLoop({ decision });
+  const result = await processResearchLoop({
+    loopPlan,
+    executor: createDeterministicLoopExecutor({ toolRegistry }),
+  });
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.output.raw.mode, "deterministic");
+  assert.equal(result.output.raw.toolCallCount, 1);
+  assert.equal(result.output.raw.plannedToolCallCount, 1);
+  assert.equal(result.output.toolEvents?.length, 2);
+  assert.match(result.output.text, /Controller-planned tool results/);
+  assert.match(result.output.text, /deterministic parser evidence/);
+});
+
+test("controller-planned tools do not execute when their action class is not selected", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-planned-skipped-"));
+  const fixtureFile = join(fixtureRoot, "parse.c");
+  await writeFile(fixtureFile, "should not be read\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const toolRegistry = createResearchToolRegistry([inspectionTool.executable]);
+  const goalFrame = createResearchGoalFrame(
+    [
+      `Goal: Triage a suspected parser vulnerability in ${fixtureFile}`,
+      "Risk: security-sensitive authorized vulnerability research",
+    ].join("\n"),
+  );
+  const decision = createFirstRunMemoryController().decide({
+    goalFrame,
+    tools: [inspectionTool.descriptor],
+  });
+  const loopPlan = planResearchLoop({ decision });
+  const result = await processResearchLoop({
+    loopPlan,
+    executor: createDeterministicLoopExecutor({ toolRegistry }),
+  });
+
+  assert.equal(decision.actionClass, "ask_user");
+  assert.equal(decision.candidateToolActions.length, 0);
+  assert.equal(decision.skippedToolActions.length, 1);
+  assert.equal(decision.skippedToolActions[0]?.code, "action_class_not_selected");
+  assert.equal(loopPlan.candidateToolActions.length, 0);
+  assert.equal(loopPlan.skippedToolActions.length, 1);
+  assert.equal(result.output.raw.toolCallCount, 0);
+  assert.equal(result.output.toolEvents, undefined);
+  assert.match(result.output.text, /Skipped candidate tool actions/);
+  assert.doesNotMatch(result.output.text, /should not be read/);
 });
 
 test("loop planner turns a memory decision into an executable bounded plan", () => {

@@ -5,6 +5,8 @@ import type {
   ResearchLoopPlan,
   ResearchMemoryControllerDecision,
   ResearchRequiredContextSection,
+  ResearchSkippedToolAction,
+  ResearchToolAction,
 } from "./types.js";
 
 export interface PlanResearchLoopInput {
@@ -20,6 +22,12 @@ export function planResearchLoop(
     decision.actionClass,
     packet,
   );
+  const plannedTools = selectPlannedToolActions(
+    decision.candidateToolActions,
+    decision.skippedToolActions,
+    permittedToolClasses,
+    decision.toolBudget.maxToolCalls,
+  );
   const requiredContext = createRequiredContext(packet);
 
   return {
@@ -30,6 +38,8 @@ export function planResearchLoop(
     requiredContext,
     permittedToolClasses,
     actionBudget: decision.toolBudget,
+    candidateToolActions: plannedTools.candidateToolActions,
+    skippedToolActions: plannedTools.skippedToolActions,
     expectedArtifacts: decision.subGoal.expectedArtifacts,
     completionGates: decision.completionGates,
     writebackRequirements: decision.writeback,
@@ -38,8 +48,50 @@ export function planResearchLoop(
       packet,
       requiredContext,
       permittedToolClasses,
+      candidateToolActions: plannedTools.candidateToolActions,
+      skippedToolActions: plannedTools.skippedToolActions,
       decision,
     }),
+  };
+}
+
+function selectPlannedToolActions(
+  candidateActions: readonly ResearchToolAction[],
+  skippedActions: readonly ResearchSkippedToolAction[],
+  permittedToolClasses: readonly ResearchActionClass[],
+  maxToolCalls: number,
+): {
+  candidateToolActions: ResearchToolAction[];
+  skippedToolActions: ResearchSkippedToolAction[];
+} {
+  const accepted: ResearchToolAction[] = [];
+  const skipped: ResearchSkippedToolAction[] = [...skippedActions];
+
+  for (const action of candidateActions) {
+    if (!permittedToolClasses.includes(action.actionClass)) {
+      skipped.push({
+        action,
+        code: "action_class_not_permitted",
+        reason: `Action class ${action.actionClass} is not permitted for this loop.`,
+      });
+      continue;
+    }
+
+    if (accepted.length >= maxToolCalls) {
+      skipped.push({
+        action,
+        code: "tool_budget_exhausted",
+        reason: `Tool budget permits ${maxToolCalls} call(s) for this loop.`,
+      });
+      continue;
+    }
+
+    accepted.push(action);
+  }
+
+  return {
+    candidateToolActions: accepted,
+    skippedToolActions: skipped,
   };
 }
 
@@ -128,6 +180,18 @@ function createRequiredContext(
       itemCount: packet.toolPermissions.length,
       required: false,
     },
+    {
+      label: "candidate_tool_actions",
+      description: "Controller-proposed tool actions selected for this loop.",
+      itemCount: packet.candidateToolActions.length,
+      required: false,
+    },
+    {
+      label: "skipped_tool_actions",
+      description: "Controller-proposed tool actions skipped with explicit reasons.",
+      itemCount: packet.skippedToolActions.length,
+      required: false,
+    },
   ];
 }
 
@@ -135,9 +199,18 @@ function renderLoopPrompt(input: {
   packet: ResearchContextPacket;
   requiredContext: readonly ResearchRequiredContextSection[];
   permittedToolClasses: readonly ResearchActionClass[];
+  candidateToolActions: readonly ResearchToolAction[];
+  skippedToolActions: readonly ResearchSkippedToolAction[];
   decision: ResearchMemoryControllerDecision;
 }): string {
-  const { packet, requiredContext, permittedToolClasses, decision } = input;
+  const {
+    packet,
+    requiredContext,
+    permittedToolClasses,
+    candidateToolActions,
+    skippedToolActions,
+    decision,
+  } = input;
   const artifacts = decision.subGoal.expectedArtifacts.join(", ") || "none";
   const toolClasses = permittedToolClasses.join(", ") || "none";
   const gates = decision.completionGates
@@ -157,6 +230,10 @@ function renderLoopPrompt(input: {
     `Action class: ${decision.actionClass}`,
     `Permitted tool classes: ${toolClasses}`,
     `Action budget: ${JSON.stringify(decision.toolBudget)}`,
+    "Controller-proposed tool actions:",
+    formatCandidateToolActions(candidateToolActions),
+    "Skipped candidate tool actions:",
+    formatSkippedToolActions(skippedToolActions),
     `Expected artifacts: ${artifacts}`,
     "Completion gates:",
     gates,
@@ -165,4 +242,31 @@ function renderLoopPrompt(input: {
     "Writeback requirements:",
     decision.writeback.map((target) => `- ${target}`).join("\n"),
   ].join("\n");
+}
+
+function formatCandidateToolActions(
+  actions: readonly ResearchToolAction[],
+): string {
+  if (actions.length === 0) {
+    return "- none";
+  }
+
+  return actions
+    .map(
+      (action) =>
+        `- ${action.id}: ${action.toolName} (${action.actionClass}) ${JSON.stringify(action.input)}`,
+    )
+    .join("\n");
+}
+
+function formatSkippedToolActions(
+  actions: readonly ResearchSkippedToolAction[],
+): string {
+  if (actions.length === 0) {
+    return "- none";
+  }
+
+  return actions
+    .map((skipped) => `- ${skipped.action.id}: ${skipped.code} - ${skipped.reason}`)
+    .join("\n");
 }

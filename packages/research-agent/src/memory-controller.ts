@@ -10,8 +10,10 @@ import type {
   ResearchGovernancePolicy,
   ResearchMemoryControllerDecision,
   ResearchMemoryControllerInput,
+  ResearchSkippedToolAction,
   ResearchSubGoal,
   ResearchToolBudget,
+  ResearchToolAction,
   ResearchToolDescriptor,
 } from "./types.js";
 
@@ -30,6 +32,18 @@ export class FirstRunMemoryController {
     );
     const selectedAction = selectAction(actionScores);
     const toolBudget = createDecisionToolBudget(input.governance, tools);
+    const proposedToolActions = createCandidateToolActions({
+      goalFrame: input.goalFrame,
+      tools,
+    });
+    const { candidateToolActions, skippedToolActions } =
+      classifyCandidateToolActions({
+        actions: proposedToolActions,
+        tools,
+        governance: input.governance,
+        selectedAction,
+        toolBudget,
+      });
     const completionGates = createSubGoalGates(
       selectedAction,
       activeGoal.completionGates,
@@ -49,6 +63,8 @@ export class FirstRunMemoryController {
       activeSubGoal: subGoal,
       memory,
       tools,
+      candidateToolActions,
+      skippedToolActions,
       writebackExpectations: DEFAULT_WRITEBACK,
       ...(input.governance ? { governance: input.governance } : {}),
     };
@@ -60,6 +76,8 @@ export class FirstRunMemoryController {
       rationale:
         "First-run memory state has no durable recall yet; action selection is based on the goal frame, policy, and available tools.",
       actionScores,
+      candidateToolActions,
+      skippedToolActions,
       contextPacket,
       toolBudget,
       completionGates,
@@ -70,6 +88,138 @@ export class FirstRunMemoryController {
 
 export function createFirstRunMemoryController(): FirstRunMemoryController {
   return new FirstRunMemoryController();
+}
+
+function createCandidateToolActions(input: {
+  goalFrame: ResearchMemoryControllerInput["goalFrame"];
+  tools: readonly ResearchToolDescriptor[];
+}): ResearchToolAction[] {
+  const inspectTool = input.tools.find((tool) =>
+    tool.actionClasses.includes("inspect"),
+  );
+  if (!inspectTool) {
+    return [];
+  }
+
+  const path = findFirstAbsolutePath([
+    input.goalFrame.prompt.rawPrompt,
+    input.goalFrame.root.objective,
+    ...input.goalFrame.scopeConstraints,
+    ...input.goalFrame.evidenceRequirements,
+    ...input.goalFrame.userPreferences,
+  ]);
+  if (!path) {
+    return [];
+  }
+
+  return [
+    {
+      id: createId("toolaction"),
+      actionClass: "inspect",
+      toolName: inspectTool.name,
+      input: {
+        action: "read_text",
+        path,
+      },
+      expectedOutputs: [
+        "bounded local evidence excerpt",
+        "inspection summary",
+      ],
+      budget: {
+        maxToolCalls: 1,
+      },
+      memoryWritebackTargets:
+        inspectTool.memoryWritebackDefaults ?? DEFAULT_WRITEBACK,
+    },
+  ];
+}
+
+function classifyCandidateToolActions(input: {
+  actions: readonly ResearchToolAction[];
+  tools: readonly ResearchToolDescriptor[];
+  governance: ResearchGovernancePolicy | undefined;
+  selectedAction: ResearchActionClass;
+  toolBudget: ResearchToolBudget;
+}): {
+  candidateToolActions: ResearchToolAction[];
+  skippedToolActions: ResearchSkippedToolAction[];
+} {
+  const candidateToolActions: ResearchToolAction[] = [];
+  const skippedToolActions: ResearchSkippedToolAction[] = [];
+
+  for (const action of input.actions) {
+    const tool = input.tools.find((candidate) => candidate.name === action.toolName);
+    if (!tool) {
+      skippedToolActions.push({
+        action,
+        code: "tool_unavailable",
+        reason: `Tool ${action.toolName} is not registered in the controller input.`,
+      });
+      continue;
+    }
+
+    if (!tool.actionClasses.includes(action.actionClass)) {
+      skippedToolActions.push({
+        action,
+        code: "tool_does_not_support_action",
+        reason: `Tool ${action.toolName} does not support action class ${action.actionClass}.`,
+      });
+      continue;
+    }
+
+    if (!isAllowed(action.actionClass, input.governance)) {
+      skippedToolActions.push({
+        action,
+        code: "action_class_not_permitted",
+        reason: `Action class ${action.actionClass} is not permitted by governance policy.`,
+      });
+      continue;
+    }
+
+    if (action.actionClass !== input.selectedAction) {
+      skippedToolActions.push({
+        action,
+        code: "action_class_not_selected",
+        reason: `Controller selected ${input.selectedAction}, so ${action.actionClass} candidate ${action.id} is advisory only.`,
+      });
+      continue;
+    }
+
+    if (candidateToolActions.length >= input.toolBudget.maxToolCalls) {
+      skippedToolActions.push({
+        action,
+        code: "tool_budget_exhausted",
+        reason: `Tool budget permits ${input.toolBudget.maxToolCalls} call(s) for this loop.`,
+      });
+      continue;
+    }
+
+    candidateToolActions.push(action);
+  }
+
+  return { candidateToolActions, skippedToolActions };
+}
+
+function findFirstAbsolutePath(values: readonly string[]): string | undefined {
+  for (const value of values) {
+    for (const match of value.matchAll(/\/[^\s"'`<>|{}[\]]+/g)) {
+      const candidate = normalizePathCandidate(match[0]);
+      if (candidate && candidate !== "/") {
+        return candidate;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function normalizePathCandidate(value: string): string | undefined {
+  const trimmed = value
+    .trim()
+    .replace(/[),;:,]+$/g, "")
+    .replace(/\.$/g, "");
+
+  return trimmed.startsWith("/") ? trimmed : undefined;
 }
 
 function scoreActionClasses(

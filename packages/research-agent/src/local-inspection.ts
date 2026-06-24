@@ -9,11 +9,11 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { createResearchEventId, nowIso } from "./ids.js";
 import type {
   ResearchExecutableTool,
-  ResearchToolAction,
   ResearchToolExecutionResult,
 } from "./tool-registry.js";
 import type {
   ResearchEvent,
+  ResearchToolAction,
   ResearchToolDescriptor,
 } from "./types.js";
 
