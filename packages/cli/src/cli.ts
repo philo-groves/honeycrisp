@@ -3,6 +3,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import {
   bootstrapResearchRun,
+  createPiLoopExecutor,
   getAuthStatus,
   listAuthProviders,
   loginAuthProvider,
@@ -25,6 +26,11 @@ interface ParsedArgs {
   evidenceRequirements: string[];
   initialRiskFlags: string[];
   userPreferences: string[];
+  real: boolean;
+  provider: string;
+  model: string;
+  maxTokens: number | undefined;
+  reasoning: "minimal" | "low" | "medium" | "high" | "xhigh" | undefined;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -35,6 +41,11 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let json = false;
   let help = false;
   let version = false;
+  let real = false;
+  let provider = "openai-codex";
+  let model = "gpt-5.3-codex-spark";
+  let maxTokens: number | undefined;
+  let reasoning: ParsedArgs["reasoning"];
   const successGates: string[] = [];
   const failureOrStopGates: string[] = [];
   const scopeConstraints: string[] = [];
@@ -67,6 +78,24 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--preference") {
       userPreferences.push(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--real") {
+      real = true;
+    } else if (arg === "--provider") {
+      provider = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--model") {
+      model = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--max-tokens") {
+      const value = Number.parseInt(readOptionValue(argv, index, arg), 10);
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new Error("--max-tokens requires a positive integer.");
+      }
+      maxTokens = value;
+      index += 1;
+    } else if (arg === "--reasoning") {
+      reasoning = parseReasoning(readOptionValue(argv, index, arg));
+      index += 1;
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "-h" || arg === "--help") {
@@ -92,10 +121,29 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     evidenceRequirements,
     initialRiskFlags,
     userPreferences,
+    real,
+    provider,
+    model,
+    maxTokens,
+    reasoning,
     json,
     help,
     version,
   };
+}
+
+function parseReasoning(value: string): ParsedArgs["reasoning"] {
+  if (
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  ) {
+    return value;
+  }
+
+  throw new Error("--reasoning must be one of minimal, low, medium, high, xhigh.");
 }
 
 function readOptionValue(
@@ -123,6 +171,11 @@ function usage(): string {
     "  --evidence <need>      Add an evidence requirement",
     "  --risk <flag>          Add an initial risk flag",
     "  --preference <pref>    Add a user preference",
+    "  --real                 Execute the loop with a Pi-backed model call",
+    "  --provider <provider>  Model provider for --real (default: openai-codex)",
+    "  --model <model>        Model id for --real (default: gpt-5.3-codex-spark)",
+    "  --max-tokens <n>       Max output tokens for --real",
+    "  --reasoning <level>    Reasoning level for --real",
     "  --json                 Print the initialized run as JSON",
     "  -h, --help             Show help",
     "  -v, --version          Show version",
@@ -154,6 +207,15 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       return;
     }
 
+    const loopExecutor = args.real
+      ? createPiLoopExecutor({
+          provider: args.provider,
+          model: args.model,
+          ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
+          ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+        })
+      : undefined;
+
     const result = await bootstrapResearchRun({
       prompt: args.prompt,
       successGates: args.successGates,
@@ -162,6 +224,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       evidenceRequirements: args.evidenceRequirements,
       initialRiskFlags: args.initialRiskFlags,
       userPreferences: args.userPreferences,
+      ...(loopExecutor ? { loopExecutor } : {}),
     });
 
     if (args.json) {

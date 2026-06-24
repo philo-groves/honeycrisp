@@ -35,6 +35,16 @@ pnpm start -p "Investigate parser behavior" \
 
 On a first run, Honeycrisp also asks the memory controller for the next bounded sub-goal, compiles a context packet, turns that decision into a loop plan, and processes the loop with an executor. Until durable memory and tools are integrated, the packet contains empty typed memory buckets, explicit open questions, user commitments from the goal frame, tool permissions, tool budget, and writeback expectations. The loop plan is the executable per-loop contract: reason, required context manifest, permitted tool classes, action budget, expected artifacts, completion gates, writeback requirements, and a model-facing loop prompt. The default loop executor is deterministic and does not make model calls yet; it verifies the processing path and records a structured loop result.
 
+Use `--real` to execute the planned loop through Pi using stored auth:
+
+```sh
+pnpm start --real \
+  --provider openai-codex \
+  --model gpt-5.3-codex-spark \
+  --max-tokens 1800 \
+  -p "Goal: Produce a first-run research plan..."
+```
+
 ## Auth
 
 Honeycrisp stores provider credentials in `~/.honeycrisp/auth.json` by default, or the path set in `HONEYCRISP_AUTH_FILE`.

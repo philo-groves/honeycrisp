@@ -39,9 +39,13 @@ export type { PlanResearchLoopInput } from "./loop-planner.js";
 export {
   compileLoopModelInput,
   createDeterministicLoopExecutor,
+  createPiLoopExecutor,
   processResearchLoop,
 } from "./loop-processor.js";
-export type { ProcessResearchLoopInput } from "./loop-processor.js";
+export type {
+  CreatePiLoopExecutorOptions,
+  ProcessResearchLoopInput,
+} from "./loop-processor.js";
 export {
   createFirstRunMemoryController,
   FirstRunMemoryController,

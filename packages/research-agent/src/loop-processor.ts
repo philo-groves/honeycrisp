@@ -1,4 +1,11 @@
 import { createId, nowIso } from "./ids.js";
+import { createAuthenticatedModels } from "./auth.js";
+import type {
+  Context,
+  Model,
+  Models,
+  SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import type {
   ResearchCompletionGateResult,
   ResearchContextPacket,
@@ -107,6 +114,63 @@ export function createDeterministicLoopExecutor(): ResearchLoopExecutor {
   };
 }
 
+export interface CreatePiLoopExecutorOptions {
+  provider: string;
+  model: string;
+  authFile?: string;
+  maxTokens?: number;
+  reasoning?: SimpleStreamOptions["reasoning"];
+  models?: Pick<Models, "getModel" | "completeSimple">;
+}
+
+export function createPiLoopExecutor(
+  options: CreatePiLoopExecutorOptions,
+): ResearchLoopExecutor {
+  return {
+    name: `pi:${options.provider}/${options.model}`,
+    async execute(input: ResearchLoopExecutionInput) {
+      const models =
+        options.models ??
+        createAuthenticatedModels(
+          options.authFile ? { authFile: options.authFile } : {},
+        );
+      const model = models.getModel(options.provider, options.model);
+      if (!model) {
+        throw new Error(
+          `Unknown model ${options.provider}/${options.model}`,
+        );
+      }
+
+      const context = createPiContext(input.modelInput);
+      const streamOptions = createPiStreamOptions(options, input.signal);
+      const message = await models.completeSimple(model, context, streamOptions);
+      const text = extractAssistantText(message.content);
+
+      if (message.stopReason === "error" || message.stopReason === "aborted") {
+        throw new Error(message.errorMessage ?? `Model stopped: ${message.stopReason}`);
+      }
+
+      return {
+        text,
+        artifacts: [...input.loopPlan.expectedArtifacts],
+        evidenceRefs: [],
+        claimRefs: [],
+        followUpActions: [
+          "Ask the memory controller whether to continue this branch, create a sibling, refine the goal tree, or respond.",
+        ],
+        raw: {
+          provider: model.provider,
+          model: model.id,
+          api: model.api,
+          stopReason: message.stopReason,
+          responseId: message.responseId,
+          usage: message.usage,
+        },
+      };
+    },
+  };
+}
+
 function createLoopContextSections(
   packet: ResearchContextPacket,
 ): ResearchLoopContextSection[] {
@@ -162,6 +226,68 @@ function createLoopContextSections(
       content: packet.toolPermissions,
     },
   ];
+}
+
+function createPiContext(modelInput: ResearchLoopModelInput): Context {
+  return {
+    systemPrompt: [
+      "You are Honeycrisp, a goal-oriented research agent built on Pi.",
+      "Execute only the current bounded loop. Preserve evidence, inference, hypotheses, uncertainty, and user commitments as distinct categories.",
+      "Do not claim that files were inspected unless evidence is present in the supplied context.",
+    ].join("\n"),
+    messages: [
+      {
+        role: "user",
+        timestamp: Date.now(),
+        content: [
+          "Execute this planned research loop.",
+          "",
+          "## Loop Prompt",
+          modelInput.loopPrompt,
+          "",
+          "## Labeled Context Sections",
+          ...modelInput.contextSections.map(
+            (section) =>
+              `### ${section.label} (${section.required ? "required" : "optional"})\n${formatContextContent(section.content)}`,
+          ),
+          "",
+          "## Output Shape",
+          "Return concise markdown with: Result, Evidence Used, Assumptions, Open Questions, Suggested Next Step.",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+function createPiStreamOptions(
+  options: CreatePiLoopExecutorOptions,
+  signal: AbortSignal | undefined,
+): SimpleStreamOptions {
+  return {
+    ...(typeof options.maxTokens === "number"
+      ? { maxTokens: options.maxTokens }
+      : {}),
+    ...(options.reasoning ? { reasoning: options.reasoning } : {}),
+    ...(signal ? { signal } : {}),
+  };
+}
+
+function formatContextContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  return JSON.stringify(content, null, 2);
+}
+
+function extractAssistantText(
+  content: Awaited<ReturnType<Models["completeSimple"]>>["content"],
+): string {
+  return content
+    .filter((item) => item.type === "text")
+    .map((item) => item.text)
+    .join("\n")
+    .trim();
 }
 
 function renderDeterministicLoopOutput(loopPlan: ResearchLoopPlan): string {
