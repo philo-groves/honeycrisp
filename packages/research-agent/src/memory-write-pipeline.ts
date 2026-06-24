@@ -81,6 +81,16 @@ export class DeterministicMemoryWritePipeline implements MemoryWritePipeline {
             tags: ["loop-result"],
           }),
         ];
+      case "artifact.tombstoned":
+        return [
+          createEpisodeRecord(event, {
+            episodeKind: "artifact_lifecycle",
+            summary: summarizeMemoryEvent(event),
+            status: "confirmed",
+            confidence: 0.9,
+            tags: ["artifact", "tombstone"],
+          }),
+        ];
       case "tool.requested":
         return [
           createEpisodeRecord(event, {

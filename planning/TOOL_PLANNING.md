@@ -33,11 +33,12 @@ The project already has a first executable tool slice:
 - The memory controller can propose obvious local inspection actions from prompt paths, and the loop processor executes accepted controller-planned evidence tools before the first model call.
 - Deterministic mock mode can execute controller-planned evidence tools without a model call when an executable registry is supplied.
 - The tool registry validates input and output schemas, governance action classes, side effects, required permissions, per-loop call budgets, runtime budgets, and file byte/count budgets. Validation failures are preserved as blocked tool observations.
+- Top-level CLI runs append runtime events to the SQLite `MemoryEventLog` by default.
+- Large `tool.observed.result` payloads spill to `.honeycrisp/memory/artifacts/tool-results/` with `rawOutputRef`, byte count, and SHA-256 hash metadata while preserving summaries and evidence extracts inline.
+- Artifact lifecycle cleanup has an auditable `artifact.tombstoned` event helper with optional local file deletion.
 
 Known limitations to address:
 
-- Durable SQLite event-log integration is not yet the default runtime write path for every top-level run.
-- Tool outputs can still be large inline event payloads; storage-backed raw output pointers and artifact refs are needed.
 - Only local inspection is executable.
 - MCP servers and skills are not yet represented in Honeycrisp's own tool/skill registries.
 - The runtime uses Pi model tool calls through `completeSimple`, not the fuller Pi `Agent` lifecycle.
@@ -119,17 +120,26 @@ Verification:
 
 Make tool results storage-friendly and durable by default, especially for large outputs, logs, traces, and generated artifacts.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Write top-level runtime tool events through the SQLite `MemoryEventLog` by default.
-- [ ] Store large raw tool outputs outside event payloads under `.honeycrisp/memory/artifacts/`.
-- [ ] Add artifact metadata rows or references for tool-generated files.
-- [ ] Replace large inline payload fields with raw output pointers when size thresholds are exceeded.
-- [ ] Preserve small summaries and evidence extracts inline for routing.
-- [ ] Hash raw outputs and artifact payloads for integrity.
-- [ ] Add cleanup and tombstone behavior for tool artifacts under memory lifecycle policy.
-- [ ] Add tests for large output spillover.
-- [ ] Add tests for artifact refs surviving restart.
+- [x] Write top-level runtime tool events through the SQLite `MemoryEventLog` by default.
+- [x] Store large raw tool outputs outside event payloads under `.honeycrisp/memory/artifacts/`.
+- [x] Add artifact metadata rows or references for tool-generated files.
+- [x] Replace large inline payload fields with raw output pointers when size thresholds are exceeded.
+- [x] Preserve small summaries and evidence extracts inline for routing.
+- [x] Hash raw outputs and artifact payloads for integrity.
+- [x] Add cleanup and tombstone behavior for tool artifacts under memory lifecycle policy.
+- [x] Add tests for large output spillover.
+- [x] Add tests for artifact refs surviving restart.
+
+Verification:
+
+- `pnpm test` passed with 84 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/10-real-durable-tool-events.json`.
+- Durable SQLite workspace: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/phase4-memory`.
+- The persisted `tool.observed` event kept summary/evidence inline, removed the large `result` payload, and added `rawOutputRef`, `rawOutputHash`, `rawOutputBytes`, and a `tool_raw_output` artifact ref under `.honeycrisp/memory/artifacts/tool-results/`.
 
 ## Phase 5: MCP Tool Support
 

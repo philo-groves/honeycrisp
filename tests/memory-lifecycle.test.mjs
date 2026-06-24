@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
@@ -9,11 +11,13 @@ import {
   createDeterministicMemoryWritePipeline,
   createMemorySnapshotFromRecordStore,
   createResearchEventId,
+  createSqliteMemoryEventLog,
   createResearchGoalFrame,
   createSqliteMemoryRecordStore,
   deleteMemoryRecordUnderPolicy,
   expireMemoryRecord,
   supersedeMemoryRecord,
+  tombstoneMemoryArtifact,
   tombstoneMemoryRecord,
 } from "../packages/research-agent/dist/index.js";
 
@@ -141,6 +145,37 @@ test("memory lifecycle policy deletion removes records but preserves audit facts
   );
 
   store.close();
+});
+
+test("memory lifecycle tombstones artifact refs and can clean up local files", async () => {
+  const workspaceRoot = await createTempWorkspace();
+  const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
+  const artifactPath = join(workspaceRoot, "artifact.json");
+  await writeFile(artifactPath, "{\"raw\":true}\n", "utf8");
+  const artifactRef = {
+    id: "artifact_lifecycle_fixture",
+    kind: "tool_raw_output",
+    uri: pathToFileURL(artifactPath).href,
+    summary: "Lifecycle fixture artifact.",
+    contentHash: "sha256:fixture",
+  };
+
+  const event = tombstoneMemoryArtifact({
+    eventLog,
+    artifactRef,
+    timestamp: "2026-06-24T00:00:01.000Z",
+    policy: "test-artifact-retention",
+    deleteFile: true,
+  });
+
+  assert.equal(existsSync(artifactPath), false);
+  assert.equal(event.kind, "artifact.tombstoned");
+  assert.equal(event.payload.artifactRefId, artifactRef.id);
+  assert.equal(event.payload.deletedFile, true);
+  assert.deepEqual(event.artifactRefs, [artifactRef]);
+  assert.equal(eventLog.listByKind("artifact.tombstoned").length, 1);
+
+  eventLog.close();
 });
 
 test("memory lifecycle audits writes, promotions, and contradictions", async () => {

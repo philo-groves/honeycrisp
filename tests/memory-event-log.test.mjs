@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -208,6 +209,49 @@ test("sqlite memory event log remains compatible with existing memory snapshot r
   );
 
   log.close();
+});
+
+test("sqlite memory event log spills large tool results to artifact storage across restart", async () => {
+  const workspaceRoot = await createTempWorkspace();
+  const firstLog = createSqliteMemoryEventLog({
+    workspaceRoot,
+    largePayloadThresholdBytes: 256,
+  });
+  const largeText = "parser evidence ".repeat(200);
+  const observationEvent = createEvent("tool.observed", {
+    toolName: "local.inspection",
+    actionClass: "inspect",
+    status: "complete",
+    summary: "Large parser output was read.",
+    evidenceExtracted: ["Large parser output was read."],
+    result: {
+      text: largeText,
+      bytesRead: largeText.length,
+    },
+  }, {
+    goalId: "goal_spill",
+  });
+
+  const appended = firstLog.append(observationEvent);
+  const artifactRef = appended.artifactRefs?.[0];
+  assert.ok(artifactRef);
+  assert.equal(artifactRef.kind, "tool_raw_output");
+  assert.equal(appended.payload.result, undefined);
+  assert.equal(appended.payload.rawOutputRef, artifactRef.id);
+  assert.match(appended.payload.rawOutputHash, /^sha256:/);
+  assert.equal(appended.payload.summary, "Large parser output was read.");
+  const artifactPath = fileURLToPath(artifactRef.uri);
+  assert.equal(existsSync(artifactPath), true);
+  assert.match(readFileSync(artifactPath, "utf8"), /parser evidence/);
+  firstLog.close();
+
+  const reloadedLog = createSqliteMemoryEventLog({ workspaceRoot });
+  const reloaded = reloadedLog.getById(observationEvent.id);
+  assert.deepEqual(reloaded?.artifactRefs, appended.artifactRefs);
+  assert.equal(reloaded?.payload.rawOutputRef, artifactRef.id);
+  assert.equal(existsSync(artifactPath), true);
+
+  reloadedLog.close();
 });
 
 async function createTempWorkspace() {

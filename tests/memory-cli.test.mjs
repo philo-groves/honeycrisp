@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -42,6 +42,44 @@ test("main CLI supports deterministic mock mode without auth", async () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Loop result: complete via deterministic-first-run/);
   assert.match(result.stdout, /Execution mode: deterministic/);
+});
+
+test("main CLI persists top-level runtime tool events to sqlite", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-top-cli-memory-"));
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-top-cli-tool-"));
+  const fixtureFile = join(fixtureRoot, "parse.c");
+  await writeFile(fixtureFile, "cli parser evidence\n", "utf8");
+  const result = runTopCli(
+    [
+      "--mock",
+      "--workspace-root",
+      workspaceRoot,
+      "--inspect-root",
+      fixtureRoot,
+      "-p",
+      [
+        `Goal: Inspect local parser evidence in ${fixtureFile}`,
+        "Scope constraints: local fixture only",
+      ].join("\n"),
+    ],
+    {
+      HONEYCRISP_AUTH_FILE: authFile,
+    },
+  );
+  const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
+  const toolEvents = eventLog
+    .listAll()
+    .filter((event) => event.kind === "tool.requested" || event.kind === "tool.observed");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(toolEvents.map((event) => event.kind), [
+    "tool.requested",
+    "tool.observed",
+  ]);
+  assert.match(toolEvents[1]?.payload.summary, /cli parser evidence/);
+
+  eventLog.close();
 });
 
 test("main CLI rejects retired run-mode flags with migration hints", () => {

@@ -55,6 +55,7 @@ interface ParsedArgs {
   inspectAction: LocalInspectionAction;
   inspectBytes: number | undefined;
   capturePath: string | undefined;
+  workspaceRoot: string;
   goalLoops: number | null | undefined;
   json: boolean;
   help: boolean;
@@ -85,6 +86,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let inspectAction: LocalInspectionAction = "read_text";
   let inspectBytes: number | undefined;
   let capturePath: string | undefined;
+  let workspaceRoot = process.cwd();
   let goalLoops: number | null | undefined;
   const successGates: string[] = [];
   const failureOrStopGates: string[] = [];
@@ -161,6 +163,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--capture") {
       capturePath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--workspace-root") {
+      workspaceRoot = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--goal-loops") {
       goalLoops = parseGoalLoops(readOptionValue(argv, index, arg));
       index += 1;
@@ -199,6 +204,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     inspectAction,
     inspectBytes,
     capturePath,
+    workspaceRoot,
     goalLoops,
     json,
     help,
@@ -330,6 +336,7 @@ function usage(): string {
     "  --inspect-action <a>   Inspection action: read_text or list",
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
     "  --capture <path>       Write a local flow-capture JSON artifact",
+    "  --workspace-root <p>   Workspace root for durable runtime memory",
     "  --goal-loops <n|none>  Max loops, or none for no configured loop limit",
     "  --json                 Print the initialized run as JSON",
     "  -h, --help             Show help",
@@ -420,6 +427,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         ? { goalRun: { maxLoops: args.goalLoops } }
         : {}),
     });
+    persistTopLevelRunEvents(args.workspaceRoot, result.events);
 
     if (args.capturePath) {
       const capturePath = await writeFlowCapture(args.capturePath, result);
@@ -438,6 +446,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`honeycrisp: ${message}`);
     process.exitCode = 1;
+  }
+}
+
+function persistTopLevelRunEvents(
+  workspaceRoot: string,
+  events: readonly ResearchEvent[],
+): void {
+  const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
+  try {
+    eventLog.appendMany(events);
+  } finally {
+    eventLog.close();
   }
 }
 

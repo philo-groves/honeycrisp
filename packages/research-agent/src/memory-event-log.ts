@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import {
   dirname,
   resolve,
 } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 import {
   isResearchEventId,
@@ -24,6 +25,7 @@ import type {
 const CURRENT_EVENT_SCHEMA_VERSION = 1;
 const DEFAULT_DATABASE_RELATIVE_PATH = ".honeycrisp/memory/memory.sqlite";
 const DEFAULT_ARTIFACT_RELATIVE_PATH = ".honeycrisp/memory/artifacts";
+const DEFAULT_LARGE_PAYLOAD_THRESHOLD_BYTES = 16_384;
 
 const require = createRequire(import.meta.url);
 
@@ -54,6 +56,7 @@ export interface SqliteMemoryEventLogOptions {
   workspaceRoot?: string;
   databasePath?: string;
   artifactDirectoryPath?: string;
+  largePayloadThresholdBytes?: number;
   rejectionHooks?: readonly MemoryEventRejectionHook[];
 }
 
@@ -147,6 +150,7 @@ export class SqliteMemoryEventLog implements MemoryEventLog {
 
   private readonly database: DatabaseSync;
   private readonly rejectionHooks: readonly MemoryEventRejectionHook[];
+  private readonly largePayloadThresholdBytes: number;
 
   constructor(options: SqliteMemoryEventLogOptions = {}) {
     const workspaceRoot = options.workspaceRoot ?? process.cwd();
@@ -156,6 +160,9 @@ export class SqliteMemoryEventLog implements MemoryEventLog {
       options.artifactDirectoryPath ??
       getDefaultMemoryArtifactDirectoryPath(workspaceRoot);
     this.rejectionHooks = options.rejectionHooks ?? [];
+    this.largePayloadThresholdBytes =
+      options.largePayloadThresholdBytes ??
+      DEFAULT_LARGE_PAYLOAD_THRESHOLD_BYTES;
 
     ensureMemoryDirectories(this.databasePath, this.artifactDirectoryPath);
 
@@ -193,6 +200,8 @@ export class SqliteMemoryEventLog implements MemoryEventLog {
           event,
           sequence,
           this.rejectionHooks,
+          this.artifactDirectoryPath,
+          this.largePayloadThresholdBytes,
         );
         this.insertEvent(normalized);
         appended.push(normalized.event);
@@ -449,39 +458,105 @@ function normalizeEventForInsert(
   event: ResearchEvent,
   sequence: ResearchEventSequence,
   rejectionHooks: readonly MemoryEventRejectionHook[],
+  artifactDirectoryPath: string,
+  largePayloadThresholdBytes: number,
 ): NormalizedMemoryEvent {
-  validateMemoryEventForAppend(event, rejectionHooks);
+  validateMemoryEventForAppend(event);
+  const eventForInsert = spillLargeToolResultPayload(
+    event,
+    artifactDirectoryPath,
+    largePayloadThresholdBytes,
+  );
+  validateMemoryEventForAppend(eventForInsert, rejectionHooks);
 
-  const normalizedPayload = normalizePayload(event.payload, "payload");
+  const normalizedPayload = normalizePayload(eventForInsert.payload, "payload");
   const payloadJson = stableJsonStringify(normalizedPayload);
   const payloadHash = createHash("sha256").update(payloadJson).digest("hex");
 
-  if (event.payloadHash && event.payloadHash !== payloadHash) {
-    throw new Error(`Memory event payloadHash does not match payload: ${event.id}`);
+  if (eventForInsert.payloadHash && eventForInsert.payloadHash !== payloadHash) {
+    throw new Error(`Memory event payloadHash does not match payload: ${eventForInsert.id}`);
   }
 
-  const artifactRefs = normalizeArtifactRefs(event.artifactRefs ?? [], event.id);
+  const artifactRefs = normalizeArtifactRefs(
+    eventForInsert.artifactRefs ?? [],
+    eventForInsert.id,
+  );
   const artifactRefsJson = stableJsonStringify(
     normalizeJsonValue(artifactRefs, "artifactRefs"),
   );
   const normalizedEvent: ResearchEvent = {
-    id: event.id,
+    id: eventForInsert.id,
     sequence,
-    kind: event.kind,
-    timestamp: event.timestamp,
+    kind: eventForInsert.kind,
+    timestamp: eventForInsert.timestamp,
     payload: normalizedPayload,
     payloadHash,
     artifactRefs,
-    schemaVersion: event.schemaVersion ?? CURRENT_EVENT_SCHEMA_VERSION,
-    ...(event.goalId ? { goalId: event.goalId } : {}),
-    ...(event.loopId ? { loopId: event.loopId } : {}),
-    ...(event.subGoalId ? { subGoalId: event.subGoalId } : {}),
+    schemaVersion: eventForInsert.schemaVersion ?? CURRENT_EVENT_SCHEMA_VERSION,
+    ...(eventForInsert.goalId ? { goalId: eventForInsert.goalId } : {}),
+    ...(eventForInsert.loopId ? { loopId: eventForInsert.loopId } : {}),
+    ...(eventForInsert.subGoalId ? { subGoalId: eventForInsert.subGoalId } : {}),
   };
 
   return {
     event: normalizedEvent,
     payloadJson,
     artifactRefsJson,
+  };
+}
+
+function spillLargeToolResultPayload(
+  event: ResearchEvent,
+  artifactDirectoryPath: string,
+  thresholdBytes: number,
+): ResearchEvent {
+  if (
+    event.kind !== "tool.observed" ||
+    thresholdBytes <= 0 ||
+    !isPlainRecord(event.payload) ||
+    !("result" in event.payload)
+  ) {
+    return event;
+  }
+
+  const rawResult = event.payload.result;
+  const normalizedResult = normalizeJsonValue(rawResult, "payload.result");
+  const rawResultJson = stableJsonStringify(normalizedResult);
+  const rawOutputBytes = Buffer.byteLength(rawResultJson, "utf8");
+  if (rawOutputBytes <= thresholdBytes) {
+    return event;
+  }
+
+  const hash = createHash("sha256").update(rawResultJson).digest("hex");
+  const contentHash = `sha256:${hash}`;
+  const artifactId = `artifact_${event.id}_tool_result`;
+  const artifactPath = resolve(
+    artifactDirectoryPath,
+    "tool-results",
+    `${event.id}.json`,
+  );
+  mkdirSync(dirname(artifactPath), { recursive: true });
+  writeFileSync(artifactPath, `${rawResultJson}\n`, "utf8");
+
+  const artifactRef: ResearchArtifactRef = {
+    id: artifactId,
+    kind: "tool_raw_output",
+    uri: pathToFileURL(artifactPath).href,
+    summary: `Raw tool output spilled from ${event.kind} ${event.id}.`,
+    contentHash,
+  };
+  const nextPayload = { ...event.payload };
+  delete nextPayload.result;
+  nextPayload.rawOutputRef = artifactId;
+  nextPayload.rawOutputBytes = rawOutputBytes;
+  nextPayload.rawOutputHash = contentHash;
+
+  const { payloadHash: _payloadHash, ...eventWithoutPayloadHash } = event;
+
+  return {
+    ...eventWithoutPayloadHash,
+    payload: nextPayload,
+    artifactRefs: [...(event.artifactRefs ?? []), artifactRef],
   };
 }
 

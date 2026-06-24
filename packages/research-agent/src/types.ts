@@ -47,6 +47,7 @@ export type ResearchAcceptedRawEventKind =
   | "context.compiled"
   | "loop.planned"
   | "loop.processed"
+  | "artifact.tombstoned"
   | "tool.requested"
   | "tool.observed"
   | "model.visible_note"
@@ -222,6 +223,7 @@ export interface ResearchEpisodicMemoryRecord
     | "context_compilation"
     | "visible_note"
     | "tool_request"
+    | "artifact_lifecycle"
     | "error";
 }
 

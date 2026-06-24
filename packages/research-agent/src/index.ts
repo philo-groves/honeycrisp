@@ -96,12 +96,14 @@ export {
   deleteMemoryRecordUnderPolicy,
   expireMemoryRecord,
   supersedeMemoryRecord,
+  tombstoneMemoryArtifact,
   tombstoneMemoryRecord,
 } from "./memory-lifecycle.js";
 export type {
   DeleteMemoryRecordUnderPolicyInput,
   MemoryLifecycleInput,
   SupersedeMemoryRecordInput,
+  TombstoneMemoryArtifactInput,
 } from "./memory-lifecycle.js";
 export {
   createMemoryInspector,
