@@ -33,23 +33,29 @@ pnpm start -p "Investigate parser behavior" \
   --json
 ```
 
-On a first run, Honeycrisp also asks the memory controller for the next bounded sub-goal, compiles a context packet, turns that decision into a loop plan, and processes the loop with an executor. Until durable memory and tools are integrated, the packet contains empty typed memory buckets, explicit open questions, user commitments from the goal frame, tool permissions, tool budget, and writeback expectations. The loop plan is the executable per-loop contract: reason, required context manifest, permitted tool classes, action budget, expected artifacts, completion gates, writeback requirements, and a model-facing loop prompt. The default loop executor is deterministic and does not make model calls yet; it verifies the processing path and records a structured loop result.
+On a first run, Honeycrisp also asks the memory controller for the next bounded sub-goal, compiles a context packet, turns that decision into a loop plan, and processes the loop with an executor. Until durable memory and tools are integrated, the packet contains empty typed memory buckets, explicit open questions, user commitments from the goal frame, tool permissions, tool budget, and writeback expectations. The loop plan is the executable per-loop contract: reason, required context manifest, permitted tool classes, action budget, expected artifacts, completion gates, writeback requirements, and a model-facing loop prompt. The CLI uses Pi-backed model calls by default and records a structured loop result with execution metadata.
 
-Use `--real` to execute the planned loop through Pi using stored auth:
+Run with stored auth:
 
 ```sh
-pnpm start --real \
+pnpm start \
   --provider openai-codex \
   --model gpt-5.3-codex-spark \
   --max-tokens 1800 \
   -p "Goal: Produce a first-run research plan..."
 ```
 
+Use `--mock` for deterministic offline practice runs that do not make model calls.
+
+```sh
+pnpm start --mock -p "Goal: Produce a first-run research plan..."
+```
+
 For local practice runs, Honeycrisp can seed the raw event log from a bounded
 read-only inspection and write a flow-capture artifact:
 
 ```sh
-pnpm start \
+pnpm start --mock \
   --inspect-root /path/to/project \
   --inspect-path /path/to/project/src/file.c \
   --inspect-bytes 1024 \

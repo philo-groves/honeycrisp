@@ -15,6 +15,43 @@ import {
 
 const cliPath = fileURLToPath(new URL("../packages/cli/dist/cli.js", import.meta.url));
 
+test("main CLI defaults to real mode and preflights auth", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const result = runTopCli(["-p", "Goal: Check real-mode preflight"], {
+    HONEYCRISP_AUTH_FILE: authFile,
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /real mode requires configured credentials/);
+  assert.match(result.stderr, /pass --mock for deterministic mode/);
+});
+
+test("main CLI supports deterministic mock mode without auth", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const result = runTopCli(
+    [
+      "--mock",
+      "-p",
+      "Goal: Exercise deterministic mock mode\nScope constraints: test only",
+    ],
+    {
+      HONEYCRISP_AUTH_FILE: authFile,
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Loop result: complete via deterministic-first-run/);
+  assert.match(result.stdout, /Execution mode: deterministic/);
+});
+
+test("main CLI rejects retired run-mode flags with migration hints", () => {
+  const realResult = runTopCli(["--real", "-p", "Goal: old flag"]);
+
+  assert.equal(realResult.status, 1);
+  assert.match(realResult.stderr, /--real was removed/);
+  assert.match(realResult.stderr, /Pass --mock/);
+});
+
 test("memory CLI shows subcommand help", () => {
   const result = spawnSync(process.execPath, [cliPath, "memory", "--help"], {
     encoding: "utf8",
@@ -134,6 +171,21 @@ function runMemoryCliJson(...args) {
 
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
+}
+
+function runTopCli(args, env = {}) {
+  return spawnSync(process.execPath, [cliPath, ...args], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...env,
+    },
+  });
+}
+
+async function createEmptyAuthFilePath() {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-auth-empty-"));
+  return join(root, "auth.json");
 }
 
 function createEvent(kind, payload, options = {}) {

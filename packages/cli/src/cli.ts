@@ -42,7 +42,7 @@ interface ParsedArgs {
   evidenceRequirements: string[];
   initialRiskFlags: string[];
   userPreferences: string[];
-  real: boolean;
+  mock: boolean;
   provider: string;
   model: string;
   maxTokens: number | undefined;
@@ -74,7 +74,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let json = false;
   let help = false;
   let version = false;
-  let real = false;
+  let mock = false;
   let provider = "openai-codex";
   let model = "gpt-5.3-codex-spark";
   let maxTokens: number | undefined;
@@ -117,8 +117,12 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--preference") {
       userPreferences.push(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--mock") {
+      mock = true;
     } else if (arg === "--real") {
-      real = true;
+      throw new Error(
+        "--real was removed because real model calls are now the default. Pass --mock for deterministic mode.",
+      );
     } else if (arg === "--provider") {
       provider = readOptionValue(argv, index, arg);
       index += 1;
@@ -182,7 +186,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     evidenceRequirements,
     initialRiskFlags,
     userPreferences,
-    real,
+    mock,
     provider,
     model,
     maxTokens,
@@ -313,11 +317,11 @@ function usage(): string {
     "  --evidence <need>      Add an evidence requirement",
     "  --risk <flag>          Add an initial risk flag",
     "  --preference <pref>    Add a user preference",
-    "  --real                 Execute loops with Pi-backed model calls (default: deterministic)",
-    "  --provider <provider>  Model provider for --real (default: openai-codex)",
-    "  --model <model>        Model id for --real (default: gpt-5.3-codex-spark)",
-    "  --max-tokens <n>       Max output tokens for --real",
-    "  --reasoning <level>    Reasoning level for --real",
+    "  --mock                 Use the deterministic mock executor (default: real model calls)",
+    "  --provider <provider>  Model provider for real mode (default: openai-codex)",
+    "  --model <model>        Model id for real mode (default: gpt-5.3-codex-spark)",
+    "  --max-tokens <n>       Max output tokens for real mode",
+    "  --reasoning <level>    Reasoning level for real mode",
     "  --inspect-root <path>  Allow a local root for read-only inspection",
     "  --inspect-path <path>  Inspect a local path before the loop",
     "  --inspect-action <a>   Inspection action: read_text or list",
@@ -382,7 +386,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 
     const inspectionSeed = await createInspectionSeed(args);
 
-    const loopExecutor = args.real ? await createRealLoopExecutor(args) : undefined;
+    const loopExecutor = args.mock
+      ? undefined
+      : await createRealLoopExecutor(args);
 
     const inspectionState =
       inspectionSeed.events.length > 0 && inspectionSeed.memory
@@ -432,7 +438,7 @@ async function createRealLoopExecutor(args: ParsedArgs) {
   const auth = await verifyProviderAuth(args.provider, args.model);
   if (!auth.configured) {
     throw new Error(
-      `--real requires configured credentials for ${auth.providerName} (${auth.providerId}). Run: honeycrisp auth login ${auth.providerId}`,
+      `real mode requires configured credentials for ${auth.providerName} (${auth.providerId}). Run: honeycrisp auth login ${auth.providerId}, or pass --mock for deterministic mode.`,
     );
   }
 
