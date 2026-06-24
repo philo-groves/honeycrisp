@@ -9,7 +9,10 @@ import {
 } from "./goal-runtime.js";
 import { createResearchEventId, nowIso } from "./ids.js";
 import { planResearchLoop } from "./loop-planner.js";
-import { processResearchLoop } from "./loop-processor.js";
+import {
+  inferResearchLoopExecutionMode,
+  processResearchLoop,
+} from "./loop-processor.js";
 import { routeEventsToMemorySnapshot } from "./memory-routing.js";
 import { createFirstRunMemoryController } from "./memory-controller.js";
 import { createResearchTraceEventsFromLoopResult } from "./research-trace.js";
@@ -151,6 +154,7 @@ export async function bootstrapResearchRun(
     state: goalState,
     iterations,
   };
+  const loopExecutionMode = inferResearchLoopExecutionMode(loopResult);
 
   const response = [
     `Honeycrisp initialized a research goal: ${goalFrame.root.objective}`,
@@ -161,6 +165,7 @@ export async function bootstrapResearchRun(
     `Next action: ${decision.actionClass} - ${decision.subGoal.objective}`,
     `Loop plan: ${loopPlan.id}`,
     `Loop result: ${loopResult.status} via ${loopResult.executorName}`,
+    `Execution mode: ${loopExecutionMode}`,
     "Runtime base: @earendil-works/pi-agent-core with @earendil-works/pi-ai.",
     "Research memory, storage, and domain-specific tools will be layered around Pi instead of replacing it.",
   ].join("\n");
@@ -244,6 +249,8 @@ function createLoopProcessedEvent(
   goalId: string,
   loopResult: ResearchLoopProcessingResult,
 ): ResearchEvent {
+  const executionMode = inferResearchLoopExecutionMode(loopResult);
+
   return {
     id: createResearchEventId(),
     kind: "loop.processed",
@@ -254,11 +261,13 @@ function createLoopProcessedEvent(
       loopPlanId: loopResult.loopPlanId,
       status: loopResult.status,
       executorName: loopResult.executorName,
+      executionMode,
       summary: loopResult.output.text,
       artifacts: loopResult.output.artifacts,
       evidenceRefs: loopResult.output.evidenceRefs,
       claimRefs: loopResult.output.claimRefs,
       researchTrace: loopResult.output.researchTrace,
+      raw: loopResult.output.raw,
       followUpRecommendation: loopResult.followUpRecommendation,
     },
   };

@@ -15,6 +15,7 @@ import type {
   ResearchCompletionGateResult,
   ResearchContextPacket,
   ResearchLoopContextSection,
+  ResearchLoopExecutionMode,
   ResearchLoopExecutionInput,
   ResearchLoopExecutionOutput,
   ResearchLoopExecutor,
@@ -183,6 +184,31 @@ export function createPiLoopExecutor(
   };
 }
 
+export function inferResearchLoopExecutionMode(
+  loopResult: Pick<ResearchLoopProcessingResult, "executorName" | "output">,
+): ResearchLoopExecutionMode {
+  const raw = loopResult.output.raw;
+
+  if (isRecord(raw) && raw.mode === "deterministic") {
+    return "deterministic";
+  }
+
+  if (
+    loopResult.executorName.startsWith("pi:") ||
+    (isRecord(raw) &&
+      typeof raw.provider === "string" &&
+      typeof raw.model === "string")
+  ) {
+    return "model";
+  }
+
+  if (loopResult.executorName === "deterministic-first-run") {
+    return "deterministic";
+  }
+
+  return "custom";
+}
+
 function createLoopContextSections(
   packet: ResearchContextPacket,
 ): ResearchLoopContextSection[] {
@@ -293,6 +319,10 @@ function formatContextContent(content: unknown): string {
   }
 
   return JSON.stringify(content, null, 2);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function extractAssistantText(

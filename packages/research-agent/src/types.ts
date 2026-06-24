@@ -552,6 +552,8 @@ export interface ResearchLoopPlan {
 
 export type ResearchLoopProcessingStatus = "complete" | "blocked" | "error";
 
+export type ResearchLoopExecutionMode = "deterministic" | "model" | "custom";
+
 export type ResearchLoopFollowUpRecommendation =
   | "continue_branch"
   | "create_sibling"

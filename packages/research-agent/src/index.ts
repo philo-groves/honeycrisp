@@ -104,6 +104,7 @@ export {
   compileLoopModelInput,
   createDeterministicLoopExecutor,
   createPiLoopExecutor,
+  inferResearchLoopExecutionMode,
   processResearchLoop,
 } from "./loop-processor.js";
 export type {
@@ -260,6 +261,7 @@ export type {
   ResearchSemanticClaimRecord,
   ResearchLoopPlan,
   ResearchLoopContextSection,
+  ResearchLoopExecutionMode,
   ResearchLoopExecutionInput,
   ResearchLoopExecutionOutput,
   ResearchLoopExecutor,

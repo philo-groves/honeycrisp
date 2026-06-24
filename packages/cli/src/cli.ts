@@ -313,7 +313,7 @@ function usage(): string {
     "  --evidence <need>      Add an evidence requirement",
     "  --risk <flag>          Add an initial risk flag",
     "  --preference <pref>    Add a user preference",
-    "  --real                 Execute the loop with a Pi-backed model call",
+    "  --real                 Execute loops with Pi-backed model calls (default: deterministic)",
     "  --provider <provider>  Model provider for --real (default: openai-codex)",
     "  --model <model>        Model id for --real (default: gpt-5.3-codex-spark)",
     "  --max-tokens <n>       Max output tokens for --real",
@@ -382,14 +382,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 
     const inspectionSeed = await createInspectionSeed(args);
 
-    const loopExecutor = args.real
-      ? createPiLoopExecutor({
-          provider: args.provider,
-          model: args.model,
-          ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
-          ...(args.reasoning ? { reasoning: args.reasoning } : {}),
-        })
-      : undefined;
+    const loopExecutor = args.real ? await createRealLoopExecutor(args) : undefined;
 
     const inspectionState =
       inspectionSeed.events.length > 0 && inspectionSeed.memory
@@ -433,6 +426,22 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     console.error(`honeycrisp: ${message}`);
     process.exitCode = 1;
   }
+}
+
+async function createRealLoopExecutor(args: ParsedArgs) {
+  const auth = await verifyProviderAuth(args.provider, args.model);
+  if (!auth.configured) {
+    throw new Error(
+      `--real requires configured credentials for ${auth.providerName} (${auth.providerId}). Run: honeycrisp auth login ${auth.providerId}`,
+    );
+  }
+
+  return createPiLoopExecutor({
+    provider: args.provider,
+    model: args.model,
+    ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
+    ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+  });
 }
 
 async function handleMemoryCommand(argv: readonly string[]): Promise<void> {

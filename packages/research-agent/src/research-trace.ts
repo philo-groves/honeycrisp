@@ -283,7 +283,7 @@ function createTraceLinkEvent(input: {
 }
 
 function normalizeTraceItems(
-  items: readonly ResearchTraceItem[] | undefined,
+  items: readonly unknown[] | undefined,
 ): ResearchTraceItem[] {
   return (items ?? [])
     .map((item) => normalizeTraceItem(item))
@@ -291,8 +291,13 @@ function normalizeTraceItems(
 }
 
 function normalizeTraceItem(
-  item: ResearchTraceItem,
+  item: unknown,
 ): ResearchTraceItem | undefined {
+  if (typeof item === "string") {
+    const text = item.trim();
+    return text.length > 0 ? { text } : undefined;
+  }
+
   if (!isRecord(item) || typeof item.text !== "string") {
     return undefined;
   }
@@ -304,17 +309,29 @@ function normalizeTraceItem(
 
   return {
     text,
-    ...(Array.isArray(item.evidenceRefIds)
-      ? { evidenceRefIds: item.evidenceRefIds.filter(isString) }
-      : {}),
+    ...normalizeTraceItemEvidenceRefs(item),
     ...(typeof item.confidence === "number"
       ? { confidence: item.confidence }
       : {}),
   };
 }
 
+function normalizeTraceItemEvidenceRefs(
+  item: Record<string, unknown>,
+): Pick<ResearchTraceItem, "evidenceRefIds"> {
+  if (Array.isArray(item.evidenceRefIds)) {
+    return { evidenceRefIds: item.evidenceRefIds.filter(isString) };
+  }
+
+  if (typeof item.source === "string" && item.source.trim().length > 0) {
+    return { evidenceRefIds: [item.source.trim()] };
+  }
+
+  return {};
+}
+
 function normalizeEvidenceLinks(
-  links: readonly ResearchEvidenceLink[] | undefined,
+  links: readonly unknown[] | undefined,
 ): ResearchEvidenceLink[] {
   return (links ?? [])
     .map((link) => normalizeEvidenceLink(link))
@@ -322,8 +339,13 @@ function normalizeEvidenceLinks(
 }
 
 function normalizeEvidenceLink(
-  link: ResearchEvidenceLink,
+  link: unknown,
 ): ResearchEvidenceLink | undefined {
+  if (typeof link === "string") {
+    const evidenceRefId = link.trim();
+    return evidenceRefId.length > 0 ? { evidenceRefId } : undefined;
+  }
+
   if (!isRecord(link) || typeof link.evidenceRefId !== "string") {
     return undefined;
   }
@@ -403,6 +425,54 @@ function extractTraceJson(text: string): string | undefined {
   );
   if (tagged?.[1]) {
     return tagged[1].trim();
+  }
+
+  const openFence = text.match(
+    /```honeycrisp-research-trace-json\s*([\s\S]*)$/i,
+  );
+  return openFence?.[1] ? extractFirstJsonObject(openFence[1]) : undefined;
+}
+
+function extractFirstJsonObject(text: string): string | undefined {
+  const start = text.indexOf("{");
+  if (start < 0) {
+    return undefined;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      escaping = inString;
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1).trim();
+      }
+    }
   }
 
   return undefined;

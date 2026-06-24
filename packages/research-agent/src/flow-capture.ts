@@ -4,9 +4,11 @@ import type {
   ResearchContextPacketV2SectionLabel,
 } from "./context-packet-v2.js";
 import { nowIso } from "./ids.js";
+import { inferResearchLoopExecutionMode } from "./loop-processor.js";
 import type {
   ResearchContextPacket,
   ResearchEvent,
+  ResearchLoopExecutionMode,
   ResearchLoopProcessingResult,
   ResearchMemoryRef,
   ResearchMemorySnapshot,
@@ -55,10 +57,12 @@ export interface ResearchFlowCapture {
     resultId: string;
     status: ResearchLoopProcessingResult["status"];
     executorName: string;
+    executionMode: ResearchLoopExecutionMode;
     outputText: string;
     followUpRecommendation: string;
     followUpRationale: string;
     researchTrace?: ResearchTrace;
+    raw?: unknown;
   };
   context: {
     directEvidence: readonly ResearchMemoryRef[];
@@ -161,12 +165,14 @@ function createLoopCapture(
     resultId: loopResult.id,
     status: loopResult.status,
     executorName: loopResult.executorName,
+    executionMode: inferResearchLoopExecutionMode(loopResult),
     outputText: loopResult.output.text,
     followUpRecommendation: loopResult.followUpRecommendation,
     followUpRationale: loopResult.followUpRationale,
     ...(loopResult.output.researchTrace
       ? { researchTrace: loopResult.output.researchTrace }
       : {}),
+    ...(loopResult.output.raw ? { raw: loopResult.output.raw } : {}),
   };
 }
 

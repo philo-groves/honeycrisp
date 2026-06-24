@@ -9,6 +9,7 @@ import {
   createFirstRunMemoryController,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
+  createPiLoopExecutor,
   createResearchEventId,
   createResearchFlowCapture,
   createResearchTraceEvents,
@@ -17,6 +18,7 @@ import {
   createResearchMemoryRecordId,
   extractResearchTraceFromText,
   formatResearchEventSequence,
+  inferResearchLoopExecutionMode,
   isAcceptedRawEventKind,
   isResearchDerivedMemoryStatus,
   isResearchEventId,
@@ -212,9 +214,115 @@ test("flow capture exposes event memory context and trace snapshots", async () =
   assert.equal(capture.goal.objective, "Capture a local flow");
   assert.equal(capture.memory.counts.eventLog, capture.eventTimeline.length);
   assert.equal(capture.context.openQuestions.length > 0, true);
+  assert.equal(capture.loop.executionMode, "deterministic");
+  assert.equal(capture.loop.raw?.mode, "deterministic");
   assert.ok(capture.loop.researchTrace);
   assert.ok(
     capture.eventTimeline.some((event) => event.kind === "model.visible_note"),
+  );
+});
+
+test("Pi loop executor makes model calls and exposes execution metadata", async () => {
+  let capturedContext;
+  let capturedOptions;
+  const executor = createPiLoopExecutor({
+    provider: "mock-provider",
+    model: "mock-model",
+    maxTokens: 321,
+    reasoning: "low",
+    models: {
+      getModel(provider, model) {
+        assert.equal(provider, "mock-provider");
+        assert.equal(model, "mock-model");
+        return {
+          provider,
+          id: model,
+          api: "responses",
+        };
+      },
+      async completeSimple(model, context, options) {
+        capturedContext = context;
+        capturedOptions = options;
+        assert.equal(model.provider, "mock-provider");
+        assert.equal(model.id, "mock-model");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                "## Result",
+                "Mock model call completed.",
+                "",
+                "```honeycrisp-research-trace-json",
+                JSON.stringify({
+                  observations: [
+                    {
+                      text: "The mocked model path executed with the compiled context.",
+                      confidence: 0.9,
+                    },
+                  ],
+                  goalAssessment: {
+                    status: "ready_to_respond",
+                    rationale: "The mocked model call produced a visible trace.",
+                  },
+                }),
+                "```",
+              ].join("\n"),
+            },
+          ],
+          stopReason: "stop",
+          responseId: "resp_mock_model",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 34,
+            totalTokens: 46,
+          },
+        };
+      },
+    },
+  });
+
+  const result = await bootstrapResearchRun({
+    prompt: "Goal: Exercise a Pi-backed model executor\nScope constraints: test only",
+    loopExecutor: executor,
+    goalRun: {
+      maxLoops: 1,
+    },
+  });
+
+  assert.equal(result.loopResult.status, "complete");
+  assert.equal(result.loopResult.executorName, "pi:mock-provider/mock-model");
+  assert.equal(inferResearchLoopExecutionMode(result.loopResult), "model");
+  assert.equal(capturedOptions.maxTokens, 321);
+  assert.equal(capturedOptions.reasoning, "low");
+  assert.match(capturedContext.systemPrompt, /Honeycrisp/);
+  assert.match(capturedContext.messages[0]?.content, /Visible Research Trace/);
+  assert.equal(
+    result.loopResult.output.researchTrace?.observations[0]?.text,
+    "The mocked model path executed with the compiled context.",
+  );
+
+  const raw = result.loopResult.output.raw;
+  assert.equal(raw.provider, "mock-provider");
+  assert.equal(raw.model, "mock-model");
+  assert.equal(raw.api, "responses");
+  assert.equal(raw.responseId, "resp_mock_model");
+  assert.deepEqual(raw.usage, {
+    inputTokens: 12,
+    outputTokens: 34,
+    totalTokens: 46,
+  });
+
+  const capture = createResearchFlowCapture(result);
+  assert.equal(capture.loop.executionMode, "model");
+  assert.equal(capture.loop.raw.responseId, "resp_mock_model");
+  assert.ok(
+    capture.eventTimeline.some(
+      (event) =>
+        event.kind === "loop.processed" &&
+        event.payload.executionMode === "model",
+    ),
   );
 });
 
@@ -607,6 +715,57 @@ test("model trace extraction reads only visible trace JSON", () => {
   assert.equal(trace?.observations[0]?.text, "Visible observation");
   assert.equal(trace?.hypotheses[0]?.text, "Visible hypothesis");
   assert.deepEqual(trace?.inferences, []);
+});
+
+test("model trace extraction accepts compact string trace items", () => {
+  const trace = extractResearchTraceFromText(
+    [
+      "Result text.",
+      "```honeycrisp-research-trace-json",
+      JSON.stringify({
+        observations: ["Visible compact observation"],
+        inferences: ["Visible compact inference"],
+        evidenceLinks: ["evidence_parse"],
+      }),
+      "```",
+    ].join("\n"),
+  );
+
+  assert.equal(trace?.observations[0]?.text, "Visible compact observation");
+  assert.equal(trace?.inferences[0]?.text, "Visible compact inference");
+  assert.equal(trace?.evidenceLinks[0]?.evidenceRefId, "evidence_parse");
+});
+
+test("model trace extraction recovers complete JSON from an unterminated fence", () => {
+  const trace = extractResearchTraceFromText(
+    [
+      "Result text.",
+      "```honeycrisp-research-trace-json",
+      JSON.stringify({
+        observations: [
+          {
+            text: "Visible observation with source shorthand",
+            source: "mem_evidence_parse",
+          },
+        ],
+        nextQuestions: ["Which parser entrypoint handles nested quotes?"],
+        evidenceLinks: ["mem_evidence_parse"],
+      }),
+    ].join("\n"),
+  );
+
+  assert.equal(
+    trace?.observations[0]?.text,
+    "Visible observation with source shorthand",
+  );
+  assert.deepEqual(trace?.observations[0]?.evidenceRefIds, [
+    "mem_evidence_parse",
+  ]);
+  assert.equal(
+    trace?.nextQuestions[0]?.text,
+    "Which parser entrypoint handles nested quotes?",
+  );
+  assert.equal(trace?.evidenceLinks[0]?.evidenceRefId, "mem_evidence_parse");
 });
 
 test("local inspection observations route into direct evidence context", async () => {
