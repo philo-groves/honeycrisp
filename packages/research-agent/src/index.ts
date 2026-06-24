@@ -139,6 +139,15 @@ export type {
   MemoryRetriever,
 } from "./memory-retriever.js";
 export {
+  applyMemoryReflection,
+  reflectOnLoopBoundary,
+  shouldReflectOnLoop,
+} from "./memory-reflection.js";
+export type {
+  MemoryReflectionInput,
+  MemoryReflectionResult,
+} from "./memory-reflection.js";
+export {
   createResearchMemoryProvenance,
   isResearchDerivedMemoryStatus,
   isResearchMemoryRecordKind,

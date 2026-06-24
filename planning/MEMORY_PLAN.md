@@ -19,7 +19,7 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 ## Current Baseline
 
-The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, a phase-6 context packet v2 compiler, and a phase-7 memory-driven controller. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
+The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, a phase-6 context packet v2 compiler, a phase-7 memory-driven controller, and phase-8 deterministic reflection. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
 
 Known limitations to address:
 
@@ -28,7 +28,7 @@ Known limitations to address:
 - Derived memory records are typed, persisted, and retrievable through scored recall.
 - Recall is not yet a scored retrieval step.
 - Context compilation does not distinguish a larger preconscious candidate set from the bounded conscious packet.
-- Reflection and consolidation are not yet explicit loop-boundary operations.
+- Reflection and consolidation are deterministic loop-boundary operations.
 - Forgetting, tombstoning, superseding, and audit behavior are not yet implemented.
 
 ## Phase 1: Stabilize Memory Contracts
@@ -444,6 +444,8 @@ Checklist:
 
 Run an explicit reflection step after meaningful loop boundaries.
 
+Status: completed on 2026-06-24.
+
 Reflection responsibilities:
 
 - Update the active goal tree.
@@ -458,22 +460,22 @@ Initial reflection should be deterministic and schema-driven. Model-assisted sum
 
 Checklist:
 
-- [ ] Add reflection boundary detection.
-- [ ] Add deterministic reflection step.
-- [ ] Update active goal tree from reflected memory state.
-- [ ] Summarize loops as episodic records.
-- [ ] Revise hypothesis status and confidence.
-- [ ] Add evidence-for links.
-- [ ] Add evidence-against links.
-- [ ] Promote repeated successful patterns into procedures.
-- [ ] Mark stale records.
-- [ ] Mark contradicted records.
-- [ ] Mark superseded records.
-- [ ] Schedule prospective checks.
-- [ ] Add tests for hypothesis updates.
-- [ ] Add tests for procedure promotion.
-- [ ] Add tests for contradictory evidence lowering confidence or status.
-- [ ] Add tests for prospective check scheduling.
+- [x] Add reflection boundary detection.
+- [x] Add deterministic reflection step.
+- [x] Update active goal tree from reflected memory state.
+- [x] Summarize loops as episodic records.
+- [x] Revise hypothesis status and confidence.
+- [x] Add evidence-for links.
+- [x] Add evidence-against links.
+- [x] Promote repeated successful patterns into procedures.
+- [x] Mark stale records.
+- [x] Mark contradicted records.
+- [x] Mark superseded records.
+- [x] Schedule prospective checks.
+- [x] Add tests for hypothesis updates.
+- [x] Add tests for procedure promotion.
+- [x] Add tests for contradictory evidence lowering confidence or status.
+- [x] Add tests for prospective check scheduling.
 
 ## Phase 9: Forgetting, Governance, And Audit
 
@@ -564,19 +566,19 @@ Checklist:
 
 ## Next Implementation Increment
 
-The next implementation slice should be phase 8 only:
+The next implementation slice should be phase 9 only:
 
-1. Add deterministic reflection boundary detection.
-2. Summarize meaningful loops as episodic records.
-3. Revise hypothesis status and confidence from evidence links.
-4. Promote repeated successful patterns into procedures.
-5. Schedule prospective checks from unresolved follow-up needs.
+1. Add explicit lifecycle operations for tombstone, supersede, expire, and policy deletion.
+2. Add audit events or audit records for writes, promotion, contradiction, and deletion.
+3. Exclude tombstoned and expired records from recall and context.
+4. Keep superseded records reachable through audit views.
+5. Preserve raw event auditability unless policy or user instruction requires deletion.
 
 Acceptance criteria:
 
 - Existing tests continue to pass.
-- A loop result updates relevant hypothesis state.
-- Repeated useful behavior can promote a procedure.
-- Contradictory evidence lowers confidence or status.
-- Prospective checks are scheduled from unresolved follow-up needs.
-- Reflection remains deterministic and schema-driven.
+- Tombstoned records do not enter context packets.
+- Superseded records remain reachable through audit views.
+- Expired records are excluded from normal retrieval.
+- Policy deletion removes the allowed stores while preserving required audit facts.
+- Lifecycle operations produce audit records.

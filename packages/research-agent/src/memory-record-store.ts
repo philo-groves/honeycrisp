@@ -41,6 +41,7 @@ export interface UpdateMemoryRecordStatusInput {
   status: ResearchDerivedMemoryStatus;
   updatedAt: string;
   summary?: string;
+  confidence?: number;
   evidenceFor?: readonly ResearchDerivedMemoryRecord["provenance"]["evidenceFor"][number][];
   evidenceAgainst?: readonly ResearchDerivedMemoryRecord["provenance"]["evidenceAgainst"][number][];
   supersededByRecordId?: string;
@@ -270,6 +271,9 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
         status: input.status,
         updatedAt: input.updatedAt,
         ...(input.summary ? { summary: input.summary } : {}),
+        ...(typeof input.confidence === "number"
+          ? { confidence: input.confidence }
+          : {}),
         provenance: {
           ...existing.provenance,
           evidenceFor: mergeEvidenceRefs(
