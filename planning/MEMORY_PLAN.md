@@ -8,15 +8,24 @@ This plan turns the architecture's memory model into an incremental implementati
 
 The implementation should preserve the distinction between direct evidence, model inference, hypotheses, procedures, and user commitments. Private model thoughts should not be durably stored, but their visible consequences can be persisted as structured trace fields and accepted events.
 
+## Tracking Rules
+
+Update the checklists in this file as each implementation increment lands. Keep the checklist status tied to committed behavior and verified tests, not intent.
+
+- `[x]` means implemented and verified.
+- `[ ]` means not implemented yet.
+- If a phase changes direction, update that phase before implementation begins.
+- Keep each session scoped to the requested phase unless the user explicitly expands scope.
+
 ## Current Baseline
 
-The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, and primitive memory routing. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
+The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, and phase-1 memory contracts. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
 
 Known limitations to address:
 
 - Memory is mostly an in-memory snapshot derived from recent events.
 - There is no durable append-only event log abstraction.
-- Derived memory records are not yet typed as first-class persisted entities.
+- Derived memory records are typed, but not yet persisted as first-class entities.
 - Recall is not yet a scored retrieval step.
 - Context compilation does not distinguish a larger preconscious candidate set from the bounded conscious packet.
 - Reflection and consolidation are not yet explicit loop-boundary operations.
@@ -26,20 +35,20 @@ Known limitations to address:
 
 Define the durable and derived-memory contracts before adding more behavior.
 
-Deliverables:
+Status: completed on 2026-06-24.
 
-- Canonical event id and sequence format.
-- Shared provenance shape for all derived records.
-- Stable memory record ids.
-- Explicit status values for derived records, such as `candidate`, `active`, `confirmed`, `contradicted`, `superseded`, `stale`, and `tombstoned`.
-- Clear separation between:
-  - raw event payloads
-  - evidence records
-  - semantic claims
-  - hypotheses and beliefs
-  - procedures
-  - prospective checks
-  - context packet references
+Checklist:
+
+- [x] Add canonical event id format.
+- [x] Add canonical event sequence format.
+- [x] Add stable memory record ids.
+- [x] Add shared provenance shape for derived records.
+- [x] Add explicit derived-memory statuses: `candidate`, `active`, `confirmed`, `contradicted`, `superseded`, `stale`, and `tombstoned`.
+- [x] Separate raw event payloads from evidence records, semantic claims, hypotheses and beliefs, procedures, prospective checks, and context packet references.
+- [x] Preserve evidence-for and evidence-against separately in derived-memory contracts.
+- [x] Encode procedure promotion requirements before durable guidance.
+- [x] Export the contract helpers for later phases.
+- [x] Add tests for ids, statuses, provenance, and typed routed memory refs.
 
 Design constraints:
 
@@ -47,17 +56,53 @@ Design constraints:
 - Claims and hypotheses must preserve evidence-for and evidence-against separately.
 - Procedures should require repeated usefulness or explicit promotion before becoming durable guidance.
 
-## Phase 2: Retain With An Append-Only Event Log
+## Phase 2: Retain With A SQLite Append-Only Event Log
 
 Add a `MemoryEventLog` abstraction that stores accepted events before summarization or consolidation.
+
+Use SQLite as the durable index and source-of-truth event store, while preserving append-only event-log semantics. JSONL is no longer the preferred primary implementation because later memory components will need indexed queries over events, records, statuses, confidence, graph edges, and audit relationships.
+
+Storage direction:
+
+- Store accepted events in SQLite under `.honeycrisp/memory/memory.sqlite`.
+- Store large binary or text artifacts on disk under `.honeycrisp/memory/artifacts/`.
+- Store artifact metadata and event artifact references in SQLite.
+- Do not add derived-memory record tables in this phase.
+- Do not mutate or delete accepted event rows during ordinary operation.
+- Represent corrections, redactions, contradictions, and tombstones as later events unless a user instruction or policy requires physical deletion.
 
 Suggested layout:
 
 ```text
 .honeycrisp/
   memory/
-    events/
+    memory.sqlite
     artifacts/
+```
+
+Suggested `memory_events` schema:
+
+```sql
+CREATE TABLE memory_events (
+  sequence INTEGER PRIMARY KEY,
+  event_id TEXT NOT NULL UNIQUE,
+  timestamp TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  goal_id TEXT,
+  loop_id TEXT,
+  sub_goal_id TEXT,
+  payload_json TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+  schema_version INTEGER NOT NULL
+);
+
+CREATE INDEX memory_events_event_id_idx ON memory_events(event_id);
+CREATE INDEX memory_events_goal_id_idx ON memory_events(goal_id);
+CREATE INDEX memory_events_loop_id_idx ON memory_events(loop_id);
+CREATE INDEX memory_events_sub_goal_id_idx ON memory_events(sub_goal_id);
+CREATE INDEX memory_events_kind_idx ON memory_events(kind);
+CREATE INDEX memory_events_timestamp_idx ON memory_events(timestamp);
 ```
 
 Event shape:
@@ -74,20 +119,34 @@ Event shape:
 - `artifactRefs`
 - `schemaVersion`
 
-Deliverables:
+Checklist:
 
-- Append-only JSONL event log.
-- Read by id, sequence range, goal id, loop id, and event kind.
-- Validation before append.
-- Redaction or rejection hooks for disallowed event kinds.
-- Restart-safe loading.
-
-Tests:
-
-- Events append in deterministic sequence order.
-- Restart reload preserves event order.
-- Invalid event payloads are rejected.
-- Private thought-like data is not accepted into durable storage.
+- [ ] Choose and add the SQLite dependency or Node runtime API used by the repository.
+- [ ] Add a `MemoryEventLog` interface that hides the storage backend.
+- [ ] Add a SQLite-backed implementation for accepted raw events.
+- [ ] Create `.honeycrisp/memory/memory.sqlite` and parent directories on demand.
+- [ ] Add schema initialization with idempotent migrations.
+- [ ] Append events in deterministic sequence order.
+- [ ] Reject writes that try to reuse an `event_id`.
+- [ ] Validate accepted event kind before append.
+- [ ] Validate event payload shape before append.
+- [ ] Compute and persist `payloadHash`.
+- [ ] Persist artifact references without storing large artifacts inline.
+- [ ] Read by event id.
+- [ ] Read by sequence range.
+- [ ] Read by goal id.
+- [ ] Read by loop id.
+- [ ] Read by subgoal id.
+- [ ] Read by event kind.
+- [ ] Add redaction or rejection hooks for disallowed event kinds.
+- [ ] Ensure private thought-like data is not accepted into durable storage.
+- [ ] Ensure restart-safe loading from SQLite.
+- [ ] Keep the existing in-memory snapshot compatibility path working.
+- [ ] Add tests for deterministic append order.
+- [ ] Add tests for restart reload preserving order.
+- [ ] Add tests for invalid payload rejection.
+- [ ] Add tests for private thought-like data rejection.
+- [ ] Add tests proving accepted rows are not modified by ordinary appends.
 
 ## Phase 3: Add The Memory Write Pipeline
 
@@ -129,31 +188,41 @@ Initial routing:
 - User commitments become durable user/prospective memory.
 - Errors and contradictions become uncertainty or contradiction records.
 
-Tests:
+Checklist:
 
-- A tool observation produces an evidence-backed record.
-- A model claim is stored as a candidate claim, not direct evidence.
-- A model hypothesis keeps evidence-for and evidence-against separate.
-- Goal completion or stop events produce episodic summaries.
+- [ ] Add `MemoryWritePipeline` interface.
+- [ ] Add deterministic event-to-record routing for currently emitted event kinds.
+- [ ] Convert tool observations into evidence-backed records.
+- [ ] Convert goal and loop updates into episodic records.
+- [ ] Convert model-visible notes into episodic or working records.
+- [ ] Convert model claims into candidate semantic claim records.
+- [ ] Convert model hypotheses into hypothesis records.
+- [ ] Convert user commitments into prospective or durable user memory records.
+- [ ] Convert errors and contradictions into uncertainty or contradiction records.
+- [ ] Preserve evidence-for and evidence-against separately for claims and hypotheses.
+- [ ] Keep model claims as candidates until evidence promotes them.
+- [ ] Keep procedure records as candidates until repeated usefulness or explicit promotion.
+- [ ] Add tests for tool-observation evidence records.
+- [ ] Add tests for candidate model claims.
+- [ ] Add tests for separate hypothesis evidence-for/evidence-against.
+- [ ] Add tests for goal completion or stop episodic summaries.
 
 ## Phase 4: Add Typed Stores And Indexes
 
 Persist derived records as first-class memory.
 
-Suggested layout:
+Use SQLite for derived record metadata and indexes. Keep large artifacts outside the database and referenced from record metadata. Avoid introducing a vector database until record semantics and retrieval behavior are stable.
 
-```text
-.honeycrisp/
-  memory/
-    episodes/
-    claims/
-    procedures/
-    hypotheses/
-    prospective/
-    artifacts/
-```
+Suggested SQLite-backed stores:
 
-Initial implementation should use local files and deterministic indexes. Avoid introducing a vector database until record semantics and retrieval behavior are stable.
+- episodes
+- claims
+- procedures
+- hypotheses
+- prospective checks
+- working memory
+- artifacts
+- claim graph edges
 
 Indexes:
 
@@ -174,12 +243,26 @@ Claim graph relationships:
 - `supersedes`
 - `depends_on`
 
-Tests:
+Checklist:
 
-- Records can be written, read, listed, and updated.
-- Contradiction updates do not destroy earlier evidence.
-- Superseded records remain auditable but are excluded from ordinary recall.
-- Tombstoned records are omitted from context compilation.
+- [ ] Add typed derived-record tables or a clearly typed record table plus indexes.
+- [ ] Add source event id indexes.
+- [ ] Add goal and subgoal indexes.
+- [ ] Add status indexes.
+- [ ] Add confidence and updated-time indexes.
+- [ ] Add tag/entity indexing.
+- [ ] Add claim graph edge storage.
+- [ ] Add record write API.
+- [ ] Add record read API.
+- [ ] Add record list/query API.
+- [ ] Add record status update API.
+- [ ] Ensure contradiction updates preserve earlier evidence.
+- [ ] Ensure superseded records remain auditable.
+- [ ] Ensure tombstoned records are excluded from ordinary recall and context.
+- [ ] Add tests for write/read/list/update.
+- [ ] Add tests for contradiction preservation.
+- [ ] Add tests for superseded-record audit behavior.
+- [ ] Add tests for tombstoned-record exclusion.
 
 ## Phase 5: Recall And Preconscious Retrieval
 
@@ -217,12 +300,25 @@ Scoring factors:
 - procedural applicability
 - token and tool cost
 
-Tests:
+Checklist:
 
-- Relevant direct evidence outranks stale weak evidence.
-- Contradictions are included when they affect an active claim or hypothesis.
-- Procedures are only returned when applicable to the current action class.
-- Prospective checks surface when their trigger conditions are met.
+- [ ] Add `MemoryRetriever` interface.
+- [ ] Add retrieval input shape.
+- [ ] Add scored retrieval output shape.
+- [ ] Score relevance to active goal.
+- [ ] Score relevance to active subgoal.
+- [ ] Score recency.
+- [ ] Score confidence.
+- [ ] Score evidence quality.
+- [ ] Penalize or warn on contradiction risk.
+- [ ] Include relevant contradictions even when they lower confidence.
+- [ ] Score procedural applicability by action class.
+- [ ] Include prospective checks when trigger conditions are met.
+- [ ] Include selection reasons for every returned record.
+- [ ] Add tests proving direct evidence outranks stale weak evidence.
+- [ ] Add tests proving relevant contradictions are included.
+- [ ] Add tests proving procedures are action-class scoped.
+- [ ] Add tests proving prospective triggers surface.
 
 ## Phase 6: Context Packet Compiler v2
 
@@ -252,12 +348,21 @@ Compiler responsibilities:
 - Include selection reasons for inspectability.
 - Avoid dumping unlabeled memory blobs into the prompt.
 
-Tests:
+Checklist:
 
-- Packet compilation respects token budgets.
-- Evidence and inference remain separately labeled.
-- Important contradictions are not dropped when relevant.
-- Selection reasons are visible in captured flow output.
+- [ ] Add preconscious-memory input type.
+- [ ] Add conscious-context packet v2 type.
+- [ ] Enforce section-level token budgets.
+- [ ] Prefer direct evidence over inference when budget is tight.
+- [ ] Preserve labels for evidence, inference, belief, and uncertainty.
+- [ ] Include selection reasons in context packet metadata.
+- [ ] Include contradictions and uncertainty when relevant.
+- [ ] Keep context packet references and summaries separate from durable memory.
+- [ ] Update flow capture to expose selection reasons.
+- [ ] Add tests for token budget behavior.
+- [ ] Add tests for evidence/inference labeling.
+- [ ] Add tests for contradiction retention.
+- [ ] Add tests for captured selection reasons.
 
 ## Phase 7: Memory Controller v2
 
@@ -303,12 +408,25 @@ Decision principles:
 - Respond only when completion gates or ready-to-respond criteria are supported by memory.
 - Stop immediately when a stop gate is triggered.
 
-Tests:
+Checklist:
 
-- A function-walk goal creates one bounded subgoal per function.
-- A stop condition halts after the requested maximum function count.
-- Completion gates are evaluated from memory state, not loop count alone.
-- Controller decisions can be explained from retrieved records and goal gates.
+- [ ] Add memory-driven controller input type.
+- [ ] Add memory-driven controller output type.
+- [ ] Feed retrieved preconscious memory into action selection.
+- [ ] Select bounded subgoals from memory, gates, and available tools.
+- [ ] Explain controller decisions from retrieved records and goal gates.
+- [ ] Preserve first-run fallback behavior.
+- [ ] Ask the user when scope, authorization, or safety is missing.
+- [ ] Inspect when direct evidence is missing and local tools are available.
+- [ ] Analyze when evidence exists but claims or hypotheses are weak.
+- [ ] Experiment when a hypothesis has falsification criteria and tools are available.
+- [ ] Synthesize only when enough evidence exists to update the goal state.
+- [ ] Respond only when supported by memory and gates.
+- [ ] Stop immediately when a stop gate is triggered.
+- [ ] Add tests for function-walk bounded subgoals.
+- [ ] Add tests for maximum function-count stop conditions.
+- [ ] Add tests for memory-backed completion-gate evaluation.
+- [ ] Add tests for decision explanation.
 
 ## Phase 8: Reflection And Consolidation
 
@@ -326,12 +444,24 @@ Reflection responsibilities:
 
 Initial reflection should be deterministic and schema-driven. Model-assisted summaries can be added later once the write pipeline and tests are stable.
 
-Tests:
+Checklist:
 
-- A loop result updates relevant hypothesis state.
-- Repeated useful behavior can promote a procedure.
-- Contradictory evidence lowers confidence or changes status.
-- Prospective checks are scheduled from unresolved follow-up needs.
+- [ ] Add reflection boundary detection.
+- [ ] Add deterministic reflection step.
+- [ ] Update active goal tree from reflected memory state.
+- [ ] Summarize loops as episodic records.
+- [ ] Revise hypothesis status and confidence.
+- [ ] Add evidence-for links.
+- [ ] Add evidence-against links.
+- [ ] Promote repeated successful patterns into procedures.
+- [ ] Mark stale records.
+- [ ] Mark contradicted records.
+- [ ] Mark superseded records.
+- [ ] Schedule prospective checks.
+- [ ] Add tests for hypothesis updates.
+- [ ] Add tests for procedure promotion.
+- [ ] Add tests for contradictory evidence lowering confidence or status.
+- [ ] Add tests for prospective check scheduling.
 
 ## Phase 9: Forgetting, Governance, And Audit
 
@@ -355,12 +485,23 @@ Rules:
 - Deletion behavior should be policy-controlled and auditable.
 - Raw event auditability should be preserved unless policy or user instruction requires deletion.
 
-Tests:
+Checklist:
 
-- Tombstoned records do not enter context packets.
-- Superseded records remain reachable through audit views.
-- Expired records are excluded from normal retrieval.
-- Policy deletion removes the allowed stores while preserving required audit facts.
+- [ ] Add tombstone operation.
+- [ ] Add supersede operation.
+- [ ] Add expiration operation.
+- [ ] Add policy-controlled deletion operation.
+- [ ] Add audit events for writes.
+- [ ] Add audit events for promotion.
+- [ ] Add audit events for contradiction.
+- [ ] Add audit events for deletion.
+- [ ] Exclude tombstoned records from recall and context.
+- [ ] Link superseded records to replacements.
+- [ ] Preserve raw event auditability by default.
+- [ ] Add tests for tombstoned context exclusion.
+- [ ] Add tests for superseded audit views.
+- [ ] Add tests for expired retrieval exclusion.
+- [ ] Add tests for policy deletion behavior.
 
 ## Phase 10: Local Inspectability
 
@@ -389,22 +530,41 @@ Captured flow output should include:
 - context packet selections
 - controller decision reasons
 
-## First Implementation Increment
+Checklist:
 
-The first implementation slice should be intentionally small:
+- [ ] Add event timeline command or debug view.
+- [ ] Add show-event-by-id command or debug view.
+- [ ] Add show-derived-records-for-event command or debug view.
+- [ ] Add recall-query command or debug view.
+- [ ] Add preconscious-packet inspection.
+- [ ] Add compiled-context-packet inspection.
+- [ ] Add selected-action explanation.
+- [ ] Add hypotheses inspection.
+- [ ] Add claim graph inspection.
+- [ ] Add prospective checks inspection.
+- [ ] Include accepted raw events in captured flow output.
+- [ ] Include rejected raw events and rejection reasons in captured flow output.
+- [ ] Include candidate writes in captured flow output.
+- [ ] Include committed writes in captured flow output.
+- [ ] Include retrieval results in captured flow output.
+- [ ] Include context packet selections in captured flow output.
+- [ ] Include controller decision reasons in captured flow output.
 
-1. Add typed memory record interfaces.
-2. Add the file-backed append-only `MemoryEventLog`.
-3. Add the `MemoryWritePipeline` for the event kinds already emitted by the runtime.
-4. Adapt the current memory routing layer to read from the new write pipeline while preserving the existing public context snapshot shape.
-5. Add tests for event retention, candidate writes, and context compatibility.
+## Next Implementation Increment
+
+The next implementation slice should be phase 2 only:
+
+1. Add the `MemoryEventLog` interface.
+2. Add the SQLite-backed append-only event log.
+3. Keep artifacts filesystem-backed and referenced from SQLite.
+4. Add validation and private-thought rejection before append.
+5. Keep the existing memory-routing and context snapshot behavior compatible.
 
 Acceptance criteria:
 
 - Existing tests continue to pass.
-- Raw accepted events are durably append-only.
-- Tool observations become evidence-backed derived records.
-- Model claims and hypotheses become derived records with proper labels.
+- Raw accepted events are durably append-only in SQLite.
+- Event sequences are deterministic and restart-safe.
+- Events can be read by id, sequence range, goal id, loop id, subgoal id, and kind.
 - Private thought traces are not durably stored.
-- Context packets still compile successfully from the derived memory output.
-
+- Context packets still compile successfully from the existing memory output.
