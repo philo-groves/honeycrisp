@@ -37,6 +37,12 @@ export { createResearchGoalFrame } from "./goal.js";
 export { planResearchLoop } from "./loop-planner.js";
 export type { PlanResearchLoopInput } from "./loop-planner.js";
 export {
+  compileLoopModelInput,
+  createDeterministicLoopExecutor,
+  processResearchLoop,
+} from "./loop-processor.js";
+export type { ProcessResearchLoopInput } from "./loop-processor.js";
+export {
   createFirstRunMemoryController,
   FirstRunMemoryController,
 } from "./memory-controller.js";
@@ -65,6 +71,14 @@ export type {
   ResearchMemoryStoreKind,
   ResearchPromptFrame,
   ResearchLoopPlan,
+  ResearchLoopContextSection,
+  ResearchLoopExecutionInput,
+  ResearchLoopExecutionOutput,
+  ResearchLoopExecutor,
+  ResearchLoopFollowUpRecommendation,
+  ResearchLoopModelInput,
+  ResearchLoopProcessingResult,
+  ResearchLoopProcessingStatus,
   ResearchRequiredContextSection,
   ResearchSubGoal,
   ResearchToolBudget,

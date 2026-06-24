@@ -6,6 +6,7 @@ import {
   createFirstRunMemoryController,
   createResearchGoalFrame,
   planResearchLoop,
+  processResearchLoop,
 } from "../packages/research-agent/dist/index.js";
 
 test("first-run controller compiles a typed context packet without recalled memory", () => {
@@ -51,16 +52,24 @@ test("first-run controller asks for scope before security-sensitive work", () =>
   assert.match(decision.subGoal.objective, /Confirm missing scope/);
 });
 
-test("bootstrap output includes memory decision and context event records", () => {
-  const result = bootstrapResearchRun({
+test("bootstrap output includes memory decision and context event records", async () => {
+  const result = await bootstrapResearchRun({
     prompt: "Goal: Investigate a math puzzle\nScope constraints: no external search",
   });
 
   assert.equal(result.decision.actionClass, "synthesize");
-  assert.equal(result.events.length, 4);
+  assert.equal(result.loopResult.status, "complete");
+  assert.equal(result.loopResult.executorName, "deterministic-first-run");
+  assert.equal(result.events.length, 5);
   assert.deepEqual(
     result.events.map((event) => event.kind),
-    ["goal.created", "memory.decision", "context.compiled", "loop.planned"],
+    [
+      "goal.created",
+      "memory.decision",
+      "context.compiled",
+      "loop.planned",
+      "loop.processed",
+    ],
   );
   assert.equal(
     result.decision.contextPacket.activeGoal.id,
@@ -92,4 +101,25 @@ test("loop planner turns a memory decision into an executable bounded plan", () 
   );
   assert.ok(loopPlan.loopPrompt.includes("Loop sub-goal:"));
   assert.ok(loopPlan.loopPrompt.includes("Required context manifest:"));
+});
+
+test("loop processor executes a planned loop and preserves isolated model input", async () => {
+  const goalFrame = createResearchGoalFrame(
+    "Goal: Investigate a math puzzle\nScope constraints: no external search",
+  );
+  const decision = createFirstRunMemoryController().decide({ goalFrame });
+  const loopPlan = planResearchLoop({ decision });
+  const result = await processResearchLoop({ loopPlan });
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.loopPlanId, loopPlan.id);
+  assert.equal(result.executorName, "deterministic-first-run");
+  assert.equal(result.modelInput.loopPrompt, loopPlan.loopPrompt);
+  assert.ok(
+    result.modelInput.contextSections.some(
+      (section) => section.label === "goal_frame" && section.required,
+    ),
+  );
+  assert.ok(result.output.text.includes("Initial loop result:"));
+  assert.deepEqual(result.output.artifacts, loopPlan.expectedArtifacts);
 });

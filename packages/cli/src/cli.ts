@@ -154,7 +154,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       return;
     }
 
-    const result = bootstrapResearchRun({
+    const result = await bootstrapResearchRun({
       prompt: args.prompt,
       successGates: args.successGates,
       failureOrStopGates: args.failureOrStopGates,

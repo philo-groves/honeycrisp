@@ -54,7 +54,8 @@ export interface ResearchEvent {
     | "goal.created"
     | "memory.decision"
     | "context.compiled"
-    | "loop.planned";
+    | "loop.planned"
+    | "loop.processed";
   timestamp: string;
   goalId?: string;
   payload: unknown;
@@ -234,4 +235,70 @@ export interface ResearchLoopPlan {
   writebackRequirements: readonly ResearchMemoryStoreKind[];
   contextPacket: ResearchContextPacket;
   loopPrompt: string;
+}
+
+export type ResearchLoopProcessingStatus = "complete" | "blocked" | "error";
+
+export type ResearchLoopFollowUpRecommendation =
+  | "continue_branch"
+  | "create_sibling"
+  | "refine_goal_tree"
+  | "respond"
+  | "blocked";
+
+export interface ResearchLoopContextSection {
+  label: ResearchRequiredContextSection["label"];
+  required: boolean;
+  content: unknown;
+}
+
+export interface ResearchLoopModelInput {
+  loopPrompt: string;
+  contextSections: readonly ResearchLoopContextSection[];
+  permittedToolClasses: readonly ResearchActionClass[];
+  toolBudget: ResearchToolBudget;
+}
+
+export interface ResearchLoopExecutionInput {
+  loopPlan: ResearchLoopPlan;
+  modelInput: ResearchLoopModelInput;
+  signal?: AbortSignal;
+}
+
+export interface ResearchLoopExecutionOutput {
+  text: string;
+  artifacts: readonly string[];
+  evidenceRefs: readonly ResearchMemoryRef[];
+  claimRefs: readonly ResearchMemoryRef[];
+  followUpActions: readonly string[];
+  raw?: unknown;
+}
+
+export interface ResearchLoopExecutor {
+  name: string;
+  execute(
+    input: ResearchLoopExecutionInput,
+  ): Promise<ResearchLoopExecutionOutput>;
+}
+
+export interface ResearchCompletionGateResult {
+  gateId: string;
+  description: string;
+  satisfied: boolean;
+  evidence?: string;
+}
+
+export interface ResearchLoopProcessingResult {
+  id: string;
+  loopPlanId: string;
+  subGoalId: string;
+  status: ResearchLoopProcessingStatus;
+  executorName: string;
+  startedAt: string;
+  completedAt: string;
+  modelInput: ResearchLoopModelInput;
+  output: ResearchLoopExecutionOutput;
+  completionGateResults: readonly ResearchCompletionGateResult[];
+  followUpRecommendation: ResearchLoopFollowUpRecommendation;
+  followUpRationale: string;
 }

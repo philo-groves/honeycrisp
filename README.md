@@ -33,7 +33,7 @@ pnpm start -p "Investigate parser behavior" \
   --json
 ```
 
-On a first run, Honeycrisp also asks the memory controller for the next bounded sub-goal, compiles a context packet, and turns that decision into a loop plan. Until durable memory and tools are integrated, the packet contains empty typed memory buckets, explicit open questions, user commitments from the goal frame, tool permissions, tool budget, and writeback expectations. The loop plan is the executable per-loop contract: reason, required context manifest, permitted tool classes, action budget, expected artifacts, completion gates, writeback requirements, and a model-facing loop prompt.
+On a first run, Honeycrisp also asks the memory controller for the next bounded sub-goal, compiles a context packet, turns that decision into a loop plan, and processes the loop with an executor. Until durable memory and tools are integrated, the packet contains empty typed memory buckets, explicit open questions, user commitments from the goal frame, tool permissions, tool budget, and writeback expectations. The loop plan is the executable per-loop contract: reason, required context manifest, permitted tool classes, action budget, expected artifacts, completion gates, writeback requirements, and a model-facing loop prompt. The default loop executor is deterministic and does not make model calls yet; it verifies the processing path and records a structured loop result.
 
 ## Auth
 

@@ -1,26 +1,31 @@
 import { createResearchGoalFrame } from "./goal.js";
 import { createId, nowIso } from "./ids.js";
 import { planResearchLoop } from "./loop-planner.js";
+import { processResearchLoop } from "./loop-processor.js";
 import { createFirstRunMemoryController } from "./memory-controller.js";
 import type {
   ResearchEvent,
   ResearchGoalFrame,
   ResearchGoalFrameOptions,
   ResearchLoopPlan,
+  ResearchLoopProcessingResult,
   ResearchMemoryControllerDecision,
   ResearchMemoryStoreKind,
+  ResearchLoopExecutor,
   ResearchToolDescriptor,
 } from "./types.js";
 
 export interface BootstrapResearchRunInput extends ResearchGoalFrameOptions {
   prompt: string;
   tools?: readonly ResearchToolDescriptor[];
+  loopExecutor?: ResearchLoopExecutor;
 }
 
 export interface BootstrapResearchRunResult {
   goalFrame: ResearchGoalFrame;
   decision: ResearchMemoryControllerDecision;
   loopPlan: ResearchLoopPlan;
+  loopResult: ResearchLoopProcessingResult;
   events: readonly ResearchEvent[];
   piBase: {
     agentCorePackage: "@earendil-works/pi-agent-core";
@@ -30,9 +35,9 @@ export interface BootstrapResearchRunResult {
   response: string;
 }
 
-export function bootstrapResearchRun(
+export async function bootstrapResearchRun(
   input: BootstrapResearchRunInput,
-): BootstrapResearchRunResult {
+): Promise<BootstrapResearchRunResult> {
   const goalFrame = createResearchGoalFrame(input.prompt, input);
   const events: ResearchEvent[] = [
     {
@@ -52,6 +57,10 @@ export function bootstrapResearchRun(
   };
   const decision = createFirstRunMemoryController().decide(controllerInput);
   const loopPlan = planResearchLoop({ decision });
+  const loopResult = await processResearchLoop({
+    loopPlan,
+    ...(input.loopExecutor ? { executor: input.loopExecutor } : {}),
+  });
   events.push({
     id: createId("event"),
     kind: "memory.decision",
@@ -91,6 +100,22 @@ export function bootstrapResearchRun(
       writebackRequirements: loopPlan.writebackRequirements,
     },
   });
+  events.push({
+    id: createId("event"),
+    kind: "loop.processed",
+    timestamp: nowIso(),
+    goalId: goalFrame.root.id,
+    payload: {
+      loopResultId: loopResult.id,
+      loopPlanId: loopResult.loopPlanId,
+      status: loopResult.status,
+      executorName: loopResult.executorName,
+      artifacts: loopResult.output.artifacts,
+      evidenceRefs: loopResult.output.evidenceRefs,
+      claimRefs: loopResult.output.claimRefs,
+      followUpRecommendation: loopResult.followUpRecommendation,
+    },
+  });
 
   const response = [
     `Honeycrisp initialized a research goal: ${goalFrame.root.objective}`,
@@ -98,6 +123,7 @@ export function bootstrapResearchRun(
     `Stop gates: ${goalFrame.root.stopGates.length}`,
     `Next action: ${decision.actionClass} - ${decision.subGoal.objective}`,
     `Loop plan: ${loopPlan.id}`,
+    `Loop result: ${loopResult.status} via ${loopResult.executorName}`,
     "Runtime base: @earendil-works/pi-agent-core with @earendil-works/pi-ai.",
     "Research memory, storage, and domain-specific tools will be layered around Pi instead of replacing it.",
   ].join("\n");
@@ -106,6 +132,7 @@ export function bootstrapResearchRun(
     goalFrame,
     decision,
     loopPlan,
+    loopResult,
     events,
     piBase: {
       agentCorePackage: "@earendil-works/pi-agent-core",
