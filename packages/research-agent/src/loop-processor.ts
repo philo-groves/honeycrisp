@@ -370,6 +370,22 @@ function createLoopContextSections(
       content: packet.userCommitments,
     },
     {
+      label: "selected_skills",
+      required: false,
+      content: packet.selectedSkills.map((skill) => ({
+        id: skill.id,
+        version: skill.version,
+        description: skill.description,
+        domainTags: skill.domainTags,
+        instructions: skill.instructions,
+        recommendedToolNames: skill.recommendedToolNames,
+        recommendedActionClasses: skill.recommendedActionClasses,
+        governanceHints: skill.governanceHints,
+        runbook: skill.runbook,
+        selectionReasons: skill.selectionReasons,
+      })),
+    },
+    {
       label: "tool_permissions",
       required: false,
       content: packet.toolPermissions,

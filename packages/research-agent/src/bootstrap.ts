@@ -30,6 +30,8 @@ import type {
   ResearchMemoryControllerDecision,
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
+  ResearchSelectedSkill,
+  ResearchSkillDescriptor,
   ResearchToolDescriptor,
 } from "./types.js";
 
@@ -38,6 +40,8 @@ export interface BootstrapResearchRunInput extends ResearchGoalFrameOptions {
   events?: readonly ResearchEvent[];
   memory?: Partial<ResearchMemorySnapshot>;
   tools?: readonly ResearchToolDescriptor[];
+  skills?: readonly ResearchSkillDescriptor[];
+  selectedSkillIds?: readonly string[];
   governance?: ResearchGovernancePolicy;
   loopExecutor?: ResearchLoopExecutor;
   goalRun?: ResearchGoalRunOptions;
@@ -96,6 +100,10 @@ export async function bootstrapResearchRun(
       events,
       memory,
       ...(input.tools ? { tools: input.tools } : {}),
+      ...(input.skills ? { skills: input.skills } : {}),
+      ...(input.selectedSkillIds
+        ? { selectedSkillIds: input.selectedSkillIds }
+        : {}),
       ...(input.governance ? { governance: input.governance } : {}),
     };
     decision = createFirstRunMemoryController().decide(controllerInput);
@@ -205,6 +213,7 @@ function createMemoryDecisionEvent(
       actionClass: decision.actionClass,
       subGoal: decision.subGoal,
       actionScores: decision.actionScores,
+      selectedSkills: decision.selectedSkills.map(createSelectedSkillEventPayload),
       candidateToolActions: decision.candidateToolActions,
       skippedToolActions: decision.skippedToolActions,
       toolBudget: decision.toolBudget,
@@ -226,6 +235,9 @@ function createContextCompiledEvent(
       activeSubGoalId: decision.contextPacket.activeSubGoal.id,
       evidenceRefs: decision.contextPacket.directEvidence.length,
       openQuestions: decision.contextPacket.openQuestions,
+      selectedSkills: decision.contextPacket.selectedSkills.map(
+        createSelectedSkillEventPayload,
+      ),
       toolPermissions: decision.contextPacket.toolPermissions,
       candidateToolActions: decision.contextPacket.candidateToolActions,
       skippedToolActions: decision.contextPacket.skippedToolActions,
@@ -246,12 +258,27 @@ function createLoopPlannedEvent(
       loopPlanId: loopPlan.id,
       subGoalId: loopPlan.subGoal.id,
       permittedToolClasses: loopPlan.permittedToolClasses,
+      selectedSkills: loopPlan.contextPacket.selectedSkills.map(
+        createSelectedSkillEventPayload,
+      ),
       candidateToolActions: loopPlan.candidateToolActions,
       skippedToolActions: loopPlan.skippedToolActions,
       actionBudget: loopPlan.actionBudget,
       expectedArtifacts: loopPlan.expectedArtifacts,
       writebackRequirements: loopPlan.writebackRequirements,
     },
+  };
+}
+
+function createSelectedSkillEventPayload(skill: ResearchSelectedSkill): {
+  id: string;
+  version?: string;
+  selectionReasons: readonly string[];
+} {
+  return {
+    id: skill.id,
+    ...(skill.version ? { version: skill.version } : {}),
+    selectionReasons: skill.selectionReasons,
   };
 }
 

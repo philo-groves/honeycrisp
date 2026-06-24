@@ -3,6 +3,7 @@ import {
   compileContextPacket,
   normalizeMemorySnapshot,
 } from "./context-packet.js";
+import { selectResearchSkills } from "./skills.js";
 import type {
   ResearchActionClass,
   ResearchActionScore,
@@ -24,6 +25,14 @@ export class FirstRunMemoryController {
     const activeGoal = input.activeGoal ?? input.goalFrame.root;
     const tools = input.tools ?? [];
     const memory = normalizeMemorySnapshot(input.memory, input.events ?? []);
+    const selectedSkills = selectResearchSkills({
+      goalFrame: input.goalFrame,
+      memory,
+      skills: input.skills ?? [],
+      ...(input.selectedSkillIds
+        ? { requestedSkillIds: input.selectedSkillIds }
+        : {}),
+    });
     const actionScores = scoreActionClasses(
       input.goalFrame.riskFlags,
       input.goalFrame.scopeConstraints,
@@ -63,6 +72,7 @@ export class FirstRunMemoryController {
       activeSubGoal: subGoal,
       memory,
       tools,
+      selectedSkills,
       candidateToolActions,
       skippedToolActions,
       writebackExpectations: DEFAULT_WRITEBACK,
@@ -76,6 +86,7 @@ export class FirstRunMemoryController {
       rationale:
         "First-run memory state has no durable recall yet; action selection is based on the goal frame, policy, and available tools.",
       actionScores,
+      selectedSkills,
       candidateToolActions,
       skippedToolActions,
       contextPacket,

@@ -441,6 +441,36 @@ export interface ResearchToolDescriptor {
   metadata?: Record<string, unknown>;
 }
 
+export interface ResearchSkillDescriptor {
+  id: string;
+  version?: string;
+  description: string;
+  domainTags: readonly string[];
+  instructions: string;
+  recommendedToolNames?: readonly string[];
+  recommendedActionClasses?: readonly ResearchActionClass[];
+  governanceHints?: Partial<ResearchGovernancePolicy>;
+  runbook?: string;
+  source?: {
+    kind: "local" | "mcp" | "inline";
+    uri?: string;
+  };
+}
+
+export interface ResearchSelectedSkill {
+  id: string;
+  version?: string;
+  description: string;
+  domainTags: readonly string[];
+  instructions: string;
+  recommendedToolNames: readonly string[];
+  recommendedActionClasses: readonly ResearchActionClass[];
+  governanceHints?: Partial<ResearchGovernancePolicy>;
+  runbook?: string;
+  source?: ResearchSkillDescriptor["source"];
+  selectionReasons: readonly string[];
+}
+
 export interface ResearchToolPermission {
   toolName: string;
   actionClasses: readonly ResearchActionClass[];
@@ -536,6 +566,7 @@ export interface ResearchContextPacket {
   toolPermissions: readonly ResearchToolPermission[];
   toolBudget: ResearchToolBudget;
   governancePolicy?: ResearchGovernancePolicy;
+  selectedSkills: readonly ResearchSelectedSkill[];
   candidateToolActions: readonly ResearchToolAction[];
   skippedToolActions: readonly ResearchSkippedToolAction[];
   writebackExpectations: readonly ResearchMemoryStoreKind[];
@@ -546,6 +577,8 @@ export interface ResearchMemoryControllerInput {
   activeGoal?: ResearchGoalNode;
   memory?: Partial<ResearchMemorySnapshot>;
   tools?: readonly ResearchToolDescriptor[];
+  skills?: readonly ResearchSkillDescriptor[];
+  selectedSkillIds?: readonly string[];
   governance?: ResearchGovernancePolicy;
   events?: readonly ResearchEvent[];
 }
@@ -555,6 +588,7 @@ export interface ResearchMemoryControllerDecision {
   actionClass: ResearchActionClass;
   rationale: string;
   actionScores: readonly ResearchActionScore[];
+  selectedSkills: readonly ResearchSelectedSkill[];
   candidateToolActions: readonly ResearchToolAction[];
   skippedToolActions: readonly ResearchSkippedToolAction[];
   contextPacket: ResearchContextPacket;
@@ -574,6 +608,7 @@ export interface ResearchRequiredContextSection {
     | "contradictions"
     | "open_questions"
     | "user_commitments"
+    | "selected_skills"
     | "tool_permissions"
     | "candidate_tool_actions"
     | "skipped_tool_actions";

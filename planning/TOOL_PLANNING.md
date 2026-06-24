@@ -37,11 +37,11 @@ The project already has a first executable tool slice:
 - Large `tool.observed.result` payloads spill to `.honeycrisp/memory/artifacts/tool-results/` with `rawOutputRef`, byte count, and SHA-256 hash metadata while preserving summaries and evidence extracts inline.
 - Artifact lifecycle cleanup has an auditable `artifact.tombstoned` event helper with optional local file deletion.
 - MCP clients can be adapted into Honeycrisp tools through an allowlisted connector abstraction. MCP tools, resource reads, and resource-template discovery preserve MCP provenance and normalize external content as untrusted output.
+- Skills can be registered, loaded from local `SKILL.md` directories, created from MCP metadata, selected from prompt/memory/user ids, and injected as auditable context. Skill runbooks can appear as candidate procedural refs, but skills cannot grant tool permission or override governance.
 
 Known limitations to address:
 
 - Only local inspection is wired into the CLI by default.
-- Skills are not yet represented in Honeycrisp's own skill registry.
 - The runtime uses Pi model tool calls through `completeSimple`, not the fuller Pi `Agent` lifecycle.
 
 ## Phase 1: Core Tool Contract And Local Inspection Bridge
@@ -176,19 +176,27 @@ Add skills as lightweight domain-alignment bundles that can shape goals, context
 
 Example domains include vulnerability research, mathematics, investigations, literature review, reverse engineering, software maintenance, and data analysis.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Add a `SkillDescriptor` contract with id, description, domain tags, instructions, recommended tools, and governance hints.
-- [ ] Add a skill registry and loader.
-- [ ] Support local filesystem skills.
-- [ ] Support MCP-exposed skill metadata when available.
-- [ ] Select relevant skills from prompt, active goal, memory, and user configuration.
-- [ ] Inject selected skill instructions into context as labeled, auditable alignment context.
-- [ ] Convert skill runbooks into candidate procedural memory refs when useful.
-- [ ] Allow skills to recommend tools without granting permission by themselves.
-- [ ] Record selected skill ids and versions in loop events or captures.
-- [ ] Add tests for skill selection by domain.
-- [ ] Add tests proving skills cannot override governance, tool permissions, or user commitments.
+- [x] Add a `SkillDescriptor` contract with id, description, domain tags, instructions, recommended tools, and governance hints.
+- [x] Add a skill registry and loader.
+- [x] Support local filesystem skills.
+- [x] Support MCP-exposed skill metadata when available.
+- [x] Select relevant skills from prompt, active goal, memory, and user configuration.
+- [x] Inject selected skill instructions into context as labeled, auditable alignment context.
+- [x] Convert skill runbooks into candidate procedural memory refs when useful.
+- [x] Allow skills to recommend tools without granting permission by themselves.
+- [x] Record selected skill ids and versions in loop events or captures.
+- [x] Add tests for skill selection by domain.
+- [x] Add tests proving skills cannot override governance, tool permissions, or user commitments.
+
+Verification:
+
+- `pnpm test` passed with 89 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/12-real-skill-context.json`.
+- The health check selected `parser-vuln-research@0.1`, preserved selected-skill instructions in captured context, executed one planned local inspection, and routed direct evidence into memory.
 
 ## Phase 7: Built-In Tool Families
 

@@ -3,8 +3,10 @@ import type {
   ResearchGovernancePolicy,
   ResearchGoalFrame,
   ResearchGoalNode,
+  ResearchMemoryRef,
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
+  ResearchSelectedSkill,
   ResearchSkippedToolAction,
   ResearchSubGoal,
   ResearchToolBudget,
@@ -20,6 +22,7 @@ export interface CompileContextPacketInput {
   memory: ResearchMemorySnapshot;
   tools: readonly ResearchToolDescriptor[];
   governance?: ResearchGovernancePolicy;
+  selectedSkills?: readonly ResearchSelectedSkill[];
   candidateToolActions?: readonly ResearchToolAction[];
   skippedToolActions?: readonly ResearchSkippedToolAction[];
   writebackExpectations?: readonly ResearchMemoryStoreKind[];
@@ -36,7 +39,10 @@ export function compileContextPacket(
     activeSubGoal: input.activeSubGoal,
     directEvidence: input.memory.directEvidence,
     priorObservations: input.memory.priorEpisodes,
-    candidateProcedures: input.memory.candidateProcedures,
+    candidateProcedures: [
+      ...input.memory.candidateProcedures,
+      ...createSkillProcedureRefs(input.selectedSkills ?? []),
+    ],
     currentHypotheses: input.memory.currentHypotheses,
     contradictions: input.memory.contradictions,
     openQuestions: createOpenQuestions(input.goalFrame, input.memory),
@@ -48,6 +54,7 @@ export function compileContextPacket(
     toolPermissions: createToolPermissions(input.tools, input.governance),
     toolBudget,
     ...(input.governance ? { governancePolicy: input.governance } : {}),
+    selectedSkills: input.selectedSkills ?? [],
     candidateToolActions: input.candidateToolActions ?? [],
     skippedToolActions: input.skippedToolActions ?? [],
     writebackExpectations: input.writebackExpectations ?? [
@@ -56,6 +63,25 @@ export function compileContextPacket(
       "episodic",
     ],
   };
+}
+
+function createSkillProcedureRefs(
+  selectedSkills: readonly ResearchSelectedSkill[],
+): ResearchMemoryRef[] {
+  return selectedSkills.flatMap((skill) => {
+    if (!skill.runbook) {
+      return [];
+    }
+
+    return [{
+      store: "procedural",
+      id: `skill:${skill.id}:runbook`,
+      recordKind: "procedure",
+      status: "candidate",
+      summary: skill.runbook,
+      confidence: 0.75,
+    }];
+  });
 }
 
 export function createEmptyMemorySnapshot(

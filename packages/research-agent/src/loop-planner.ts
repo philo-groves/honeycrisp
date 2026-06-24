@@ -178,6 +178,12 @@ function createRequiredContext(
       required: true,
     },
     {
+      label: "selected_skills",
+      description: "Skill instructions selected for domain alignment.",
+      itemCount: packet.selectedSkills.length,
+      required: false,
+    },
+    {
       label: "tool_permissions",
       description: "Tools and action classes permitted for this loop.",
       itemCount: packet.toolPermissions.length,
@@ -233,6 +239,8 @@ function renderLoopPrompt(input: {
     `Action class: ${decision.actionClass}`,
     `Permitted tool classes: ${toolClasses}`,
     `Action budget: ${JSON.stringify(decision.toolBudget)}`,
+    "Selected skills:",
+    formatSelectedSkills(packet.selectedSkills),
     "Controller-proposed tool actions:",
     formatCandidateToolActions(candidateToolActions),
     "Skipped candidate tool actions:",
@@ -245,6 +253,21 @@ function renderLoopPrompt(input: {
     "Writeback requirements:",
     decision.writeback.map((target) => `- ${target}`).join("\n"),
   ].join("\n");
+}
+
+function formatSelectedSkills(
+  skills: ResearchContextPacket["selectedSkills"],
+): string {
+  if (skills.length === 0) {
+    return "- none";
+  }
+
+  return skills
+    .map(
+      (skill) =>
+        `- ${skill.id}${skill.version ? `@${skill.version}` : ""}: ${skill.description}`,
+    )
+    .join("\n");
 }
 
 function formatCandidateToolActions(

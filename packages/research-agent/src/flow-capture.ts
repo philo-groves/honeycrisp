@@ -13,6 +13,7 @@ import type {
   ResearchLoopProcessingResult,
   ResearchMemoryRef,
   ResearchMemorySnapshot,
+  ResearchSelectedSkill,
   ResearchSkippedToolAction,
   ResearchToolBudget,
   ResearchToolAction,
@@ -76,6 +77,7 @@ export interface ResearchFlowCapture {
     toolPermissions: readonly ResearchToolPermission[];
     toolBudget: ResearchToolBudget;
     governancePolicy?: ResearchGovernancePolicy;
+    selectedSkills: readonly ResearchSelectedSkill[];
     candidateToolActions: readonly ResearchToolAction[];
     skippedToolActions: readonly ResearchSkippedToolAction[];
   };
@@ -196,6 +198,7 @@ function createContextCapture(
     ...(contextPacket.governancePolicy
       ? { governancePolicy: contextPacket.governancePolicy }
       : {}),
+    selectedSkills: contextPacket.selectedSkills,
     candidateToolActions: contextPacket.candidateToolActions,
     skippedToolActions: contextPacket.skippedToolActions,
   };

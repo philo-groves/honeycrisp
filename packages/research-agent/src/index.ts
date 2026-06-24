@@ -105,6 +105,18 @@ export type {
   ResearchMcpToolDescription,
 } from "./mcp-tools.js";
 export {
+  createResearchSkillRegistry,
+  createResearchSkillsFromMcpMetadata,
+  loadResearchSkillFromDirectory,
+  loadResearchSkillsFromDirectory,
+  ResearchSkillRegistry,
+  selectResearchSkills,
+} from "./skills.js";
+export type {
+  McpSkillMetadata,
+  SelectResearchSkillsInput,
+} from "./skills.js";
+export {
   deleteMemoryRecordUnderPolicy,
   expireMemoryRecord,
   supersedeMemoryRecord,
@@ -290,6 +302,7 @@ export type {
   ResearchProspectiveMemoryRecord,
   ResearchRawEventPayload,
   ResearchSemanticClaimRecord,
+  ResearchSelectedSkill,
   ResearchLoopPlan,
   ResearchLoopContextSection,
   ResearchLoopExecutionMode,
@@ -302,6 +315,7 @@ export type {
   ResearchLoopProcessingStatus,
   ResearchRequiredContextSection,
   ResearchSubGoal,
+  ResearchSkillDescriptor,
   ResearchToolBudget,
   ResearchToolAction,
   ResearchToolDescriptor,
