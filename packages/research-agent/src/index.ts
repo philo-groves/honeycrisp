@@ -84,6 +84,21 @@ export {
   FirstRunMemoryController,
 } from "./memory-controller.js";
 export {
+  computeMemoryEventPayloadHash,
+  createMemorySnapshotFromEventLog,
+  createSqliteMemoryEventLog,
+  getDefaultMemoryArtifactDirectoryPath,
+  getDefaultMemoryDatabasePath,
+  SqliteMemoryEventLog,
+  validateMemoryEventForAppend,
+} from "./memory-event-log.js";
+export type {
+  MemoryEventLog,
+  MemoryEventRejectionHook,
+  MemoryEventSequenceRange,
+  SqliteMemoryEventLogOptions,
+} from "./memory-event-log.js";
+export {
   createResearchMemoryProvenance,
   isResearchDerivedMemoryStatus,
   isResearchMemoryRecordKind,

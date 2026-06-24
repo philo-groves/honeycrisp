@@ -60,6 +60,8 @@ Design constraints:
 
 Add a `MemoryEventLog` abstraction that stores accepted events before summarization or consolidation.
 
+Status: completed on 2026-06-24.
+
 Use SQLite as the durable index and source-of-truth event store, while preserving append-only event-log semantics. JSONL is no longer the preferred primary implementation because later memory components will need indexed queries over events, records, statuses, confidence, graph edges, and audit relationships.
 
 Storage direction:
@@ -121,32 +123,32 @@ Event shape:
 
 Checklist:
 
-- [ ] Choose and add the SQLite dependency or Node runtime API used by the repository.
-- [ ] Add a `MemoryEventLog` interface that hides the storage backend.
-- [ ] Add a SQLite-backed implementation for accepted raw events.
-- [ ] Create `.honeycrisp/memory/memory.sqlite` and parent directories on demand.
-- [ ] Add schema initialization with idempotent migrations.
-- [ ] Append events in deterministic sequence order.
-- [ ] Reject writes that try to reuse an `event_id`.
-- [ ] Validate accepted event kind before append.
-- [ ] Validate event payload shape before append.
-- [ ] Compute and persist `payloadHash`.
-- [ ] Persist artifact references without storing large artifacts inline.
-- [ ] Read by event id.
-- [ ] Read by sequence range.
-- [ ] Read by goal id.
-- [ ] Read by loop id.
-- [ ] Read by subgoal id.
-- [ ] Read by event kind.
-- [ ] Add redaction or rejection hooks for disallowed event kinds.
-- [ ] Ensure private thought-like data is not accepted into durable storage.
-- [ ] Ensure restart-safe loading from SQLite.
-- [ ] Keep the existing in-memory snapshot compatibility path working.
-- [ ] Add tests for deterministic append order.
-- [ ] Add tests for restart reload preserving order.
-- [ ] Add tests for invalid payload rejection.
-- [ ] Add tests for private thought-like data rejection.
-- [ ] Add tests proving accepted rows are not modified by ordinary appends.
+- [x] Choose and add the SQLite dependency or Node runtime API used by the repository.
+- [x] Add a `MemoryEventLog` interface that hides the storage backend.
+- [x] Add a SQLite-backed implementation for accepted raw events.
+- [x] Create `.honeycrisp/memory/memory.sqlite` and parent directories on demand.
+- [x] Add schema initialization with idempotent migrations.
+- [x] Append events in deterministic sequence order.
+- [x] Reject writes that try to reuse an `event_id`.
+- [x] Validate accepted event kind before append.
+- [x] Validate event payload shape before append.
+- [x] Compute and persist `payloadHash`.
+- [x] Persist artifact references without storing large artifacts inline.
+- [x] Read by event id.
+- [x] Read by sequence range.
+- [x] Read by goal id.
+- [x] Read by loop id.
+- [x] Read by subgoal id.
+- [x] Read by event kind.
+- [x] Add redaction or rejection hooks for disallowed event kinds.
+- [x] Ensure private thought-like data is not accepted into durable storage.
+- [x] Ensure restart-safe loading from SQLite.
+- [x] Keep the existing in-memory snapshot compatibility path working.
+- [x] Add tests for deterministic append order.
+- [x] Add tests for restart reload preserving order.
+- [x] Add tests for invalid payload rejection.
+- [x] Add tests for private thought-like data rejection.
+- [x] Add tests proving accepted rows are not modified by ordinary appends.
 
 ## Phase 3: Add The Memory Write Pipeline
 
@@ -552,19 +554,19 @@ Checklist:
 
 ## Next Implementation Increment
 
-The next implementation slice should be phase 2 only:
+The next implementation slice should be phase 3 only:
 
-1. Add the `MemoryEventLog` interface.
-2. Add the SQLite-backed append-only event log.
-3. Keep artifacts filesystem-backed and referenced from SQLite.
-4. Add validation and private-thought rejection before append.
+1. Add the `MemoryWritePipeline` interface.
+2. Convert accepted events into typed candidate memory records.
+3. Preserve evidence-for and evidence-against separately for claims and hypotheses.
+4. Keep procedure records as candidates until repeated usefulness or explicit promotion.
 5. Keep the existing memory-routing and context snapshot behavior compatible.
 
 Acceptance criteria:
 
 - Existing tests continue to pass.
-- Raw accepted events are durably append-only in SQLite.
-- Event sequences are deterministic and restart-safe.
-- Events can be read by id, sequence range, goal id, loop id, subgoal id, and kind.
-- Private thought traces are not durably stored.
-- Context packets still compile successfully from the existing memory output.
+- Tool observations become evidence-backed records.
+- Model claims are stored as candidate claims, not direct evidence.
+- Model hypotheses keep evidence-for and evidence-against separate.
+- Goal completion or stop events produce episodic summaries.
+- Context packets still compile successfully from the derived memory output.
