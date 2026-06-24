@@ -374,6 +374,14 @@ function createDeterministicResearchTrace(
       supports: [loopPlan.subGoal.id],
       note: "Direct evidence supplied to the current bounded loop.",
     })),
+    goalAssessment: {
+      status: "continue",
+      rationale:
+        "The deterministic executor does not prove root goal completion.",
+      unsatisfiedGateIds: loopPlan.contextPacket.goalFrame.root.completionGates.map(
+        (gate) => gate.id,
+      ),
+    },
   });
 }
 

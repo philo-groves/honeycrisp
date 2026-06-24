@@ -46,6 +46,7 @@ interface ParsedArgs {
   inspectAction: LocalInspectionAction;
   inspectBytes: number | undefined;
   capturePath: string | undefined;
+  goalLoops: number | null | undefined;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -64,6 +65,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let inspectAction: LocalInspectionAction = "read_text";
   let inspectBytes: number | undefined;
   let capturePath: string | undefined;
+  let goalLoops: number | null | undefined;
   const successGates: string[] = [];
   const failureOrStopGates: string[] = [];
   const scopeConstraints: string[] = [];
@@ -135,6 +137,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--capture") {
       capturePath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--goal-loops") {
+      goalLoops = parseGoalLoops(readOptionValue(argv, index, arg));
+      index += 1;
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "-h" || arg === "--help") {
@@ -170,6 +175,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     inspectAction,
     inspectBytes,
     capturePath,
+    goalLoops,
     json,
     help,
     version,
@@ -196,6 +202,19 @@ function parseInspectionAction(value: string): LocalInspectionAction {
   }
 
   throw new Error("--inspect-action must be one of list, read_text.");
+}
+
+function parseGoalLoops(value: string): number | null {
+  if (value === "none" || value === "unbounded") {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error("--goal-loops requires a positive integer, none, or unbounded.");
+  }
+
+  return parsed;
 }
 
 function readOptionValue(
@@ -233,6 +252,7 @@ function usage(): string {
     "  --inspect-action <a>   Inspection action: read_text or list",
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
     "  --capture <path>       Write a local flow-capture JSON artifact",
+    "  --goal-loops <n|none>  Max loops, or none for no configured loop limit",
     "  --json                 Print the initialized run as JSON",
     "  -h, --help             Show help",
     "  -v, --version          Show version",
@@ -294,6 +314,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       ...inspectionState,
       ...(inspectionSeed.tools.length > 0 ? { tools: inspectionSeed.tools } : {}),
       ...(loopExecutor ? { loopExecutor } : {}),
+      ...(args.goalLoops !== undefined
+        ? { goalRun: { maxLoops: args.goalLoops } }
+        : {}),
     });
 
     if (args.capturePath) {

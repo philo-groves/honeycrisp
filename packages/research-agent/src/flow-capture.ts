@@ -36,6 +36,16 @@ export interface ResearchFlowCapture {
     subGoalObjective: string;
     rationale: string;
   };
+  goalRun: {
+    status: string;
+    terminalReason?: string;
+    loopsUsed: number;
+    maxLoops: number | null;
+    safetyMaxLoops: number;
+    blockedThreshold: number;
+    consecutiveBlockedCount: number;
+    statusReason?: string;
+  };
   loop: {
     planId: string;
     resultId: string;
@@ -97,6 +107,20 @@ export function createResearchFlowCapture(
       subGoalId: result.decision.subGoal.id,
       subGoalObjective: result.decision.subGoal.objective,
       rationale: result.decision.rationale,
+    },
+    goalRun: {
+      status: result.goalRun.state.status,
+      ...(result.goalRun.state.terminalReason
+        ? { terminalReason: result.goalRun.state.terminalReason }
+        : {}),
+      loopsUsed: result.goalRun.state.loopsUsed,
+      maxLoops: result.goalRun.state.maxLoops,
+      safetyMaxLoops: result.goalRun.state.safetyMaxLoops,
+      blockedThreshold: result.goalRun.state.blockedThreshold,
+      consecutiveBlockedCount: result.goalRun.state.consecutiveBlockedCount,
+      ...(result.goalRun.state.statusReason
+        ? { statusReason: result.goalRun.state.statusReason }
+        : {}),
     },
     loop: createLoopCapture(result.loopResult),
     context: createContextCapture(result.decision.contextPacket),

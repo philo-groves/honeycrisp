@@ -1,8 +1,12 @@
 export type ResearchGoalStatus =
   | "pending"
   | "active"
+  | "paused"
   | "complete"
   | "blocked"
+  | "stopped"
+  | "usage_limited"
+  | "budget_limited"
   | "superseded";
 
 export type ResearchActionClass =
@@ -35,6 +39,7 @@ export type ResearchToolSideEffect =
 
 export type ResearchAcceptedRawEventKind =
   | "goal.created"
+  | "goal.updated"
   | "memory.decision"
   | "memory.routed"
   | "context.compiled"
@@ -103,6 +108,23 @@ export interface ResearchEvidenceLink {
   note?: string;
 }
 
+export type ResearchGoalAssessmentStatus =
+  | "continue"
+  | "ready_to_respond"
+  | "complete"
+  | "blocked"
+  | "stopped";
+
+export interface ResearchGoalAssessment {
+  status: ResearchGoalAssessmentStatus;
+  rationale: string;
+  satisfiedGateIds?: readonly string[];
+  unsatisfiedGateIds?: readonly string[];
+  triggeredStopGateIds?: readonly string[];
+  blockerKey?: string;
+  evidenceRefIds?: readonly string[];
+}
+
 export interface ResearchTrace {
   observations: readonly ResearchTraceItem[];
   inferences: readonly ResearchTraceItem[];
@@ -112,6 +134,7 @@ export interface ResearchTrace {
   uncertainty: readonly ResearchTraceItem[];
   nextQuestions: readonly ResearchTraceItem[];
   evidenceLinks: readonly ResearchEvidenceLink[];
+  goalAssessment: ResearchGoalAssessment;
 }
 
 export interface ResearchGoalNode {
@@ -355,4 +378,51 @@ export interface ResearchLoopProcessingResult {
   completionGateResults: readonly ResearchCompletionGateResult[];
   followUpRecommendation: ResearchLoopFollowUpRecommendation;
   followUpRationale: string;
+}
+
+export type ResearchGoalRunTerminalReason =
+  | "complete"
+  | "blocked"
+  | "stop_gate"
+  | "ready_to_respond"
+  | "loop_limit"
+  | "safety_limit";
+
+export interface ResearchGoalRunOptions {
+  maxLoops?: number | null;
+  safetyMaxLoops?: number;
+  minLoopsBeforeRespond?: number;
+  blockedThreshold?: number;
+}
+
+export interface ResearchGoalRunState {
+  goalId: string;
+  objective: string;
+  status: ResearchGoalStatus;
+  startedAt: string;
+  updatedAt: string;
+  loopsUsed: number;
+  maxLoops: number | null;
+  safetyMaxLoops: number;
+  minLoopsBeforeRespond: number;
+  blockedThreshold: number;
+  consecutiveBlockedCount: number;
+  lastBlockerKey?: string;
+  terminalReason?: ResearchGoalRunTerminalReason;
+  statusReason?: string;
+}
+
+export interface ResearchGoalRunIteration {
+  index: number;
+  decision: ResearchMemoryControllerDecision;
+  loopPlan: ResearchLoopPlan;
+  loopResult: ResearchLoopProcessingResult;
+  statusBefore: ResearchGoalStatus;
+  statusAfter: ResearchGoalStatus;
+  continuationReason: string;
+}
+
+export interface ResearchGoalRunResult {
+  state: ResearchGoalRunState;
+  iterations: readonly ResearchGoalRunIteration[];
 }

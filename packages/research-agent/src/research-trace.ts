@@ -2,6 +2,7 @@ import { createId, nowIso } from "./ids.js";
 import type {
   ResearchEvent,
   ResearchEvidenceLink,
+  ResearchGoalAssessment,
   ResearchLoopProcessingResult,
   ResearchTrace,
   ResearchTraceItem,
@@ -36,6 +37,11 @@ export function createEmptyResearchTrace(): ResearchTrace {
     uncertainty: [],
     nextQuestions: [],
     evidenceLinks: [],
+    goalAssessment: {
+      status: "continue",
+      rationale:
+        "No visible goal assessment was supplied; continue unless the runtime proves a terminal condition.",
+    },
   };
 }
 
@@ -56,6 +62,7 @@ export function normalizeResearchTrace(
     uncertainty: normalizeTraceItems(trace.uncertainty),
     nextQuestions: normalizeTraceItems(trace.nextQuestions),
     evidenceLinks: normalizeEvidenceLinks(trace.evidenceLinks),
+    goalAssessment: normalizeGoalAssessment(trace.goalAssessment),
   };
 }
 
@@ -100,7 +107,7 @@ export function createResearchTraceEventsFromLoopResult(
 }
 
 export function createResearchTraceEvents(
-  trace: ResearchTrace,
+  trace: Partial<ResearchTrace>,
   options: {
     goalId?: string;
     timestamp?: string;
@@ -110,9 +117,10 @@ export function createResearchTraceEvents(
 ): ResearchEvent[] {
   const timestamp = options.timestamp ?? nowIso();
   const events: ResearchEvent[] = [];
+  const normalizedTrace = normalizeResearchTrace(trace);
 
   for (const key of traceArrayKeys) {
-    for (const item of trace[key]) {
+    for (const item of normalizedTrace[key]) {
       events.push(
         createTraceItemEvent({
           key,
@@ -124,7 +132,7 @@ export function createResearchTraceEvents(
     }
   }
 
-  for (const link of trace.evidenceLinks) {
+  for (const link of normalizedTrace.evidenceLinks) {
     events.push(
       createTraceLinkEvent({
         link,
@@ -133,6 +141,14 @@ export function createResearchTraceEvents(
       }),
     );
   }
+
+  events.push(
+    createTraceAssessmentEvent({
+      assessment: normalizedTrace.goalAssessment,
+      timestamp,
+      ...options,
+    }),
+  );
 
   return events;
 }
@@ -146,6 +162,52 @@ export function renderResearchTraceContract(): string {
     JSON.stringify(createEmptyResearchTrace(), null, 2),
     "```",
   ].join("\n");
+}
+
+function createTraceAssessmentEvent(input: {
+  assessment: ResearchGoalAssessment;
+  timestamp: string;
+  goalId?: string;
+  sourceLoopResultId?: string;
+  sourceLoopPlanId?: string;
+}): ResearchEvent {
+  return {
+    id: createId("event"),
+    kind:
+      input.assessment.status === "complete" ||
+      input.assessment.status === "blocked"
+        ? "model.claim"
+        : "model.visible_note",
+    timestamp: input.timestamp,
+    ...(input.goalId ? { goalId: input.goalId } : {}),
+    payload: {
+      traceKind: "goalAssessment",
+      status: input.assessment.status,
+      summary: `goal assessment: ${input.assessment.status} - ${input.assessment.rationale}`,
+      rationale: input.assessment.rationale,
+      ...(input.assessment.satisfiedGateIds
+        ? { satisfiedGateIds: input.assessment.satisfiedGateIds }
+        : {}),
+      ...(input.assessment.unsatisfiedGateIds
+        ? { unsatisfiedGateIds: input.assessment.unsatisfiedGateIds }
+        : {}),
+      ...(input.assessment.triggeredStopGateIds
+        ? { triggeredStopGateIds: input.assessment.triggeredStopGateIds }
+        : {}),
+      ...(input.assessment.blockerKey
+        ? { blockerKey: input.assessment.blockerKey }
+        : {}),
+      ...(input.assessment.evidenceRefIds
+        ? { evidenceRefIds: input.assessment.evidenceRefIds }
+        : {}),
+      ...(input.sourceLoopResultId
+        ? { sourceLoopResultId: input.sourceLoopResultId }
+        : {}),
+      ...(input.sourceLoopPlanId
+        ? { sourceLoopPlanId: input.sourceLoopPlanId }
+        : {}),
+    },
+  };
 }
 
 function createTraceItemEvent(input: {
@@ -281,6 +343,58 @@ function normalizeEvidenceLink(
       : {}),
     ...(typeof link.note === "string" ? { note: link.note.trim() } : {}),
   };
+}
+
+function normalizeGoalAssessment(
+  assessment: ResearchGoalAssessment | undefined,
+): ResearchGoalAssessment {
+  if (!isRecord(assessment)) {
+    return createEmptyResearchTrace().goalAssessment;
+  }
+
+  const status = normalizeGoalAssessmentStatus(assessment.status);
+  const rationale =
+    typeof assessment.rationale === "string" &&
+    assessment.rationale.trim().length > 0
+      ? assessment.rationale.trim()
+      : "No rationale supplied.";
+
+  return {
+    status,
+    rationale,
+    ...(Array.isArray(assessment.satisfiedGateIds)
+      ? { satisfiedGateIds: assessment.satisfiedGateIds.filter(isString) }
+      : {}),
+    ...(Array.isArray(assessment.unsatisfiedGateIds)
+      ? { unsatisfiedGateIds: assessment.unsatisfiedGateIds.filter(isString) }
+      : {}),
+    ...(Array.isArray(assessment.triggeredStopGateIds)
+      ? { triggeredStopGateIds: assessment.triggeredStopGateIds.filter(isString) }
+      : {}),
+    ...(typeof assessment.blockerKey === "string" &&
+    assessment.blockerKey.trim().length > 0
+      ? { blockerKey: assessment.blockerKey.trim() }
+      : {}),
+    ...(Array.isArray(assessment.evidenceRefIds)
+      ? { evidenceRefIds: assessment.evidenceRefIds.filter(isString) }
+      : {}),
+  };
+}
+
+function normalizeGoalAssessmentStatus(
+  status: unknown,
+): ResearchGoalAssessment["status"] {
+  if (
+    status === "continue" ||
+    status === "ready_to_respond" ||
+    status === "complete" ||
+    status === "blocked" ||
+    status === "stopped"
+  ) {
+    return status;
+  }
+
+  return "continue";
 }
 
 function extractTraceJson(text: string): string | undefined {

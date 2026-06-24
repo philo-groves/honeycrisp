@@ -113,6 +113,303 @@ test("flow capture exposes event memory context and trace snapshots", async () =
   );
 });
 
+test("goal runtime continues active goals until loop budget when incomplete", async () => {
+  const result = await bootstrapResearchRun({
+    prompt: [
+      "Goal: Build a multi-loop research outline",
+      "Success gates: provide final evidence-backed answer",
+      "Scope constraints: no external search",
+    ].join("\n"),
+    goalRun: {
+      maxLoops: 2,
+    },
+  });
+
+  assert.equal(result.loopResults.length, 2);
+  assert.equal(result.goalRun.state.status, "active");
+  assert.equal(result.goalRun.state.terminalReason, "loop_limit");
+  assert.equal(result.goalRun.state.loopsUsed, 2);
+  assert.equal(
+    result.events.filter((event) => event.kind === "goal.updated").length,
+    2,
+  );
+  assert.ok(
+    result.loopPlan.loopPrompt.includes("Goal continuation contract:"),
+  );
+});
+
+test("goal runtime marks complete only when all root gates are visibly satisfied", async () => {
+  const completeExecutor = {
+    name: "complete-goal-test",
+    async execute(input) {
+      const gateIds =
+        input.loopPlan.contextPacket.goalFrame.root.completionGates.map(
+          (gate) => gate.id,
+        );
+
+      return {
+        text: "All gates satisfied.",
+        artifacts: [],
+        evidenceRefs: [],
+        claimRefs: [],
+        followUpActions: [],
+        researchTrace: {
+          observations: [{ text: "Completion evidence was checked." }],
+          inferences: [],
+          hypotheses: [],
+          assumptions: [],
+          rejectedPaths: [],
+          uncertainty: [],
+          nextQuestions: [],
+          evidenceLinks: [],
+          goalAssessment: {
+            status: "complete",
+            rationale: "All root gates have explicit satisfied ids.",
+            satisfiedGateIds: gateIds,
+          },
+        },
+      };
+    },
+  };
+  const result = await bootstrapResearchRun({
+    prompt: "Goal: Finish the proof\nSuccess gates: proof checked",
+    loopExecutor: completeExecutor,
+    goalRun: {
+      maxLoops: 3,
+    },
+  });
+
+  assert.equal(result.loopResults.length, 1);
+  assert.equal(result.goalRun.state.status, "complete");
+  assert.equal(result.goalRun.state.terminalReason, "complete");
+});
+
+test("goal runtime blocks only after repeated identical blockers", async () => {
+  const blockingExecutor = {
+    name: "blocking-goal-test",
+    async execute() {
+      throw new Error("waiting on missing fixture");
+    },
+  };
+  const result = await bootstrapResearchRun({
+    prompt: "Goal: Inspect a missing fixture\nScope constraints: local only",
+    loopExecutor: blockingExecutor,
+    goalRun: {
+      maxLoops: 3,
+      blockedThreshold: 3,
+    },
+  });
+
+  assert.equal(result.loopResults.length, 3);
+  assert.equal(result.goalRun.state.status, "blocked");
+  assert.equal(result.goalRun.state.terminalReason, "blocked");
+  assert.equal(result.goalRun.state.consecutiveBlockedCount, 3);
+});
+
+test("goal runtime can complete an unbounded bounded function walk", async () => {
+  const sourceText = [
+    "export function parseAlpha(input: string) { return input.trim(); }",
+    "export function parseBeta(input: string) { return input.toUpperCase(); }",
+    "export function parseGamma(input: string) { return input.length; }",
+  ].join("\n");
+  const functionNames = [...sourceText.matchAll(/function\s+([A-Za-z0-9_]+)/g)]
+    .map((match) => match[1])
+    .filter(Boolean);
+  let index = 0;
+  const walkedFunctions = [];
+  const functionWalkExecutor = {
+    name: "function-walk-test",
+    async execute(input) {
+      const functionName = functionNames[index];
+      assert.ok(functionName, "expected one function per dynamic loop");
+      index += 1;
+      walkedFunctions.push(functionName);
+      const complete = walkedFunctions.length === functionNames.length;
+      const gateIds =
+        input.loopPlan.contextPacket.goalFrame.root.completionGates.map(
+          (gate) => gate.id,
+        );
+
+      return {
+        text: `Walked ${functionName}: identified inputs, output, and local behavior.`,
+        artifacts: [`function note: ${functionName}`],
+        evidenceRefs: [],
+        claimRefs: [],
+        followUpActions: complete
+          ? []
+          : [`Walk next function: ${functionNames[index]}`],
+        researchTrace: {
+          observations: [
+            {
+              text: `Walked function ${functionName}.`,
+              confidence: 1,
+            },
+          ],
+          inferences: [
+            {
+              text: `${functionName} has a simple single-return behavior in the fixture.`,
+              confidence: 0.8,
+            },
+          ],
+          hypotheses: [],
+          assumptions: [],
+          rejectedPaths: [],
+          uncertainty: complete
+            ? []
+            : [
+                {
+                  text: `Remaining functions: ${functionNames
+                    .slice(index)
+                    .join(", ")}`,
+                  confidence: 1,
+                },
+              ],
+          nextQuestions: complete
+            ? []
+            : [
+                {
+                  text: `Walk ${functionNames[index]} next.`,
+                  confidence: 1,
+                },
+              ],
+          evidenceLinks: [],
+          goalAssessment: complete
+            ? {
+                status: "complete",
+                rationale: `Walked all functions: ${walkedFunctions.join(", ")}.`,
+                satisfiedGateIds: gateIds,
+              }
+            : {
+                status: "continue",
+                rationale: `Walked ${functionName}; more functions remain.`,
+                unsatisfiedGateIds: gateIds,
+              },
+        },
+      };
+    },
+  };
+
+  const result = await bootstrapResearchRun({
+    prompt: [
+      "Goal: Walk each function in the tiny fixture source file",
+      "Success gates: every function has an individual walk note; final assessment lists all walked functions",
+      "Scope constraints: fixture source only",
+      "Evidence: one loop per function",
+    ].join("\n"),
+    loopExecutor: functionWalkExecutor,
+    goalRun: {
+      maxLoops: null,
+      safetyMaxLoops: 10,
+    },
+  });
+
+  assert.deepEqual(walkedFunctions, functionNames);
+  assert.equal(result.loopResults.length, functionNames.length);
+  assert.equal(result.goalRun.state.maxLoops, null);
+  assert.equal(result.goalRun.state.terminalReason, "complete");
+  assert.equal(result.goalRun.state.status, "complete");
+  assert.equal(result.goalRun.state.loopsUsed, functionNames.length);
+  assert.deepEqual(
+    result.loopResults.map((loop) => loop.output.researchTrace?.observations[0]?.text),
+    functionNames.map((name) => `Walked function ${name}.`),
+  );
+  assert.equal(
+    result.events.filter((event) => event.kind === "goal.updated").length,
+    functionNames.length,
+  );
+});
+
+test("goal runtime stops a function walk when a stop gate is reached", async () => {
+  const functionNames = ["parseAlpha", "parseBeta", "parseGamma"];
+  const walkedFunctions = [];
+  let index = 0;
+  const stopAfterTwoExecutor = {
+    name: "function-walk-stop-test",
+    async execute(input) {
+      const functionName = functionNames[index];
+      assert.ok(functionName, "expected a function to walk");
+      index += 1;
+      walkedFunctions.push(functionName);
+      const shouldStop = walkedFunctions.length >= 2;
+      const stopGateIds =
+        input.loopPlan.contextPacket.goalFrame.root.stopGates.map(
+          (gate) => gate.id,
+        );
+      const successGateIds =
+        input.loopPlan.contextPacket.goalFrame.root.completionGates.map(
+          (gate) => gate.id,
+        );
+
+      return {
+        text: `Walked ${functionName}.`,
+        artifacts: [`function note: ${functionName}`],
+        evidenceRefs: [],
+        claimRefs: [],
+        followUpActions: shouldStop ? [] : [`Walk next function: ${functionNames[index]}`],
+        researchTrace: {
+          observations: [{ text: `Walked function ${functionName}.`, confidence: 1 }],
+          inferences: [],
+          hypotheses: [],
+          assumptions: [],
+          rejectedPaths: shouldStop
+            ? [
+                {
+                  text: "Skipping remaining functions because the max-two stop gate was reached.",
+                  confidence: 1,
+                },
+              ]
+            : [],
+          uncertainty: shouldStop
+            ? []
+            : [
+                {
+                  text: `Remaining functions: ${functionNames.slice(index).join(", ")}`,
+                  confidence: 1,
+                },
+              ],
+          nextQuestions: shouldStop
+            ? []
+            : [{ text: `Walk ${functionNames[index]} next.`, confidence: 1 }],
+          evidenceLinks: [],
+          goalAssessment: shouldStop
+            ? {
+                status: "stopped",
+                rationale: "Stop condition reached after walking two functions.",
+                triggeredStopGateIds: stopGateIds,
+                unsatisfiedGateIds: successGateIds,
+              }
+            : {
+                status: "continue",
+                rationale: `Walked ${functionName}; stop condition is not reached yet.`,
+                unsatisfiedGateIds: successGateIds,
+              },
+        },
+      };
+    },
+  };
+
+  const result = await bootstrapResearchRun({
+    prompt: [
+      "Goal: Walk each function in the tiny fixture source file",
+      "Success gates: every function has an individual walk note; final assessment lists all walked functions",
+      "Stop gates: stop after walking a maximum of two functions",
+      "Scope constraints: fixture source only",
+    ].join("\n"),
+    loopExecutor: stopAfterTwoExecutor,
+    goalRun: {
+      maxLoops: null,
+      safetyMaxLoops: 10,
+    },
+  });
+
+  assert.deepEqual(walkedFunctions, ["parseAlpha", "parseBeta"]);
+  assert.equal(result.loopResults.length, 2);
+  assert.equal(result.goalRun.state.status, "stopped");
+  assert.equal(result.goalRun.state.terminalReason, "stop_gate");
+  assert.equal(result.goalRun.state.maxLoops, null);
+  assert.ok(!walkedFunctions.includes("parseGamma"));
+});
+
 test("raw event acceptance excludes private thought traces", () => {
   assert.equal(isAcceptedRawEventKind("model.visible_note"), true);
   assert.equal(isAcceptedRawEventKind("model.hypothesis"), true);

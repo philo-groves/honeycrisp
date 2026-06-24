@@ -40,6 +40,15 @@ export type {
 } from "./flow-capture.js";
 export { createResearchGoalFrame } from "./goal.js";
 export {
+  advanceGoalRunState,
+  appendGoalContinuationToLoopPlan,
+  createGoalIteration,
+  createGoalRunState,
+  renderGoalContinuationPrompt,
+  shouldContinueGoal,
+  updateGoalFrameFromRunState,
+} from "./goal-runtime.js";
+export {
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
 } from "./local-inspection.js";
@@ -100,6 +109,13 @@ export type {
   ResearchGoalFrame,
   ResearchGoalFrameOptions,
   ResearchGoalNode,
+  ResearchGoalAssessment,
+  ResearchGoalAssessmentStatus,
+  ResearchGoalRunIteration,
+  ResearchGoalRunOptions,
+  ResearchGoalRunResult,
+  ResearchGoalRunState,
+  ResearchGoalRunTerminalReason,
   ResearchGoalStatus,
   ResearchMemoryControllerDecision,
   ResearchMemoryControllerInput,

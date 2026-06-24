@@ -11,6 +11,7 @@ import type {
 
 export const ACCEPTED_RAW_EVENT_KINDS = [
   "goal.created",
+  "goal.updated",
   "memory.decision",
   "memory.routed",
   "context.compiled",
@@ -48,12 +49,16 @@ export function routeEventToMemory(
         }),
       ];
     case "loop.processed":
+    case "goal.updated":
       return [
         createRefRoute({
           event,
           target: "priorEpisodes",
           store: "episodic",
-          reason: "Completed loop output becomes an episodic trajectory.",
+          reason:
+            event.kind === "goal.updated"
+              ? "Goal status transitions are part of the research trajectory."
+              : "Completed loop output becomes an episodic trajectory.",
           confidence: 0.8,
         }),
       ];

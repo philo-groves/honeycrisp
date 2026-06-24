@@ -53,6 +53,7 @@ pnpm start \
   --inspect-root /path/to/project \
   --inspect-path /path/to/project/src/file.c \
   --inspect-bytes 1024 \
+  --goal-loops 2 \
   --capture .honeycrisp-runs/example-flow.json \
   -p "Goal: Triage local source evidence"
 ```
@@ -61,6 +62,13 @@ The capture JSON records the event timeline, routed memory counts, context
 packet view, loop result, and visible research trace. It preserves reasoning
 consequences such as observations, inferences, hypotheses, assumptions, and
 uncertainty, not private model thought traces.
+
+Goal loops are runtime-controlled. Honeycrisp adds a Codex-style continuation
+contract to each loop, tracks `goal.updated` events, and keeps an incomplete goal
+active until completion evidence, a strict repeated-blocker threshold, a
+user-response point, or the configured `--goal-loops` budget stops the run. Use
+`--goal-loops none` for no configured loop limit; an internal safety ceiling
+still prevents accidental infinite runs.
 
 ## Auth
 

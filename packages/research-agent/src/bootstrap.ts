@@ -1,4 +1,12 @@
 import { createResearchGoalFrame } from "./goal.js";
+import {
+  advanceGoalRunState,
+  appendGoalContinuationToLoopPlan,
+  createGoalIteration,
+  createGoalRunState,
+  shouldContinueGoal,
+  updateGoalFrameFromRunState,
+} from "./goal-runtime.js";
 import { createId, nowIso } from "./ids.js";
 import { planResearchLoop } from "./loop-planner.js";
 import { processResearchLoop } from "./loop-processor.js";
@@ -9,6 +17,9 @@ import type {
   ResearchEvent,
   ResearchGoalFrame,
   ResearchGoalFrameOptions,
+  ResearchGoalNode,
+  ResearchGoalRunOptions,
+  ResearchGoalRunResult,
   ResearchLoopPlan,
   ResearchLoopProcessingResult,
   ResearchMemoryControllerDecision,
@@ -24,6 +35,7 @@ export interface BootstrapResearchRunInput extends ResearchGoalFrameOptions {
   memory?: Partial<ResearchMemorySnapshot>;
   tools?: readonly ResearchToolDescriptor[];
   loopExecutor?: ResearchLoopExecutor;
+  goalRun?: ResearchGoalRunOptions;
 }
 
 export interface BootstrapResearchRunResult {
@@ -31,6 +43,8 @@ export interface BootstrapResearchRunResult {
   decision: ResearchMemoryControllerDecision;
   loopPlan: ResearchLoopPlan;
   loopResult: ResearchLoopProcessingResult;
+  goalRun: ResearchGoalRunResult;
+  loopResults: readonly ResearchLoopProcessingResult[];
   events: readonly ResearchEvent[];
   memory: ResearchMemorySnapshot;
   piBase: {
@@ -44,7 +58,7 @@ export interface BootstrapResearchRunResult {
 export async function bootstrapResearchRun(
   input: BootstrapResearchRunInput,
 ): Promise<BootstrapResearchRunResult> {
-  const goalFrame = createResearchGoalFrame(input.prompt, input);
+  let goalFrame = createResearchGoalFrame(input.prompt, input);
   const events: ResearchEvent[] = [
     ...(input.events ?? []),
     {
@@ -54,90 +68,96 @@ export async function bootstrapResearchRun(
       goalId: goalFrame.root.id,
       payload: {
         objective: goalFrame.root.objective,
+        status: "active",
       },
     },
   ];
-  const initialMemory = routeEventsToMemorySnapshot(events, input.memory);
-  const controllerInput = {
-    goalFrame,
-    events,
-    memory: initialMemory,
-    ...(input.tools ? { tools: input.tools } : {}),
+  let memory = routeEventsToMemorySnapshot(events, input.memory);
+  let goalState = createGoalRunState(goalFrame, input.goalRun);
+  const childNodes: ResearchGoalNode[] = [];
+  const iterations: ResearchGoalRunResult["iterations"][number][] = [];
+  const loopResults: ResearchLoopProcessingResult[] = [];
+  let decision: ResearchMemoryControllerDecision | undefined;
+  let loopPlan: ResearchLoopPlan | undefined;
+  let loopResult: ResearchLoopProcessingResult | undefined;
+
+  for (
+    let iterationIndex = 0;
+    iterationIndex < goalState.safetyMaxLoops && shouldContinueGoal(goalState);
+    iterationIndex += 1
+  ) {
+    const controllerInput = {
+      goalFrame,
+      events,
+      memory,
+      ...(input.tools ? { tools: input.tools } : {}),
+    };
+    decision = createFirstRunMemoryController().decide(controllerInput);
+    loopPlan = appendGoalContinuationToLoopPlan(
+      planResearchLoop({ decision }),
+      goalFrame,
+      goalState,
+    );
+    loopResult = await processResearchLoop({
+      loopPlan,
+      ...(input.loopExecutor ? { executor: input.loopExecutor } : {}),
+    });
+    loopResults.push(loopResult);
+
+    events.push(createMemoryDecisionEvent(goalFrame.root.id, decision));
+    events.push(createContextCompiledEvent(goalFrame.root.id, decision));
+    events.push(createLoopPlannedEvent(goalFrame.root.id, loopPlan));
+    events.push(createLoopProcessedEvent(goalFrame.root.id, loopResult));
+    events.push(
+      ...createResearchTraceEventsFromLoopResult(loopResult, {
+        goalId: goalFrame.root.id,
+      }),
+    );
+
+    const transition = advanceGoalRunState({
+      state: goalState,
+      goalFrame,
+      loopResult,
+    });
+    goalState = transition.state;
+    events.push(transition.event);
+    childNodes.push(
+      createCompletedSubGoalNode({
+        decision,
+        loopResult,
+        status: loopResult.status === "error" ? "blocked" : "complete",
+      }),
+    );
+    iterations.push(
+      createGoalIteration({
+        index: iterationIndex,
+        decision,
+        loopPlan,
+        loopResult,
+        statusBefore: transition.statusBefore,
+        statusAfter: transition.statusAfter,
+        continuationReason: transition.continuationReason,
+      }),
+    );
+    goalFrame = updateGoalFrameFromRunState(goalFrame, goalState, childNodes);
+    memory = routeEventsToMemorySnapshot(events, memory);
+  }
+
+  if (!decision || !loopPlan || !loopResult) {
+    throw new Error("Goal loop did not execute.");
+  }
+
+  const goalRun: ResearchGoalRunResult = {
+    state: goalState,
+    iterations,
   };
-  const decision = createFirstRunMemoryController().decide(controllerInput);
-  const loopPlan = planResearchLoop({ decision });
-  const loopResult = await processResearchLoop({
-    loopPlan,
-    ...(input.loopExecutor ? { executor: input.loopExecutor } : {}),
-  });
-  events.push({
-    id: createId("event"),
-    kind: "memory.decision",
-    timestamp: nowIso(),
-    goalId: goalFrame.root.id,
-    payload: {
-      actionClass: decision.actionClass,
-      subGoal: decision.subGoal,
-      actionScores: decision.actionScores,
-      toolBudget: decision.toolBudget,
-      writeback: decision.writeback,
-    },
-  });
-  events.push({
-    id: createId("event"),
-    kind: "context.compiled",
-    timestamp: nowIso(),
-    goalId: goalFrame.root.id,
-    payload: {
-      activeSubGoalId: decision.contextPacket.activeSubGoal.id,
-      evidenceRefs: decision.contextPacket.directEvidence.length,
-      openQuestions: decision.contextPacket.openQuestions,
-      toolPermissions: decision.contextPacket.toolPermissions,
-    },
-  });
-  events.push({
-    id: createId("event"),
-    kind: "loop.planned",
-    timestamp: nowIso(),
-    goalId: goalFrame.root.id,
-    payload: {
-      loopPlanId: loopPlan.id,
-      subGoalId: loopPlan.subGoal.id,
-      permittedToolClasses: loopPlan.permittedToolClasses,
-      actionBudget: loopPlan.actionBudget,
-      expectedArtifacts: loopPlan.expectedArtifacts,
-      writebackRequirements: loopPlan.writebackRequirements,
-    },
-  });
-  events.push({
-    id: createId("event"),
-    kind: "loop.processed",
-    timestamp: nowIso(),
-    goalId: goalFrame.root.id,
-    payload: {
-      loopResultId: loopResult.id,
-      loopPlanId: loopResult.loopPlanId,
-      status: loopResult.status,
-      executorName: loopResult.executorName,
-      summary: loopResult.output.text,
-      artifacts: loopResult.output.artifacts,
-      evidenceRefs: loopResult.output.evidenceRefs,
-      claimRefs: loopResult.output.claimRefs,
-      researchTrace: loopResult.output.researchTrace,
-      followUpRecommendation: loopResult.followUpRecommendation,
-    },
-  });
-  events.push(
-    ...createResearchTraceEventsFromLoopResult(loopResult, {
-      goalId: goalFrame.root.id,
-    }),
-  );
-  const memory = routeEventsToMemorySnapshot(events, initialMemory);
 
   const response = [
     `Honeycrisp initialized a research goal: ${goalFrame.root.objective}`,
     `Success gates: ${goalFrame.root.completionGates.length}`,
     `Stop gates: ${goalFrame.root.stopGates.length}`,
+    `Goal status: ${goalRun.state.status} (${goalRun.state.terminalReason ?? "continuing"})`,
+    `Goal loops: ${goalRun.state.loopsUsed}/${goalRun.state.maxLoops ?? "unbounded"}`,
     `Next action: ${decision.actionClass} - ${decision.subGoal.objective}`,
     `Loop plan: ${loopPlan.id}`,
     `Loop result: ${loopResult.status} via ${loopResult.executorName}`,
@@ -150,6 +170,8 @@ export async function bootstrapResearchRun(
     decision,
     loopPlan,
     loopResult,
+    goalRun,
+    loopResults,
     events,
     memory,
     piBase: {
@@ -158,5 +180,113 @@ export async function bootstrapResearchRun(
     },
     writeback: decision.writeback,
     response,
+  };
+}
+
+function createMemoryDecisionEvent(
+  goalId: string,
+  decision: ResearchMemoryControllerDecision,
+): ResearchEvent {
+  return {
+    id: createId("event"),
+    kind: "memory.decision",
+    timestamp: nowIso(),
+    goalId,
+    payload: {
+      actionClass: decision.actionClass,
+      subGoal: decision.subGoal,
+      actionScores: decision.actionScores,
+      toolBudget: decision.toolBudget,
+      writeback: decision.writeback,
+    },
+  };
+}
+
+function createContextCompiledEvent(
+  goalId: string,
+  decision: ResearchMemoryControllerDecision,
+): ResearchEvent {
+  return {
+    id: createId("event"),
+    kind: "context.compiled",
+    timestamp: nowIso(),
+    goalId,
+    payload: {
+      activeSubGoalId: decision.contextPacket.activeSubGoal.id,
+      evidenceRefs: decision.contextPacket.directEvidence.length,
+      openQuestions: decision.contextPacket.openQuestions,
+      toolPermissions: decision.contextPacket.toolPermissions,
+    },
+  };
+}
+
+function createLoopPlannedEvent(
+  goalId: string,
+  loopPlan: ResearchLoopPlan,
+): ResearchEvent {
+  return {
+    id: createId("event"),
+    kind: "loop.planned",
+    timestamp: nowIso(),
+    goalId,
+    payload: {
+      loopPlanId: loopPlan.id,
+      subGoalId: loopPlan.subGoal.id,
+      permittedToolClasses: loopPlan.permittedToolClasses,
+      actionBudget: loopPlan.actionBudget,
+      expectedArtifacts: loopPlan.expectedArtifacts,
+      writebackRequirements: loopPlan.writebackRequirements,
+    },
+  };
+}
+
+function createLoopProcessedEvent(
+  goalId: string,
+  loopResult: ResearchLoopProcessingResult,
+): ResearchEvent {
+  return {
+    id: createId("event"),
+    kind: "loop.processed",
+    timestamp: nowIso(),
+    goalId,
+    payload: {
+      loopResultId: loopResult.id,
+      loopPlanId: loopResult.loopPlanId,
+      status: loopResult.status,
+      executorName: loopResult.executorName,
+      summary: loopResult.output.text,
+      artifacts: loopResult.output.artifacts,
+      evidenceRefs: loopResult.output.evidenceRefs,
+      claimRefs: loopResult.output.claimRefs,
+      researchTrace: loopResult.output.researchTrace,
+      followUpRecommendation: loopResult.followUpRecommendation,
+    },
+  };
+}
+
+function createCompletedSubGoalNode(input: {
+  decision: ResearchMemoryControllerDecision;
+  loopResult: ResearchLoopProcessingResult;
+  status: ResearchGoalNode["status"];
+}): ResearchGoalNode {
+  const now = nowIso();
+
+  return {
+    id: input.decision.subGoal.id,
+    parentId: input.decision.subGoal.parentGoalId,
+    status: input.status,
+    objective: input.decision.subGoal.objective,
+    rationale: input.decision.subGoal.rationale,
+    completionGates: input.decision.subGoal.completionGates,
+    stopGates: [],
+    actionClass: input.decision.actionClass,
+    memoryRefs: [
+      ...input.loopResult.output.evidenceRefs,
+      ...input.loopResult.output.claimRefs,
+    ],
+    expectedArtifacts: input.decision.subGoal.expectedArtifacts,
+    resultSummary: input.loopResult.output.text,
+    createdAt: input.loopResult.startedAt,
+    updatedAt: now,
   };
 }
