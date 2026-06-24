@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   bootstrapResearchRun,
   createFirstRunMemoryController,
+  createLocalInspectionObservationEvent,
+  createLocalInspectionTool,
   createResearchGoalFrame,
+  isAcceptedRawEventKind,
   planResearchLoop,
   processResearchLoop,
+  routeEventsToMemorySnapshot,
 } from "../packages/research-agent/dist/index.js";
 
 test("first-run controller compiles a typed context packet without recalled memory", () => {
@@ -76,6 +83,64 @@ test("bootstrap output includes memory decision and context event records", asyn
     result.goalFrame.root.id,
   );
   assert.equal(result.loopPlan.subGoal.id, result.decision.subGoal.id);
+  assert.equal(result.memory.eventLog.length, result.events.length);
+});
+
+test("raw event acceptance excludes private thought traces", () => {
+  assert.equal(isAcceptedRawEventKind("model.visible_note"), true);
+  assert.equal(isAcceptedRawEventKind("model.hypothesis"), true);
+  assert.equal(isAcceptedRawEventKind("model.private_thought"), false);
+});
+
+test("local inspection observations route into direct evidence context", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-inspect-"));
+  const outsideRoot = await mkdtemp(join(tmpdir(), "honeycrisp-outside-"));
+  const fixtureFile = join(fixtureRoot, "sample.txt");
+  const outsideFile = join(outsideRoot, "sample.txt");
+  await writeFile(fixtureFile, "alpha parser note\nbeta branch note\n");
+  await writeFile(outsideFile, "outside scope\n");
+
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const inspection = await inspectionTool.inspect({
+    action: "read_text",
+    path: fixtureFile,
+  });
+  const event = createLocalInspectionObservationEvent(inspection, {
+    id: "event_fixture_inspected",
+    timestamp: "2026-06-24T00:00:00.000Z",
+  });
+  const memory = routeEventsToMemorySnapshot([event]);
+
+  assert.equal(inspection.type, "file");
+  assert.equal(event.kind, "tool.observed");
+  assert.equal(memory.directEvidence.length, 1);
+  assert.match(memory.directEvidence[0]?.summary ?? "", /alpha parser note/);
+
+  const goalFrame = createResearchGoalFrame(
+    "Goal: Inspect local evidence\nScope constraints: local fixture only",
+  );
+  const decision = createFirstRunMemoryController().decide({
+    goalFrame,
+    memory,
+    events: [event],
+    tools: [inspectionTool.descriptor],
+  });
+
+  assert.equal(decision.actionClass, "inspect");
+  assert.equal(decision.contextPacket.directEvidence.length, 1);
+  assert.equal(
+    decision.contextPacket.openQuestions.includes(
+      "What evidence is available to satisfy the root goal?",
+    ),
+    false,
+  );
+  await assert.rejects(
+    () => inspectionTool.inspect({ action: "read_text", path: outsideFile }),
+    /outside allowed inspection roots/,
+  );
 });
 
 test("loop planner turns a memory decision into an executable bounded plan", () => {

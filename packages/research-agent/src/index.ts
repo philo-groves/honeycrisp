@@ -34,6 +34,18 @@ export {
 } from "./context-packet.js";
 export type { CompileContextPacketInput } from "./context-packet.js";
 export { createResearchGoalFrame } from "./goal.js";
+export {
+  createLocalInspectionObservationEvent,
+  createLocalInspectionTool,
+} from "./local-inspection.js";
+export type {
+  LocalInspectionAction,
+  LocalInspectionEntry,
+  LocalInspectionRequest,
+  LocalInspectionResult,
+  LocalInspectionTool,
+  LocalInspectionToolOptions,
+} from "./local-inspection.js";
 export { planResearchLoop } from "./loop-planner.js";
 export type { PlanResearchLoopInput } from "./loop-planner.js";
 export {
@@ -50,6 +62,12 @@ export {
   createFirstRunMemoryController,
   FirstRunMemoryController,
 } from "./memory-controller.js";
+export {
+  ACCEPTED_RAW_EVENT_KINDS,
+  isAcceptedRawEventKind,
+  routeEventsToMemorySnapshot,
+  routeEventToMemory,
+} from "./memory-routing.js";
 export { parseResearchPrompt } from "./prompt.js";
 export {
   createResearchPiAgent,
@@ -57,6 +75,7 @@ export {
 } from "./pi-runtime.js";
 export type { CreateResearchPiAgentOptions } from "./pi-runtime.js";
 export type {
+  ResearchAcceptedRawEventKind,
   ResearchActionClass,
   ResearchActionScore,
   ResearchCompletionGate,
@@ -71,6 +90,8 @@ export type {
   ResearchMemoryControllerDecision,
   ResearchMemoryControllerInput,
   ResearchMemoryRef,
+  ResearchMemoryRoute,
+  ResearchMemoryRouteTarget,
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
   ResearchPromptFrame,

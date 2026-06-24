@@ -2,6 +2,7 @@ import { createResearchGoalFrame } from "./goal.js";
 import { createId, nowIso } from "./ids.js";
 import { planResearchLoop } from "./loop-planner.js";
 import { processResearchLoop } from "./loop-processor.js";
+import { routeEventsToMemorySnapshot } from "./memory-routing.js";
 import { createFirstRunMemoryController } from "./memory-controller.js";
 import type {
   ResearchEvent,
@@ -10,6 +11,7 @@ import type {
   ResearchLoopPlan,
   ResearchLoopProcessingResult,
   ResearchMemoryControllerDecision,
+  ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
   ResearchLoopExecutor,
   ResearchToolDescriptor,
@@ -17,6 +19,8 @@ import type {
 
 export interface BootstrapResearchRunInput extends ResearchGoalFrameOptions {
   prompt: string;
+  events?: readonly ResearchEvent[];
+  memory?: Partial<ResearchMemorySnapshot>;
   tools?: readonly ResearchToolDescriptor[];
   loopExecutor?: ResearchLoopExecutor;
 }
@@ -27,6 +31,7 @@ export interface BootstrapResearchRunResult {
   loopPlan: ResearchLoopPlan;
   loopResult: ResearchLoopProcessingResult;
   events: readonly ResearchEvent[];
+  memory: ResearchMemorySnapshot;
   piBase: {
     agentCorePackage: "@earendil-works/pi-agent-core";
     aiPackage: "@earendil-works/pi-ai";
@@ -40,6 +45,7 @@ export async function bootstrapResearchRun(
 ): Promise<BootstrapResearchRunResult> {
   const goalFrame = createResearchGoalFrame(input.prompt, input);
   const events: ResearchEvent[] = [
+    ...(input.events ?? []),
     {
       id: createId("event"),
       kind: "goal.created",
@@ -50,9 +56,11 @@ export async function bootstrapResearchRun(
       },
     },
   ];
+  const initialMemory = routeEventsToMemorySnapshot(events, input.memory);
   const controllerInput = {
     goalFrame,
     events,
+    memory: initialMemory,
     ...(input.tools ? { tools: input.tools } : {}),
   };
   const decision = createFirstRunMemoryController().decide(controllerInput);
@@ -116,6 +124,7 @@ export async function bootstrapResearchRun(
       followUpRecommendation: loopResult.followUpRecommendation,
     },
   });
+  const memory = routeEventsToMemorySnapshot(events, initialMemory);
 
   const response = [
     `Honeycrisp initialized a research goal: ${goalFrame.root.objective}`,
@@ -134,6 +143,7 @@ export async function bootstrapResearchRun(
     loopPlan,
     loopResult,
     events,
+    memory,
     piBase: {
       agentCorePackage: "@earendil-works/pi-agent-core",
       aiPackage: "@earendil-works/pi-ai",

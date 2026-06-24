@@ -33,6 +33,30 @@ export type ResearchToolSideEffect =
   | "network"
   | "process";
 
+export type ResearchAcceptedRawEventKind =
+  | "goal.created"
+  | "memory.decision"
+  | "memory.routed"
+  | "context.compiled"
+  | "loop.planned"
+  | "loop.processed"
+  | "tool.requested"
+  | "tool.observed"
+  | "model.visible_note"
+  | "model.claim"
+  | "model.hypothesis"
+  | "user.commitment"
+  | "error.observed";
+
+export type ResearchMemoryRouteTarget =
+  | "directEvidence"
+  | "priorEpisodes"
+  | "candidateProcedures"
+  | "currentHypotheses"
+  | "contradictions"
+  | "prospectiveCommitments"
+  | "userCommitments";
+
 export interface ResearchCompletionGate {
   id: string;
   description: string;
@@ -50,15 +74,20 @@ export interface ResearchMemoryRef {
 
 export interface ResearchEvent {
   id: string;
-  kind:
-    | "goal.created"
-    | "memory.decision"
-    | "context.compiled"
-    | "loop.planned"
-    | "loop.processed";
+  kind: ResearchAcceptedRawEventKind;
   timestamp: string;
   goalId?: string;
   payload: unknown;
+}
+
+export interface ResearchMemoryRoute {
+  id: string;
+  sourceEventId: string;
+  target: ResearchMemoryRouteTarget;
+  reason: string;
+  confidence: number;
+  memoryRef?: ResearchMemoryRef;
+  value?: string;
 }
 
 export interface ResearchGoalNode {
