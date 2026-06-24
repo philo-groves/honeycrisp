@@ -95,6 +95,13 @@ export type ResearchMemoryEvidenceRelationship =
   | "mentions"
   | "derived_from";
 
+export type ResearchClaimGraphRelationship =
+  | "supports"
+  | "contradicts"
+  | "refines"
+  | "supersedes"
+  | "depends_on";
+
 export interface ResearchArtifactRef {
   id: string;
   kind: string;
@@ -283,6 +290,16 @@ export interface ResearchContextPacketRef {
   sourceEventIds?: readonly string[];
   recordIds?: readonly string[];
   confidence?: number;
+}
+
+export interface ResearchClaimGraphEdge {
+  id: string;
+  sourceRecordId: string;
+  relationship: ResearchClaimGraphRelationship;
+  targetRecordId?: string;
+  evidenceRefId?: string;
+  summary?: string;
+  createdAt: string;
 }
 
 export interface ResearchMemoryRoute {

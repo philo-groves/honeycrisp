@@ -99,6 +99,19 @@ export type {
   SqliteMemoryEventLogOptions,
 } from "./memory-event-log.js";
 export {
+  createMemorySnapshotFromRecords,
+  createMemorySnapshotFromRecordStore,
+  createSqliteMemoryRecordStore,
+  SqliteMemoryRecordStore,
+} from "./memory-record-store.js";
+export type {
+  ListClaimGraphEdgesOptions,
+  ListMemoryRecordsOptions,
+  MemoryRecordStore,
+  SqliteMemoryRecordStoreOptions,
+  UpdateMemoryRecordStatusInput,
+} from "./memory-record-store.js";
+export {
   createResearchMemoryProvenance,
   isResearchDerivedMemoryStatus,
   isResearchMemoryRecordKind,
@@ -138,6 +151,8 @@ export type {
   ResearchArtifactRef,
   ResearchBaseMemoryRecord,
   ResearchBeliefMemoryRecord,
+  ResearchClaimGraphEdge,
+  ResearchClaimGraphRelationship,
   ResearchCompletionGate,
   ResearchContextPacketRef,
   ResearchContextPacket,
