@@ -40,11 +40,12 @@ The project already has a first executable tool slice:
 - Skills can be registered, loaded from local `SKILL.md` directories, created from MCP metadata, selected from prompt/memory/user ids, and injected as auditable context. Skill runbooks can appear as candidate procedural refs, but skills cannot grant tool permission or override governance.
 - Built-in tool families can now be registered from the library layer for memory recall, repository search, structured file reads, deterministic analysis transforms, allowlisted experiments, and deterministic synthesis. Each built-in preserves a canonical dotted Honeycrisp name plus a provider-safe transport alias.
 - A Pi Agent lifecycle executor is available from the library layer. It maps Honeycrisp tools to Pi `AgentTool`s, uses Agent tool hooks for governance preflight and event capture, supports sequential or parallel tool batches, and keeps the older `completeSimple` executor as the fallback/default path.
+- The CLI can configure tool families, side-effect and budget governance, selected local skills, MCP server allowlists, and the Agent executor. `honeycrisp tools list` exposes the configured registry, MCP allowlist status, and selected skills, and flow captures include runtime tool configuration metadata.
 
 Known limitations to address:
 
-- Only local inspection is wired into the CLI by default; broader built-in tool family configuration is still library-only until the operator UX phase.
-- The CLI still uses the `completeSimple` executor path by default; operator-facing selection of the Agent lifecycle path belongs in the configuration and UX phase.
+- The CLI supports local inspection, repository search, file read, analysis, and synthesis families; allowlisted experiment functions still need a safer operator configuration shape.
+- MCP server allowlists are visible in CLI config and capture output, but live MCP client discovery still requires a configured client integration.
 
 ## Phase 1: Core Tool Contract And Local Inspection Bridge
 
@@ -252,17 +253,26 @@ Verification:
 
 Expose tool and skill configuration in ways that are inspectable and safe for a general research agent.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Add CLI options for enabling and disabling tool families.
-- [ ] Add CLI options for allowed side effects.
-- [ ] Add CLI options for tool-call, runtime, file, byte, and token budgets.
-- [ ] Add CLI options or config for allowed MCP servers.
-- [ ] Add CLI options or config for selected skills.
-- [ ] Add debug commands to list registered tools, MCP capabilities, and selected skills.
-- [ ] Add capture fields for tool registry state and selected skills.
-- [ ] Add clear user-facing errors for unavailable tools, denied permissions, and missing MCP servers.
-- [ ] Add tests for CLI and config precedence.
+- [x] Add CLI options for enabling and disabling tool families.
+- [x] Add CLI options for allowed side effects.
+- [x] Add CLI options for tool-call, runtime, file, byte, and token budgets.
+- [x] Add CLI options or config for allowed MCP servers.
+- [x] Add CLI options or config for selected skills.
+- [x] Add debug commands to list registered tools, MCP capabilities, and selected skills.
+- [x] Add capture fields for tool registry state and selected skills.
+- [x] Add clear user-facing errors for unavailable tools, denied permissions, and missing MCP servers.
+- [x] Add tests for CLI and config precedence.
+
+Verification:
+
+- `pnpm test` passed with 102 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/15-real-cli-tool-config.json`.
+- The health check used the real CLI with `--executor agent`, `--repo-root`, `--allowed-side-effect read`, `--tool-max-calls 1`, and `--tool-max-bytes 200000`. Capture metadata recorded `repository.search`, the enabled `repository-search` family, governance, and Agent lifecycle execution.
+- The first health attempt showed that the default repository per-file cap skipped the larger `parse.c`; `--tool-max-bytes` now also configures repository-search `maxFileBytes` and file-read `maxBytes`. The rerun found `context.c:67` and `parse.c:295`.
 
 ## Phase 10: Evaluation And Domain Harnesses
 

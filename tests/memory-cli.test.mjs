@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -88,6 +88,122 @@ test("main CLI rejects retired run-mode flags with migration hints", () => {
   assert.equal(realResult.status, 1);
   assert.match(realResult.stderr, /--real was removed/);
   assert.match(realResult.stderr, /Pass --mock/);
+});
+
+test("tools CLI lists configured tools, MCP allowlist, governance, and selected skills", async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tools-repo-"));
+  const skillRoot = await createCliSkillFixture();
+  const result = runTopCli([
+    "tools",
+    "list",
+    "--repo-root",
+    repoRoot,
+    "--tool-family",
+    "analysis",
+    "--allowed-side-effect",
+    "read",
+    "--tool-max-calls",
+    "2",
+    "--tool-max-bytes",
+    "200000",
+    "--allow-mcp-server",
+    "alpha",
+    "--skill-dir",
+    skillRoot,
+    "--skill",
+    "parser-cli",
+    "--json",
+  ]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    payload.tools.map((tool) => tool.name).sort(),
+    ["analysis.transform", "repository.search"],
+  );
+  assert.deepEqual(payload.governance.allowedSideEffects, ["read"]);
+  assert.equal(payload.governance.maxToolCalls, 2);
+  assert.equal(payload.governance.maxBytes, 200000);
+  assert.equal(
+    payload.tools.find((tool) => tool.name === "repository.search").metadata.defaultBudget.maxBytes,
+    200000,
+  );
+  assert.deepEqual(payload.mcp.allowedServers, ["alpha"]);
+  assert.equal(payload.mcp.status, "no_mcp_client_configured");
+  assert.equal(payload.skills.loaded[0].id, "parser-cli");
+  assert.deepEqual(payload.skills.selectedIds, ["parser-cli"]);
+});
+
+test("tools CLI honors disabled tool families and reports missing required roots", async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tools-disabled-"));
+  const disabled = runTopCli([
+    "tools",
+    "list",
+    "--repo-root",
+    repoRoot,
+    "--disable-tool-family",
+    "repository-search",
+    "--json",
+  ]);
+  const disabledPayload = JSON.parse(disabled.stdout);
+  const missingRoot = runTopCli([
+    "tools",
+    "list",
+    "--tool-family",
+    "repository-search",
+  ]);
+
+  assert.equal(disabled.status, 0, disabled.stderr);
+  assert.deepEqual(disabledPayload.tools, []);
+  assert.deepEqual(disabledPayload.toolFamilies.disabled, ["repository-search"]);
+  assert.equal(missingRoot.status, 1);
+  assert.match(missingRoot.stderr, /repository-search requires --repo-root/);
+});
+
+test("main CLI capture includes runtime tool and skill configuration", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const repoRoot = await mkdtemp(join(tmpdir(), "honeycrisp-capture-repo-"));
+  const skillRoot = await createCliSkillFixture();
+  const capturePath = join(repoRoot, "capture.json");
+  const result = runTopCli(
+    [
+      "--mock",
+      "--capture",
+      capturePath,
+      "--repo-root",
+      repoRoot,
+      "--tool-family",
+      "analysis",
+      "--allowed-side-effect",
+      "read",
+      "--tool-max-calls",
+      "2",
+      "--skill-dir",
+      skillRoot,
+      "--skill",
+      "parser-cli",
+      "-p",
+      "Goal: List configured parser tools\nScope constraints: local fixture only",
+    ],
+    {
+      HONEYCRISP_AUTH_FILE: authFile,
+    },
+  );
+  const capture = JSON.parse(await readFile(capturePath, "utf8"));
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(
+    capture.runtimeConfig.tools.some(
+      (tool) => tool.name === "repository.search",
+    ),
+  );
+  assert.ok(
+    capture.runtimeConfig.tools.some(
+      (tool) => tool.name === "analysis.transform",
+    ),
+  );
+  assert.deepEqual(capture.runtimeConfig.skills.selectedIds, ["parser-cli"]);
+  assert.equal(capture.runtimeConfig.governance.maxToolCalls, 2);
 });
 
 test("memory CLI shows subcommand help", () => {
@@ -224,6 +340,30 @@ function runTopCli(args, env = {}) {
 async function createEmptyAuthFilePath() {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-auth-empty-"));
   return join(root, "auth.json");
+}
+
+async function createCliSkillFixture() {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-cli-skills-"));
+  const skillDir = join(root, "parser-cli");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    join(skillDir, "SKILL.md"),
+    [
+      "# Parser CLI Skill",
+      "Id: parser-cli",
+      "Version: 0.1",
+      "Description: Parser CLI test skill",
+      "Domain tags: parser, cli",
+      "Recommended tools: repository.search",
+      "Recommended action classes: search",
+      "Runbook: Preserve configured tool provenance.",
+      "---",
+      "Use configured tools and keep provenance visible.",
+    ].join("\n"),
+    "utf8",
+  );
+
+  return root;
 }
 
 function createEvent(kind, payload, options = {}) {
