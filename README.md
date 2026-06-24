@@ -33,6 +33,8 @@ pnpm start -p "Investigate parser behavior" \
   --json
 ```
 
+On a first run, Honeycrisp also asks the memory controller for the next bounded sub-goal and compiles a context packet. Until durable memory and tools are integrated, the packet contains empty typed memory buckets, explicit open questions, user commitments from the goal frame, tool permissions, tool budget, and writeback expectations.
+
 ## Auth
 
 Honeycrisp stores provider credentials in `~/.honeycrisp/auth.json` by default, or the path set in `HONEYCRISP_AUTH_FILE`.

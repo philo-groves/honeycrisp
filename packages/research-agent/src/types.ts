@@ -26,6 +26,13 @@ export type ResearchMemoryStoreKind =
   | "hypothesis"
   | "prospective";
 
+export type ResearchToolSideEffect =
+  | "none"
+  | "read"
+  | "write"
+  | "network"
+  | "process";
+
 export interface ResearchCompletionGate {
   id: string;
   description: string;
@@ -39,6 +46,14 @@ export interface ResearchMemoryRef {
   id: string;
   summary?: string;
   confidence?: number;
+}
+
+export interface ResearchEvent {
+  id: string;
+  kind: "goal.created" | "memory.decision" | "context.compiled";
+  timestamp: string;
+  goalId?: string;
+  payload: unknown;
 }
 
 export interface ResearchGoalNode {
@@ -89,9 +104,70 @@ export interface ResearchGoalFrameOptions {
   userPreferences?: readonly string[];
 }
 
+export interface ResearchToolDescriptor {
+  name: string;
+  description: string;
+  actionClasses: readonly ResearchActionClass[];
+  sideEffects: ResearchToolSideEffect;
+  requiredPermissions: readonly string[];
+  artifactLocations?: readonly string[];
+  memoryWritebackDefaults?: readonly ResearchMemoryStoreKind[];
+}
+
+export interface ResearchToolPermission {
+  toolName: string;
+  actionClasses: readonly ResearchActionClass[];
+  sideEffects: ResearchToolSideEffect;
+  requiredPermissions: readonly string[];
+}
+
+export interface ResearchToolBudget {
+  maxToolCalls: number;
+  maxRuntimeMs?: number;
+  maxFiles?: number;
+  maxTokens?: number;
+}
+
+export interface ResearchSubGoal {
+  id: string;
+  parentGoalId: string;
+  objective: string;
+  rationale: string;
+  actionClass: ResearchActionClass;
+  completionGates: readonly ResearchCompletionGate[];
+  expectedArtifacts: readonly string[];
+}
+
+export interface ResearchMemorySnapshot {
+  eventLog: readonly ResearchEvent[];
+  directEvidence: readonly ResearchMemoryRef[];
+  priorEpisodes: readonly ResearchMemoryRef[];
+  candidateProcedures: readonly ResearchMemoryRef[];
+  currentHypotheses: readonly ResearchMemoryRef[];
+  contradictions: readonly ResearchMemoryRef[];
+  prospectiveCommitments: readonly string[];
+  userCommitments: readonly string[];
+}
+
+export interface ResearchGovernancePolicy {
+  allowedActionClasses?: readonly ResearchActionClass[];
+  deniedActionClasses?: readonly ResearchActionClass[];
+  maxToolCalls?: number;
+  maxRuntimeMs?: number;
+  maxFiles?: number;
+  maxTokens?: number;
+}
+
+export interface ResearchActionScore {
+  actionClass: ResearchActionClass;
+  score: number;
+  rationale: string;
+}
+
 export interface ResearchContextPacket {
   goalFrame: ResearchGoalFrame;
   activeGoal: ResearchGoalNode;
+  activeSubGoal: ResearchSubGoal;
   directEvidence: readonly ResearchMemoryRef[];
   priorObservations: readonly ResearchMemoryRef[];
   candidateProcedures: readonly ResearchMemoryRef[];
@@ -99,5 +175,27 @@ export interface ResearchContextPacket {
   contradictions: readonly ResearchMemoryRef[];
   openQuestions: readonly string[];
   userCommitments: readonly string[];
+  toolPermissions: readonly ResearchToolPermission[];
+  toolBudget: ResearchToolBudget;
   writebackExpectations: readonly ResearchMemoryStoreKind[];
+}
+
+export interface ResearchMemoryControllerInput {
+  goalFrame: ResearchGoalFrame;
+  activeGoal?: ResearchGoalNode;
+  memory?: Partial<ResearchMemorySnapshot>;
+  tools?: readonly ResearchToolDescriptor[];
+  governance?: ResearchGovernancePolicy;
+  events?: readonly ResearchEvent[];
+}
+
+export interface ResearchMemoryControllerDecision {
+  subGoal: ResearchSubGoal;
+  actionClass: ResearchActionClass;
+  rationale: string;
+  actionScores: readonly ResearchActionScore[];
+  contextPacket: ResearchContextPacket;
+  toolBudget: ResearchToolBudget;
+  completionGates: readonly ResearchCompletionGate[];
+  writeback: readonly ResearchMemoryStoreKind[];
 }

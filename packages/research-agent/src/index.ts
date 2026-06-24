@@ -27,7 +27,17 @@ export type {
   BootstrapResearchRunInput,
   BootstrapResearchRunResult,
 } from "./bootstrap.js";
+export {
+  compileContextPacket,
+  createEmptyMemorySnapshot,
+  normalizeMemorySnapshot,
+} from "./context-packet.js";
+export type { CompileContextPacketInput } from "./context-packet.js";
 export { createResearchGoalFrame } from "./goal.js";
+export {
+  createFirstRunMemoryController,
+  FirstRunMemoryController,
+} from "./memory-controller.js";
 export { parseResearchPrompt } from "./prompt.js";
 export {
   createResearchPiAgent,
@@ -36,14 +46,25 @@ export {
 export type { CreateResearchPiAgentOptions } from "./pi-runtime.js";
 export type {
   ResearchActionClass,
+  ResearchActionScore,
   ResearchCompletionGate,
   ResearchContextPacket,
+  ResearchEvent,
   ResearchGatePolarity,
+  ResearchGovernancePolicy,
   ResearchGoalFrame,
   ResearchGoalFrameOptions,
   ResearchGoalNode,
   ResearchGoalStatus,
+  ResearchMemoryControllerDecision,
+  ResearchMemoryControllerInput,
   ResearchMemoryRef,
+  ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
   ResearchPromptFrame,
+  ResearchSubGoal,
+  ResearchToolBudget,
+  ResearchToolDescriptor,
+  ResearchToolPermission,
+  ResearchToolSideEffect,
 } from "./types.js";
