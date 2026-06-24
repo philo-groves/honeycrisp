@@ -87,6 +87,17 @@ export type {
   MemoryLifecycleInput,
   SupersedeMemoryRecordInput,
 } from "./memory-lifecycle.js";
+export {
+  createMemoryInspector,
+  MemoryInspector,
+} from "./memory-inspector.js";
+export type {
+  MemoryDebugCapture,
+  MemoryDebugCaptureInput,
+  MemoryEventTimelineEntry,
+  MemoryInspectorOptions,
+  RejectedMemoryEventInspection,
+} from "./memory-inspector.js";
 export { planResearchLoop } from "./loop-planner.js";
 export type { PlanResearchLoopInput } from "./loop-planner.js";
 export {

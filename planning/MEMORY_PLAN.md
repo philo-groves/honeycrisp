@@ -19,17 +19,13 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 ## Current Baseline
 
-The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, a phase-6 context packet v2 compiler, a phase-7 memory-driven controller, phase-8 deterministic reflection, and phase-9 lifecycle/audit controls. The current memory layer is useful for first-run experiments, but it is not yet the core driver described in the architecture.
+The project already has a first-pass runtime loop, goal frame generation, trace handling, local inspection, context packet compilation, primitive memory routing, phase-1 memory contracts, a phase-2 SQLite event log, a phase-3 deterministic write pipeline, a phase-4 SQLite derived-record store, a phase-5 deterministic memory retriever, a phase-6 context packet v2 compiler, a phase-7 memory-driven controller, phase-8 deterministic reflection, phase-9 lifecycle/audit controls, and phase-10 local inspectability/debug APIs plus CLI commands. The planned memory foundation is implemented, though the runtime still needs a later integration pass before durable memory is the default end-to-end driver.
 
 Known limitations to address:
 
-- Memory still exposes an in-memory snapshot compatibility layer derived from recent events.
-- Raw events have a durable append-only event log, but runtime bootstrapping has not yet fully adopted it as the default event source.
-- Derived memory records are typed, persisted, and retrievable through scored recall.
-- Recall is not yet a scored retrieval step.
-- Context compilation does not distinguish a larger preconscious candidate set from the bounded conscious packet.
-- Reflection and consolidation are deterministic loop-boundary operations.
-- Forgetting, tombstoning, superseding, expiration, policy deletion, and audit behavior are implemented for derived memory records.
+- Runtime bootstrapping still exposes an in-memory snapshot compatibility path derived from recent events.
+- Runtime bootstrapping has not yet fully adopted the durable event log, derived-record store, retriever, context packet v2, reflection, lifecycle, and controller layers as the default loop path.
+- CLI/debug inspectability is local and read-only by default; richer operator workflows can be layered on top of the exported inspector API.
 
 ## Phase 1: Stabilize Memory Contracts
 
@@ -523,6 +519,8 @@ Checklist:
 
 Add CLI or debug commands so memory behavior can be inspected without reading internal files by hand.
 
+Status: completed on 2026-06-24.
+
 Useful commands:
 
 - event timeline
@@ -548,38 +546,35 @@ Captured flow output should include:
 
 Checklist:
 
-- [ ] Add event timeline command or debug view.
-- [ ] Add show-event-by-id command or debug view.
-- [ ] Add show-derived-records-for-event command or debug view.
-- [ ] Add recall-query command or debug view.
-- [ ] Add preconscious-packet inspection.
-- [ ] Add compiled-context-packet inspection.
-- [ ] Add selected-action explanation.
-- [ ] Add hypotheses inspection.
-- [ ] Add claim graph inspection.
-- [ ] Add prospective checks inspection.
-- [ ] Include accepted raw events in captured flow output.
-- [ ] Include rejected raw events and rejection reasons in captured flow output.
-- [ ] Include candidate writes in captured flow output.
-- [ ] Include committed writes in captured flow output.
-- [ ] Include retrieval results in captured flow output.
-- [ ] Include context packet selections in captured flow output.
-- [ ] Include controller decision reasons in captured flow output.
+- [x] Add event timeline command or debug view.
+- [x] Add show-event-by-id command or debug view.
+- [x] Add show-derived-records-for-event command or debug view.
+- [x] Add recall-query command or debug view.
+- [x] Add preconscious-packet inspection.
+- [x] Add compiled-context-packet inspection.
+- [x] Add selected-action explanation.
+- [x] Add hypotheses inspection.
+- [x] Add claim graph inspection.
+- [x] Add prospective checks inspection.
+- [x] Include accepted raw events in captured flow output.
+- [x] Include rejected raw events and rejection reasons in captured flow output.
+- [x] Include candidate writes in captured flow output.
+- [x] Include committed writes in captured flow output.
+- [x] Include retrieval results in captured flow output.
+- [x] Include context packet selections in captured flow output.
+- [x] Include controller decision reasons in captured flow output.
 
 ## Next Implementation Increment
 
-The next implementation slice should be phase 10 only:
+All planned phases are implemented. The next implementation slice should be a new integration plan that makes durable memory the default runtime path:
 
-1. Add CLI or debug APIs for event timelines, event lookup, derived-record lookup, recall queries, context inspection, decision explanation, hypotheses, claim graph, and prospective checks.
-2. Include accepted and rejected raw event information where available.
-3. Include candidate/committed writes, retrieval results, context selections, and controller decision reasons in captured debug output.
-4. Keep inspectability read-only by default.
-5. Add tests for the inspectability commands or debug API.
+1. Replace first-run in-memory snapshot handoff with durable event-log append and record-store derivation.
+2. Run retrieval, context packet v2 compilation, memory-driven controller decisions, reflection, and lifecycle checks inside the production loop.
+3. Keep the phase-10 inspector and CLI commands as the local verification surface while integration proceeds.
 
 Acceptance criteria:
 
 - Existing tests continue to pass.
-- Memory behavior can be inspected without reading SQLite or internal files by hand.
-- Event timeline and event lookup are available.
-- Derived records, recall results, context selections, controller decisions, hypotheses, claim graph, and prospective checks are inspectable.
-- Captured debug output includes accepted events, rejected events when supplied, candidate writes, committed writes, retrieval results, context selections, and decision reasons.
+- Phase 1 through phase 10 checklist items remain implemented and verified.
+- Durable memory becomes the default runtime loop source and sink without regressing the compatibility path.
+- Memory behavior remains inspectable without reading SQLite or internal files by hand.

@@ -5,10 +5,16 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import {
   bootstrapResearchRun,
+  compileContextPacketV2,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
+  createMemoryDrivenController,
+  createMemoryInspector,
   createPiLoopExecutor,
   createResearchFlowCapture,
+  createResearchGoalFrame,
+  createSqliteMemoryEventLog,
+  createSqliteMemoryRecordStore,
   getAuthStatus,
   listAuthProviders,
   loginAuthProvider,
@@ -50,6 +56,17 @@ interface ParsedArgs {
   json: boolean;
   help: boolean;
   version: boolean;
+}
+
+interface ParsedMemoryArgs {
+  command: string | undefined;
+  workspaceRoot: string;
+  positionals: string[];
+  goal: string | undefined;
+  questions: string[];
+  limit: number | undefined;
+  json: boolean;
+  help: boolean;
 }
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -182,6 +199,59 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   };
 }
 
+function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
+  const firstArg = argv[0];
+  const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
+  let workspaceRoot = process.cwd();
+  let goal: string | undefined;
+  let limit: number | undefined;
+  let json = false;
+  let help = false;
+  const questions: string[] = [];
+  const positionals: string[] = [];
+
+  for (let index = command ? 1 : 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+
+    if (arg === "--workspace-root") {
+      workspaceRoot = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--goal" || arg === "--prompt") {
+      goal = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--question") {
+      questions.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--limit") {
+      const value = Number.parseInt(readOptionValue(argv, index, arg), 10);
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new Error("--limit requires a positive integer.");
+      }
+      limit = value;
+      index += 1;
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg === "-h" || arg === "--help") {
+      help = true;
+    } else if (arg?.startsWith("-")) {
+      throw new Error(`Unknown memory option: ${arg}`);
+    } else if (arg) {
+      positionals.push(arg);
+    }
+  }
+
+  return {
+    command,
+    workspaceRoot,
+    positionals,
+    goal,
+    questions,
+    limit,
+    json,
+    help,
+  };
+}
+
 function parseReasoning(value: string): ParsedArgs["reasoning"] {
   if (
     value === "minimal" ||
@@ -233,6 +303,7 @@ function readOptionValue(
 function usage(): string {
   return [
     "Usage: honeycrisp -p <prompt> [--json]",
+    "       honeycrisp memory <command> [options]",
     "",
     "Options:",
     "  -p, --prompt <prompt>  Research prompt to turn into a root goal",
@@ -256,6 +327,26 @@ function usage(): string {
     "  --json                 Print the initialized run as JSON",
     "  -h, --help             Show help",
     "  -v, --version          Show version",
+    "",
+    "Memory commands:",
+    "  memory timeline                  Show accepted event timeline",
+    "  memory event <event-id>           Show one accepted raw event",
+    "  memory records-for-event <id>     Show derived records for an event",
+    "  memory recall --goal <text>       Run a recall query",
+    "  memory preconscious --goal <text> Show preconscious candidates",
+    "  memory context --goal <text>      Show compiled context selections",
+    "  memory decision --goal <text>     Explain selected action",
+    "  memory hypotheses                 Show hypotheses and semantic claims",
+    "  memory claim-graph                Show claim graph edges",
+    "  memory prospective-checks         Show prospective checks",
+    "  memory debug-capture              Show read-only memory debug capture",
+    "",
+    "Memory options:",
+    "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
+    "  --goal, --prompt <text>  Goal text for recall, context, or decision",
+    "  --question <text>       Add an open question to recall",
+    "  --limit <n>             Limit recall candidates",
+    "  --json                  Print JSON",
   ].join("\n");
 }
 
@@ -263,6 +354,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
   try {
     if (argv[0] === "auth") {
       await handleAuthCommand(argv.slice(1));
+      return;
+    }
+
+    if (argv[0] === "memory") {
+      await handleMemoryCommand(argv.slice(1));
       return;
     }
 
@@ -337,6 +433,351 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     console.error(`honeycrisp: ${message}`);
     process.exitCode = 1;
   }
+}
+
+async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
+  const args = parseMemoryArgs(argv);
+
+  if (!args.command || args.help) {
+    console.log(memoryUsage());
+    return;
+  }
+
+  const eventLog = createSqliteMemoryEventLog({
+    workspaceRoot: args.workspaceRoot,
+  });
+  const recordStore = createSqliteMemoryRecordStore({
+    workspaceRoot: args.workspaceRoot,
+  });
+  const inspector = createMemoryInspector({ eventLog, recordStore });
+
+  try {
+    if (args.command === "timeline") {
+      printMemoryOutput(args, inspector.eventTimeline(), renderTimeline);
+      return;
+    }
+
+    if (args.command === "event") {
+      const eventId = requireMemoryPositional(args, "event <event-id>");
+      printMemoryOutput(
+        args,
+        inspector.showEventById(eventId) ?? null,
+        (event) => (event ? JSON.stringify(event, null, 2) : `No event found: ${eventId}`),
+      );
+      return;
+    }
+
+    if (args.command === "records-for-event") {
+      const eventId = requireMemoryPositional(
+        args,
+        "records-for-event <event-id>",
+      );
+      printMemoryOutput(
+        args,
+        inspector.showDerivedRecordsForEvent(eventId),
+        renderRecords,
+      );
+      return;
+    }
+
+    if (args.command === "recall") {
+      const { retrieval } = createRecallInspection(args, inspector);
+      printMemoryOutput(
+        args,
+        retrieval,
+        (value) => renderRecords(value.candidates.map((candidate) => candidate.record)),
+      );
+      return;
+    }
+
+    if (args.command === "preconscious") {
+      const { retrieval } = createRecallInspection(args, inspector);
+      printMemoryOutput(
+        args,
+        inspector.showPreconsciousPacket(retrieval),
+        renderPreconsciousPacket,
+      );
+      return;
+    }
+
+    if (args.command === "context") {
+      const { contextPacket } = createDecisionInspection(args, inspector);
+      printMemoryOutput(
+        args,
+        inspector.showCompiledContextPacket(contextPacket),
+        renderContextSelections,
+      );
+      return;
+    }
+
+    if (args.command === "decision") {
+      const { decision } = createDecisionInspection(args, inspector);
+      printMemoryOutput(
+        args,
+        inspector.explainSelectedAction(decision),
+        renderDecisionExplanation,
+      );
+      return;
+    }
+
+    if (args.command === "hypotheses") {
+      printMemoryOutput(args, inspector.showHypotheses(), renderRecords);
+      return;
+    }
+
+    if (args.command === "claim-graph") {
+      printMemoryOutput(args, inspector.showClaimGraph(), renderClaimGraph);
+      return;
+    }
+
+    if (args.command === "prospective-checks") {
+      printMemoryOutput(args, inspector.showProspectiveChecks(), renderRecords);
+      return;
+    }
+
+    if (args.command === "debug-capture") {
+      const captureInput = args.goal
+        ? createDecisionInspection(args, inspector)
+        : undefined;
+      printMemoryOutput(
+        args,
+        inspector.captureDebug(
+          captureInput
+            ? {
+                retrieval: captureInput.retrieval,
+                contextPacketV2: captureInput.contextPacket,
+                decision: captureInput.decision,
+              }
+            : {},
+        ),
+        (capture) => [
+          `Accepted events: ${capture.acceptedEvents.length}`,
+          `Rejected events: ${capture.rejectedEvents.length}`,
+          `Candidate writes: ${capture.candidateWrites.length}`,
+          `Committed writes: ${capture.committedWrites.length}`,
+          capture.retrievalResults
+            ? `Retrieval candidates: ${capture.retrievalResults.candidateCount}`
+            : "Retrieval candidates: not captured",
+          capture.contextSelections
+            ? `Context sections: ${capture.contextSelections.sections.length}`
+            : "Context sections: not captured",
+          capture.controllerDecision
+            ? `Decision: ${capture.controllerDecision.actionClass}`
+            : "Decision: not captured",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    throw new Error(`Unknown memory command: ${args.command}`);
+  } finally {
+    eventLog.close();
+    recordStore.close();
+  }
+}
+
+function memoryUsage(): string {
+  return [
+    "Usage: honeycrisp memory <command> [options]",
+    "",
+    "Commands:",
+    "  timeline                  Show accepted event timeline",
+    "  event <event-id>           Show one accepted raw event",
+    "  records-for-event <id>     Show derived records for an event",
+    "  recall --goal <text>       Run a recall query",
+    "  preconscious --goal <text> Show preconscious candidates",
+    "  context --goal <text>      Show compiled context selections",
+    "  decision --goal <text>     Explain selected action",
+    "  hypotheses                 Show hypotheses and semantic claims",
+    "  claim-graph                Show claim graph edges",
+    "  prospective-checks         Show prospective checks",
+    "  debug-capture              Show read-only memory debug capture",
+    "",
+    "Options:",
+    "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
+    "  --goal, --prompt <text>  Goal text for recall, context, or decision",
+    "  --question <text>       Add an open question to recall",
+    "  --limit <n>             Limit recall candidates",
+    "  --json                  Print JSON",
+    "  -h, --help              Show help",
+  ].join("\n");
+}
+
+function requireMemoryPositional(
+  args: ParsedMemoryArgs,
+  usageHint: string,
+): string {
+  const value = args.positionals[0];
+  if (!value) {
+    throw new Error(`Usage: honeycrisp memory ${usageHint}`);
+  }
+
+  return value;
+}
+
+function createRecallInspection(
+  args: ParsedMemoryArgs,
+  inspector: ReturnType<typeof createMemoryInspector>,
+) {
+  const goalFrame = createResearchGoalFrame(
+    args.goal ?? "Goal: Inspect durable memory",
+  );
+  const retrieval = inspector.runRecallQuery({
+    activeGoal: goalFrame.root,
+    openQuestions: args.questions,
+    ...(args.limit ? { limit: args.limit } : {}),
+  });
+
+  return { goalFrame, retrieval };
+}
+
+function createDecisionInspection(
+  args: ParsedMemoryArgs,
+  inspector: ReturnType<typeof createMemoryInspector>,
+) {
+  const { goalFrame, retrieval } = createRecallInspection(args, inspector);
+  const decision = createMemoryDrivenController().decide({
+    goalFrame,
+    retrieval,
+  });
+  const contextPacket = compileContextPacketV2({
+    goalFrame,
+    activeGoal: goalFrame.root,
+    activeSubGoal: decision.subGoal,
+    retrieval,
+    tools: [],
+  });
+
+  return { goalFrame, retrieval, decision, contextPacket };
+}
+
+function printMemoryOutput<T>(
+  args: ParsedMemoryArgs,
+  value: T,
+  renderText: (value: T) => string,
+): void {
+  if (args.json) {
+    console.log(JSON.stringify(value, null, 2));
+    return;
+  }
+
+  console.log(renderText(value));
+}
+
+function renderTimeline(
+  timeline: ReturnType<ReturnType<typeof createMemoryInspector>["eventTimeline"]>,
+): string {
+  if (timeline.length === 0) {
+    return "No memory events found.";
+  }
+
+  return timeline
+    .map((event) =>
+      [
+        event.sequence ?? "-",
+        event.timestamp,
+        event.kind,
+        event.id,
+        event.summary,
+      ].join("\t"),
+    )
+    .join("\n");
+}
+
+function renderRecords(
+  records: ReturnType<ReturnType<typeof createMemoryInspector>["showHypotheses"]>,
+): string {
+  if (records.length === 0) {
+    return "No memory records found.";
+  }
+
+  return records
+    .map((record) =>
+      [
+        record.kind,
+        record.status,
+        record.id,
+        record.confidence ?? "-",
+        record.summary,
+      ].join("\t"),
+    )
+    .join("\n");
+}
+
+function renderPreconsciousPacket(
+  packet: ReturnType<
+    ReturnType<typeof createMemoryInspector>["showPreconsciousPacket"]
+  >,
+): string {
+  if (packet.candidates.length === 0) {
+    return "No recall candidates found.";
+  }
+
+  return packet.candidates
+    .map((candidate) =>
+      [
+        candidate.score,
+        candidate.kind,
+        candidate.status,
+        candidate.recordId,
+        candidate.summary,
+      ].join("\t"),
+    )
+    .join("\n");
+}
+
+function renderContextSelections(
+  context: ReturnType<
+    ReturnType<typeof createMemoryInspector>["showCompiledContextPacket"]
+  >,
+): string {
+  if (context.sections.length === 0) {
+    return "No context sections found.";
+  }
+
+  return context.sections
+    .map((section) =>
+      [
+        section.label,
+        `items=${section.itemCount}`,
+        `tokens=${section.estimatedTokens}/${section.tokenBudget}`,
+        `selected=${section.selectedRecordIds.join(",") || "-"}`,
+      ].join("\t"),
+    )
+    .join("\n");
+}
+
+function renderDecisionExplanation(
+  decision: ReturnType<
+    ReturnType<typeof createMemoryInspector>["explainSelectedAction"]
+  >,
+): string {
+  return [
+    `Action: ${decision.actionClass}`,
+    `Subgoal: ${decision.subGoalObjective}`,
+    `Rationale: ${decision.rationale}`,
+    `Supporting records: ${decision.supportingRecordIds.join(", ") || "-"}`,
+    `Warnings: ${decision.warnings.join(", ") || "-"}`,
+  ].join("\n");
+}
+
+function renderClaimGraph(
+  edges: ReturnType<ReturnType<typeof createMemoryInspector>["showClaimGraph"]>,
+): string {
+  if (edges.length === 0) {
+    return "No claim graph edges found.";
+  }
+
+  return edges
+    .map((edge) =>
+      [
+        edge.sourceRecordId,
+        edge.relationship,
+        edge.targetRecordId,
+        edge.evidenceRefId ?? "-",
+      ].join("\t"),
+    )
+    .join("\n");
 }
 
 await main();
