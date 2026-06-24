@@ -4,36 +4,24 @@ import type {
   ResearchGoalFrame,
   ResearchGoalFrameOptions,
   ResearchGoalNode,
+  ResearchPromptFrame,
 } from "./types.js";
+import { parseResearchPrompt } from "./prompt.js";
 
 export function createResearchGoalFrame(
   prompt: string,
   options: ResearchGoalFrameOptions = {},
 ): ResearchGoalFrame {
-  const objective = prompt.trim();
-  if (objective.length === 0) {
-    throw new Error("A research prompt is required.");
-  }
+  const promptFrame = parseResearchPrompt(prompt, options);
 
   const timestamp = nowIso();
-  const completionGate: ResearchCompletionGate = {
-    id: createId("gate"),
-    description: "The response or artifact directly addresses the research goal.",
-    polarity: "success",
-  };
-  const stopGate: ResearchCompletionGate = {
-    id: createId("gate"),
-    description:
-      "The goal is blocked by missing scope, unavailable evidence, or unsafe assumptions.",
-    polarity: "stop",
-  };
   const root: ResearchGoalNode = {
     id: createId("goal"),
     status: "active",
-    objective,
+    objective: promptFrame.rootGoal,
     rationale: "Root research goal created from the user prompt.",
-    completionGates: [completionGate],
-    stopGates: [stopGate],
+    completionGates: createGates(promptFrame, "success"),
+    stopGates: createGates(promptFrame, "stop"),
     memoryRefs: [],
     expectedArtifacts: [],
     createdAt: timestamp,
@@ -41,11 +29,28 @@ export function createResearchGoalFrame(
   };
 
   return {
+    prompt: promptFrame,
     root,
     nodes: [root],
-    constraints: [...(options.constraints ?? [])],
-    evidenceRequirements: [...(options.evidenceRequirements ?? [])],
-    riskFlags: [...(options.riskFlags ?? [])],
-    userPreferences: [...(options.userPreferences ?? [])],
+    scopeConstraints: promptFrame.scopeConstraints,
+    evidenceRequirements: promptFrame.evidenceRequirements,
+    riskFlags: promptFrame.initialRiskFlags,
+    userPreferences: promptFrame.userPreferences,
   };
+}
+
+function createGates(
+  promptFrame: ResearchPromptFrame,
+  polarity: "success" | "stop",
+): ResearchCompletionGate[] {
+  const descriptions =
+    polarity === "success"
+      ? promptFrame.successGates
+      : promptFrame.failureOrStopGates;
+
+  return descriptions.map((description) => ({
+    id: createId("gate"),
+    description,
+    polarity,
+  }));
 }

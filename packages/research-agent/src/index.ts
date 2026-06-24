@@ -4,6 +4,7 @@ export type {
   BootstrapResearchRunResult,
 } from "./bootstrap.js";
 export { createResearchGoalFrame } from "./goal.js";
+export { parseResearchPrompt } from "./prompt.js";
 export {
   createResearchPiAgent,
   createResearchSystemPrompt,
@@ -20,4 +21,5 @@ export type {
   ResearchGoalStatus,
   ResearchMemoryRef,
   ResearchMemoryStoreKind,
+  ResearchPromptFrame,
 } from "./types.js";

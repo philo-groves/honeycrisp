@@ -25,6 +25,8 @@ export function bootstrapResearchRun(
   const goalFrame = createResearchGoalFrame(input.prompt, input);
   const response = [
     `Honeycrisp initialized a research goal: ${goalFrame.root.objective}`,
+    `Success gates: ${goalFrame.root.completionGates.length}`,
+    `Stop gates: ${goalFrame.root.stopGates.length}`,
     "Runtime base: @earendil-works/pi-agent-core with @earendil-works/pi-ai.",
     "Research memory, storage, and domain-specific tools will be layered around Pi instead of replacing it.",
   ].join("\n");

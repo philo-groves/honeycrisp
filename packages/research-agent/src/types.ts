@@ -57,19 +57,35 @@ export interface ResearchGoalNode {
   updatedAt: string;
 }
 
+export interface ResearchPromptFrame {
+  rawPrompt: string;
+  normalizedPrompt: string;
+  rootGoal: string;
+  successGates: readonly string[];
+  failureOrStopGates: readonly string[];
+  scopeConstraints: readonly string[];
+  userPreferences: readonly string[];
+  evidenceRequirements: readonly string[];
+  initialRiskFlags: readonly string[];
+}
+
 export interface ResearchGoalFrame {
+  prompt: ResearchPromptFrame;
   root: ResearchGoalNode;
   nodes: readonly ResearchGoalNode[];
-  constraints: readonly string[];
+  scopeConstraints: readonly string[];
   evidenceRequirements: readonly string[];
   riskFlags: readonly string[];
   userPreferences: readonly string[];
 }
 
 export interface ResearchGoalFrameOptions {
-  constraints?: readonly string[];
+  rootGoal?: string;
+  successGates?: readonly string[];
+  failureOrStopGates?: readonly string[];
+  scopeConstraints?: readonly string[];
   evidenceRequirements?: readonly string[];
-  riskFlags?: readonly string[];
+  initialRiskFlags?: readonly string[];
   userPreferences?: readonly string[];
 }
 

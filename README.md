@@ -21,3 +21,14 @@ pnpm install
 pnpm build
 pnpm start -p "Investigate the prompt as a research goal"
 ```
+
+The first runtime step converts `honeycrisp -p <prompt>` into a goal frame with a root goal, success gates, stop gates, scope constraints, user preferences, evidence requirements, and initial risk flags. Prompts can provide those fields inline with labels such as `Goal:`, `Success gates:`, `Stop gates:`, `Scope constraints:`, `Evidence:`, `Preferences:`, and `Risk:`.
+
+CLI flags can also add explicit fields:
+
+```sh
+pnpm start -p "Investigate parser behavior" \
+  --scope "local corpus only" \
+  --evidence "preserve repro provenance" \
+  --json
+```
