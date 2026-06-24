@@ -32,10 +32,10 @@ The project already has a first executable tool slice:
 - Real smoke testing has proven one model-initiated local inspection call against the zsh corpus.
 - The memory controller can propose obvious local inspection actions from prompt paths, and the loop processor executes accepted controller-planned evidence tools before the first model call.
 - Deterministic mock mode can execute controller-planned evidence tools without a model call when an executable registry is supplied.
+- The tool registry validates input and output schemas, governance action classes, side effects, required permissions, per-loop call budgets, runtime budgets, and file byte/count budgets. Validation failures are preserved as blocked tool observations.
 
 Known limitations to address:
 
-- Registry validation is still shallow: action class and tool existence are checked, but schemas, side effects, permissions, latency, cost, and hooks need stronger enforcement.
 - Durable SQLite event-log integration is not yet the default runtime write path for every top-level run.
 - Tool outputs can still be large inline event payloads; storage-backed raw output pointers and artifact refs are needed.
 - Only local inspection is executable.
@@ -93,19 +93,27 @@ Verification:
 
 Harden tool execution so every call is checked against schemas, governance policy, side effects, and budgets before it can run.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Validate tool inputs against registered schemas.
-- [ ] Add output schema support for normalized tool results.
-- [ ] Enforce allowed and denied action classes from governance policy.
-- [ ] Enforce side-effect policy: `none`, `read`, `write`, `network`, and `process`.
-- [ ] Enforce required permissions declared by each tool.
-- [ ] Enforce per-loop `maxToolCalls`.
-- [ ] Enforce per-tool or per-loop runtime budgets.
-- [ ] Enforce file-count and byte-count budgets for file tools.
-- [ ] Preserve validation errors as structured blocked tool results.
-- [ ] Add validation hooks before and after execution.
-- [ ] Add tests for schema rejection, side-effect rejection, permission rejection, and budget exhaustion.
+- [x] Validate tool inputs against registered schemas.
+- [x] Add output schema support for normalized tool results.
+- [x] Enforce allowed and denied action classes from governance policy.
+- [x] Enforce side-effect policy: `none`, `read`, `write`, `network`, and `process`.
+- [x] Enforce required permissions declared by each tool.
+- [x] Enforce per-loop `maxToolCalls`.
+- [x] Enforce per-tool or per-loop runtime budgets.
+- [x] Enforce file-count and byte-count budgets for file tools.
+- [x] Preserve validation errors as structured blocked tool results.
+- [x] Add validation hooks before and after execution.
+- [x] Add tests for schema rejection, side-effect rejection, permission rejection, and budget exhaustion.
+
+Verification:
+
+- `pnpm test` passed with 81 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/09-real-validated-tool.json`.
+- The health check showed the authorized `local.inspection` read completed under registry validation, with `plannedToolCallCount: 1`, no skipped candidates, and direct evidence routed into memory.
 
 ## Phase 4: Durable Tool Events And Artifact Storage
 

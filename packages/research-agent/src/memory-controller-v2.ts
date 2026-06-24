@@ -471,6 +471,7 @@ function createToolBudget(
       ? { maxRuntimeMs: governance.maxRuntimeMs }
       : {}),
     ...(governance?.maxFiles ? { maxFiles: governance.maxFiles } : {}),
+    ...(governance?.maxBytes ? { maxBytes: governance.maxBytes } : {}),
     ...(governance?.maxTokens ? { maxTokens: governance.maxTokens } : {}),
   };
 }

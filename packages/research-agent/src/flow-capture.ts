@@ -8,6 +8,7 @@ import { inferResearchLoopExecutionMode } from "./loop-processor.js";
 import type {
   ResearchContextPacket,
   ResearchEvent,
+  ResearchGovernancePolicy,
   ResearchLoopExecutionMode,
   ResearchLoopProcessingResult,
   ResearchMemoryRef,
@@ -74,6 +75,7 @@ export interface ResearchFlowCapture {
     userCommitments: readonly string[];
     toolPermissions: readonly ResearchToolPermission[];
     toolBudget: ResearchToolBudget;
+    governancePolicy?: ResearchGovernancePolicy;
     candidateToolActions: readonly ResearchToolAction[];
     skippedToolActions: readonly ResearchSkippedToolAction[];
   };
@@ -191,6 +193,9 @@ function createContextCapture(
     userCommitments: contextPacket.userCommitments,
     toolPermissions: contextPacket.toolPermissions,
     toolBudget: contextPacket.toolBudget,
+    ...(contextPacket.governancePolicy
+      ? { governancePolicy: contextPacket.governancePolicy }
+      : {}),
     candidateToolActions: contextPacket.candidateToolActions,
     skippedToolActions: contextPacket.skippedToolActions,
   };

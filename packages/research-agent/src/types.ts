@@ -449,6 +449,7 @@ export interface ResearchToolBudget {
   maxToolCalls: number;
   maxRuntimeMs?: number;
   maxFiles?: number;
+  maxBytes?: number;
   maxTokens?: number;
 }
 
@@ -467,6 +468,8 @@ export type ResearchSkippedToolActionCode =
   | "action_class_not_permitted"
   | "tool_unavailable"
   | "tool_does_not_support_action"
+  | "side_effect_not_permitted"
+  | "permission_not_permitted"
   | "tool_budget_exhausted";
 
 export interface ResearchSkippedToolAction {
@@ -499,9 +502,14 @@ export interface ResearchMemorySnapshot {
 export interface ResearchGovernancePolicy {
   allowedActionClasses?: readonly ResearchActionClass[];
   deniedActionClasses?: readonly ResearchActionClass[];
+  allowedSideEffects?: readonly ResearchToolSideEffect[];
+  deniedSideEffects?: readonly ResearchToolSideEffect[];
+  allowedPermissions?: readonly string[];
+  deniedPermissions?: readonly string[];
   maxToolCalls?: number;
   maxRuntimeMs?: number;
   maxFiles?: number;
+  maxBytes?: number;
   maxTokens?: number;
 }
 
@@ -524,6 +532,7 @@ export interface ResearchContextPacket {
   userCommitments: readonly string[];
   toolPermissions: readonly ResearchToolPermission[];
   toolBudget: ResearchToolBudget;
+  governancePolicy?: ResearchGovernancePolicy;
   candidateToolActions: readonly ResearchToolAction[];
   skippedToolActions: readonly ResearchSkippedToolAction[];
   writebackExpectations: readonly ResearchMemoryStoreKind[];
@@ -578,6 +587,7 @@ export interface ResearchLoopPlan {
   requiredContext: readonly ResearchRequiredContextSection[];
   permittedToolClasses: readonly ResearchActionClass[];
   actionBudget: ResearchToolBudget;
+  governancePolicy?: ResearchGovernancePolicy;
   candidateToolActions: readonly ResearchToolAction[];
   skippedToolActions: readonly ResearchSkippedToolAction[];
   expectedArtifacts: readonly string[];

@@ -38,6 +38,9 @@ export function planResearchLoop(
     requiredContext,
     permittedToolClasses,
     actionBudget: decision.toolBudget,
+    ...(packet.governancePolicy
+      ? { governancePolicy: packet.governancePolicy }
+      : {}),
     candidateToolActions: plannedTools.candidateToolActions,
     skippedToolActions: plannedTools.skippedToolActions,
     expectedArtifacts: decision.subGoal.expectedArtifacts,

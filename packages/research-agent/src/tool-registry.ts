@@ -8,8 +8,10 @@ import type {
   ResearchActionClass,
   ResearchArtifactRef,
   ResearchEvent,
+  ResearchGovernancePolicy,
   ResearchToolAction,
   ResearchToolDescriptor,
+  ResearchToolSideEffect,
 } from "./types.js";
 
 export type ResearchToolExecutionStatus = "complete" | "error" | "blocked";
@@ -19,6 +21,18 @@ export interface ResearchToolExecutionContext {
   subGoalId?: string;
   signal?: AbortSignal;
 }
+
+export interface ResearchToolValidationHookInput {
+  phase: "before" | "after";
+  tool: ResearchExecutableTool;
+  action: ResearchToolAction;
+  context: ExecuteToolCallOptions;
+  result?: ResearchToolExecutionResult;
+}
+
+export type ResearchToolValidationHook = (
+  input: ResearchToolValidationHookInput,
+) => string | void | Promise<string | void>;
 
 export interface ResearchToolExecutionResult {
   action: ResearchToolAction;
@@ -56,13 +70,26 @@ export interface ExecuteToolCallOptions extends ResearchToolExecutionContext {
   permittedActionClasses?: readonly ResearchActionClass[];
   defaultActionClass?: ResearchActionClass;
   toolCallId?: string;
+  governance?: ResearchGovernancePolicy;
+  toolCallCount?: number;
+}
+
+export interface ResearchToolRegistryOptions {
+  validationHooks?: ReadonlyMap<string, ResearchToolValidationHook> | Record<string, ResearchToolValidationHook>;
 }
 
 export class ResearchToolRegistry {
   readonly #toolsByName = new Map<string, ResearchExecutableTool>();
   readonly #toolsByTransportName = new Map<string, ResearchExecutableTool>();
+  readonly #validationHooks = new Map<string, ResearchToolValidationHook>();
 
-  constructor(tools: readonly ResearchExecutableTool[] = []) {
+  constructor(
+    tools: readonly ResearchExecutableTool[] = [],
+    options: ResearchToolRegistryOptions = {},
+  ) {
+    for (const [name, hook] of readValidationHookEntries(options.validationHooks)) {
+      this.#validationHooks.set(name, hook);
+    }
     for (const tool of tools) {
       this.register(tool);
     }
@@ -108,19 +135,58 @@ export class ResearchToolRegistry {
       return createExecutionRecord(result, options);
     }
 
-    const validationError = validateToolAction(tool, action, options);
+    const normalizedAction = applyBudgetDefaults(action, options.governance);
+    const validationError = validateToolAction(tool, normalizedAction, options);
     if (validationError) {
-      const result = createBlockedToolResult(action, validationError);
+      const result = createBlockedToolResult(normalizedAction, validationError);
       return createExecutionRecord(result, options);
     }
 
-    const result = await tool.execute(
+    const beforeHookError = await runValidationHooks(
+      tool,
+      normalizedAction,
+      options,
+      this.#validationHooks,
+      "before",
+    );
+    if (beforeHookError) {
+      const result = createBlockedToolResult(normalizedAction, beforeHookError);
+      return createExecutionRecord(result, options);
+    }
+
+    const result = await executeWithRuntimeBudget(
+      () => tool.execute(
       {
-        ...action,
+        ...normalizedAction,
         toolName: tool.descriptor.name,
       },
       options,
+      ),
+      getRuntimeBudgetMs(normalizedAction, options.governance),
+      normalizedAction,
     );
+    const outputValidationError = validateToolOutput(tool, result);
+    if (outputValidationError) {
+      const blocked = createBlockedToolResult(
+        result.action,
+        outputValidationError,
+      );
+      return createExecutionRecord(blocked, options);
+    }
+
+    const afterHookError = await runValidationHooks(
+      tool,
+      result.action,
+      options,
+      this.#validationHooks,
+      "after",
+      result,
+    );
+    if (afterHookError) {
+      const blocked = createBlockedToolResult(result.action, afterHookError);
+      return createExecutionRecord(blocked, options);
+    }
+
     return createExecutionRecord(result, options);
   }
 
@@ -139,8 +205,9 @@ export class ResearchToolRegistry {
 
 export function createResearchToolRegistry(
   tools: readonly ResearchExecutableTool[] = [],
+  options: ResearchToolRegistryOptions = {},
 ): ResearchToolRegistry {
-  return new ResearchToolRegistry(tools);
+  return new ResearchToolRegistry(tools, options);
 }
 
 export function createToolRequestedEvent(
@@ -287,10 +354,378 @@ function validateToolAction(
     options.permittedActionClasses &&
     !options.permittedActionClasses.includes(action.actionClass)
   ) {
-    return `Action class ${action.actionClass} is not permitted for this loop.`;
+      return `Action class ${action.actionClass} is not permitted for this loop.`;
+  }
+
+  if (options.governance?.deniedActionClasses?.includes(action.actionClass)) {
+    return `Action class ${action.actionClass} is denied by governance policy.`;
+  }
+
+  if (
+    options.governance?.allowedActionClasses &&
+    !options.governance.allowedActionClasses.includes(action.actionClass)
+  ) {
+    return `Action class ${action.actionClass} is not allowed by governance policy.`;
+  }
+
+  const sideEffectError = validateSideEffects(
+    tool.descriptor.sideEffects,
+    options.governance,
+  );
+  if (sideEffectError) {
+    return sideEffectError;
+  }
+
+  const permissionError = validatePermissions(
+    tool.descriptor.requiredPermissions,
+    options.governance,
+  );
+  if (permissionError) {
+    return permissionError;
+  }
+
+  const callBudgetError = validateToolCallBudget(options);
+  if (callBudgetError) {
+    return callBudgetError;
+  }
+
+  const fileBudgetError = validateFileBudgets(action, options.governance);
+  if (fileBudgetError) {
+    return fileBudgetError;
+  }
+
+  const schemaErrors = validateJsonSchema(action.input, tool.descriptor.inputSchema);
+  if (schemaErrors.length > 0) {
+    return `Tool input failed schema validation: ${schemaErrors.join("; ")}`;
   }
 
   return undefined;
+}
+
+function validateToolOutput(
+  tool: ResearchExecutableTool,
+  result: ResearchToolExecutionResult,
+): string | undefined {
+  if (!tool.descriptor.outputSchema || result.status !== "complete") {
+    return undefined;
+  }
+
+  const schemaErrors = validateJsonSchema(result.output, tool.descriptor.outputSchema);
+  if (schemaErrors.length > 0) {
+    return `Tool output failed schema validation: ${schemaErrors.join("; ")}`;
+  }
+
+  return undefined;
+}
+
+function validateSideEffects(
+  sideEffect: ResearchToolSideEffect,
+  governance: ResearchGovernancePolicy | undefined,
+): string | undefined {
+  if (governance?.deniedSideEffects?.includes(sideEffect)) {
+    return `Tool side effect ${sideEffect} is denied by governance policy.`;
+  }
+
+  if (
+    governance?.allowedSideEffects &&
+    !governance.allowedSideEffects.includes(sideEffect)
+  ) {
+    return `Tool side effect ${sideEffect} is not allowed by governance policy.`;
+  }
+
+  return undefined;
+}
+
+function validatePermissions(
+  requiredPermissions: readonly string[],
+  governance: ResearchGovernancePolicy | undefined,
+): string | undefined {
+  const deniedPermission = requiredPermissions.find((permission) =>
+    governance?.deniedPermissions?.includes(permission),
+  );
+  if (deniedPermission) {
+    return `Tool permission ${deniedPermission} is denied by governance policy.`;
+  }
+
+  const missingAllowedPermission = requiredPermissions.find(
+    (permission) =>
+      governance?.allowedPermissions &&
+      !governance.allowedPermissions.includes(permission),
+  );
+  if (missingAllowedPermission) {
+    return `Tool permission ${missingAllowedPermission} is not allowed by governance policy.`;
+  }
+
+  return undefined;
+}
+
+function validateToolCallBudget(
+  options: ExecuteToolCallOptions,
+): string | undefined {
+  const maxToolCalls = options.governance?.maxToolCalls;
+  if (
+    typeof maxToolCalls === "number" &&
+    typeof options.toolCallCount === "number" &&
+    options.toolCallCount >= maxToolCalls
+  ) {
+    return `Tool call budget exhausted: ${options.toolCallCount}/${maxToolCalls} call(s) already used.`;
+  }
+
+  return undefined;
+}
+
+function validateFileBudgets(
+  action: ResearchToolAction,
+  governance: ResearchGovernancePolicy | undefined,
+): string | undefined {
+  if (!governance) {
+    return undefined;
+  }
+
+  const hasPathInput = typeof action.input.path === "string";
+  if (
+    hasPathInput &&
+    typeof governance.maxFiles === "number" &&
+    governance.maxFiles < 1
+  ) {
+    return `File budget exhausted: action requires 1 file but maxFiles is ${governance.maxFiles}.`;
+  }
+
+  const requestedBytes = readNumericInput(action.input, "maxBytes");
+  if (
+    typeof requestedBytes === "number" &&
+    typeof governance.maxBytes === "number" &&
+    requestedBytes > governance.maxBytes
+  ) {
+    return `Byte budget exceeded: requested ${requestedBytes} byte(s), maxBytes is ${governance.maxBytes}.`;
+  }
+
+  const requestedTokens = readNumericInput(action.input, "maxTokens");
+  if (
+    typeof requestedTokens === "number" &&
+    typeof governance.maxTokens === "number" &&
+    requestedTokens > governance.maxTokens
+  ) {
+    return `Token budget exceeded: requested ${requestedTokens} token(s), maxTokens is ${governance.maxTokens}.`;
+  }
+
+  return undefined;
+}
+
+function applyBudgetDefaults(
+  action: ResearchToolAction,
+  governance: ResearchGovernancePolicy | undefined,
+): ResearchToolAction {
+  if (
+    !governance ||
+    typeof governance.maxBytes !== "number" ||
+    typeof action.input.path !== "string" ||
+    typeof action.input.maxBytes === "number"
+  ) {
+    return action;
+  }
+
+  return {
+    ...action,
+    input: {
+      ...action.input,
+      maxBytes: governance.maxBytes,
+    },
+  };
+}
+
+function getRuntimeBudgetMs(
+  action: ResearchToolAction,
+  governance: ResearchGovernancePolicy | undefined,
+): number | undefined {
+  return action.budget?.maxRuntimeMs ?? governance?.maxRuntimeMs;
+}
+
+async function executeWithRuntimeBudget(
+  execute: () => Promise<ResearchToolExecutionResult>,
+  timeoutMs: number | undefined,
+  action: ResearchToolAction,
+): Promise<ResearchToolExecutionResult> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return execute();
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      execute(),
+      new Promise<ResearchToolExecutionResult>((resolve) => {
+        timeout = setTimeout(
+          () =>
+            resolve(
+              createBlockedToolResult(
+                action,
+                `Tool runtime budget exceeded after ${timeoutMs}ms.`,
+              ),
+            ),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function runValidationHooks(
+  tool: ResearchExecutableTool,
+  action: ResearchToolAction,
+  options: ExecuteToolCallOptions,
+  hooks: ReadonlyMap<string, ResearchToolValidationHook>,
+  phase: "before" | "after",
+  result?: ResearchToolExecutionResult,
+): Promise<string | undefined> {
+  for (const hookName of tool.descriptor.validationHooks ?? []) {
+    const hook = hooks.get(hookName);
+    if (!hook) {
+      return `Validation hook ${hookName} is not registered.`;
+    }
+
+    const message = await hook({
+      phase,
+      tool,
+      action,
+      context: options,
+      ...(result ? { result } : {}),
+    });
+    if (typeof message === "string" && message.trim().length > 0) {
+      return message.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function readValidationHookEntries(
+  hooks: ResearchToolRegistryOptions["validationHooks"],
+): [string, ResearchToolValidationHook][] {
+  if (!hooks) {
+    return [];
+  }
+
+  if (hooks instanceof Map) {
+    return [...hooks.entries()];
+  }
+
+  return Object.entries(hooks);
+}
+
+function validateJsonSchema(value: unknown, schema: unknown): string[] {
+  if (!schema || !isRecord(schema)) {
+    return [];
+  }
+
+  return validateJsonSchemaAt(value, schema, "$");
+}
+
+function validateJsonSchemaAt(
+  value: unknown,
+  schema: Record<string, unknown>,
+  path: string,
+): string[] {
+  const errors: string[] = [];
+
+  if (Array.isArray(schema.anyOf)) {
+    const branchErrors = schema.anyOf.map((branch) =>
+      isRecord(branch) ? validateJsonSchemaAt(value, branch, path) : [`${path} has invalid schema branch`],
+    );
+    if (branchErrors.some((branch) => branch.length === 0)) {
+      return [];
+    }
+
+    return [
+      `${path} did not match any allowed schema (${branchErrors
+        .map((branch) => branch.join(", "))
+        .join(" | ")})`,
+    ];
+  }
+
+  if ("const" in schema && value !== schema.const) {
+    errors.push(`${path} must equal ${JSON.stringify(schema.const)}`);
+  }
+
+  const type = typeof schema.type === "string" ? schema.type : undefined;
+  if (type) {
+    const typeError = validateJsonSchemaType(value, type, path);
+    if (typeError) {
+      errors.push(typeError);
+      return errors;
+    }
+  }
+
+  if (type === "object" && isRecord(value)) {
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((item): item is string => typeof item === "string")
+      : [];
+    for (const key of required) {
+      if (!(key in value)) {
+        errors.push(`${path}.${key} is required`);
+      }
+    }
+
+    if (isRecord(schema.properties)) {
+      for (const [key, propertySchema] of Object.entries(schema.properties)) {
+        if (key in value && isRecord(propertySchema)) {
+          errors.push(
+            ...validateJsonSchemaAt(value[key], propertySchema, `${path}.${key}`),
+          );
+        }
+      }
+    }
+  }
+
+  if (type === "array" && Array.isArray(value) && isRecord(schema.items)) {
+    value.forEach((item, index) => {
+      errors.push(...validateJsonSchemaAt(item, schema.items as Record<string, unknown>, `${path}[${index}]`));
+    });
+  }
+
+  return errors;
+}
+
+function validateJsonSchemaType(
+  value: unknown,
+  type: string,
+  path: string,
+): string | undefined {
+  if (type === "string" && typeof value !== "string") {
+    return `${path} must be a string`;
+  }
+  if (type === "number" && typeof value !== "number") {
+    return `${path} must be a number`;
+  }
+  if (type === "integer" && !Number.isInteger(value)) {
+    return `${path} must be an integer`;
+  }
+  if (type === "boolean" && typeof value !== "boolean") {
+    return `${path} must be a boolean`;
+  }
+  if (type === "object" && !isRecord(value)) {
+    return `${path} must be an object`;
+  }
+  if (type === "array" && !Array.isArray(value)) {
+    return `${path} must be an array`;
+  }
+  if (type === "null" && value !== null) {
+    return `${path} must be null`;
+  }
+
+  return undefined;
+}
+
+function readNumericInput(
+  input: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = input[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function createBlockedToolResult(

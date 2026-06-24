@@ -47,6 +47,7 @@ export function compileContextPacket(
     ],
     toolPermissions: createToolPermissions(input.tools, input.governance),
     toolBudget,
+    ...(input.governance ? { governancePolicy: input.governance } : {}),
     candidateToolActions: input.candidateToolActions ?? [],
     skippedToolActions: input.skippedToolActions ?? [],
     writebackExpectations: input.writebackExpectations ?? [
@@ -122,7 +123,12 @@ function createToolPermissions(
       sideEffects: tool.sideEffects,
       requiredPermissions: tool.requiredPermissions,
     }))
-    .filter((tool) => tool.actionClasses.length > 0);
+    .filter(
+      (tool) =>
+        tool.actionClasses.length > 0 &&
+        isSideEffectAllowed(tool.sideEffects, governance) &&
+        arePermissionsAllowed(tool.requiredPermissions, governance),
+    );
 }
 
 function filterActionClasses(
@@ -144,6 +150,47 @@ function filterActionClasses(
   });
 }
 
+function isSideEffectAllowed(
+  sideEffect: ResearchToolDescriptor["sideEffects"],
+  governance: ResearchGovernancePolicy | undefined,
+): boolean {
+  if (governance?.deniedSideEffects?.includes(sideEffect)) {
+    return false;
+  }
+  if (
+    governance?.allowedSideEffects &&
+    !governance.allowedSideEffects.includes(sideEffect)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function arePermissionsAllowed(
+  permissions: readonly string[],
+  governance: ResearchGovernancePolicy | undefined,
+): boolean {
+  if (
+    permissions.some((permission) =>
+      governance?.deniedPermissions?.includes(permission),
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    governance?.allowedPermissions &&
+    permissions.some(
+      (permission) => !governance.allowedPermissions?.includes(permission),
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function createToolBudget(
   governance: ResearchGovernancePolicy | undefined,
   tools: readonly ResearchToolDescriptor[],
@@ -154,6 +201,7 @@ function createToolBudget(
       ? { maxRuntimeMs: governance.maxRuntimeMs }
       : {}),
     ...(governance?.maxFiles ? { maxFiles: governance.maxFiles } : {}),
+    ...(governance?.maxBytes ? { maxBytes: governance.maxBytes } : {}),
     ...(governance?.maxTokens ? { maxTokens: governance.maxTokens } : {}),
   };
 }

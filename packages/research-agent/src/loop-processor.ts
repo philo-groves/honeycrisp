@@ -240,6 +240,10 @@ export function createPiLoopExecutor(
             subGoalId: input.loopPlan.subGoal.id,
             permittedActionClasses: input.loopPlan.permittedToolClasses,
             defaultActionClass: input.loopPlan.subGoal.actionClass,
+            toolCallCount,
+            ...(input.loopPlan.governancePolicy
+              ? { governance: input.loopPlan.governancePolicy }
+              : {}),
             ...(input.signal ? { signal: input.signal } : {}),
           });
           toolCallCount += 1;
@@ -421,6 +425,10 @@ async function executeControllerPlannedToolActions(input: {
         subGoalId: input.loopPlan.subGoal.id,
         permittedActionClasses: input.loopPlan.permittedToolClasses,
         defaultActionClass: input.loopPlan.subGoal.actionClass,
+        toolCallCount: records.length,
+        ...(input.loopPlan.governancePolicy
+          ? { governance: input.loopPlan.governancePolicy }
+          : {}),
         ...(input.signal ? { signal: input.signal } : {}),
       }),
     );

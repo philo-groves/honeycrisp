@@ -509,6 +509,212 @@ test("Pi loop executor recovers textual tool-call JSON", async () => {
   );
 });
 
+test("tool registry rejects invalid inputs, policy denials, and exhausted budgets", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tool-validation-"));
+  const fixtureFile = join(fixtureRoot, "sample.txt");
+  await writeFile(fixtureFile, "validated parser note\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const toolRegistry = createResearchToolRegistry([inspectionTool.executable]);
+  const baseAction = {
+    id: "validation_call",
+    actionClass: "inspect",
+    toolName: "local.inspection",
+    input: {
+      action: "read_text",
+      path: fixtureFile,
+      maxBytes: 32,
+    },
+  };
+
+  const schemaRejected = await toolRegistry.execute({
+    ...baseAction,
+    id: "validation_schema",
+    input: {
+      action: "read_text",
+    },
+  });
+  const sideEffectRejected = await toolRegistry.execute(baseAction, {
+    governance: {
+      allowedSideEffects: ["none"],
+    },
+  });
+  const permissionRejected = await toolRegistry.execute(baseAction, {
+    governance: {
+      deniedPermissions: ["filesystem:read"],
+    },
+  });
+  const callBudgetRejected = await toolRegistry.execute(baseAction, {
+    governance: {
+      maxToolCalls: 0,
+    },
+    toolCallCount: 0,
+  });
+  const fileBudgetRejected = await toolRegistry.execute(baseAction, {
+    governance: {
+      maxFiles: 0,
+    },
+  });
+  const byteBudgetRejected = await toolRegistry.execute(baseAction, {
+    governance: {
+      maxBytes: 8,
+    },
+  });
+
+  assert.equal(schemaRejected.result.status, "blocked");
+  assert.match(schemaRejected.result.summary, /Tool input failed schema validation/);
+  assert.match(schemaRejected.result.summary, /\$\.path is required/);
+  assert.equal(sideEffectRejected.result.status, "blocked");
+  assert.match(sideEffectRejected.result.summary, /side effect read is not allowed/);
+  assert.equal(permissionRejected.result.status, "blocked");
+  assert.match(permissionRejected.result.summary, /filesystem:read is denied/);
+  assert.equal(callBudgetRejected.result.status, "blocked");
+  assert.match(callBudgetRejected.result.summary, /Tool call budget exhausted/);
+  assert.equal(fileBudgetRejected.result.status, "blocked");
+  assert.match(fileBudgetRejected.result.summary, /File budget exhausted/);
+  assert.equal(byteBudgetRejected.result.status, "blocked");
+  assert.match(byteBudgetRejected.result.summary, /Byte budget exceeded/);
+  assert.equal(schemaRejected.events.length, 2);
+  assert.equal(schemaRejected.events[1]?.payload.status, "blocked");
+});
+
+test("tool registry applies byte defaults, output schemas, runtime budgets, and validation hooks", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tool-budgets-"));
+  const fixtureFile = join(fixtureRoot, "sample.txt");
+  await writeFile(fixtureFile, "1234567890abcdef\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const successfulRegistry = createResearchToolRegistry([
+    inspectionTool.executable,
+  ]);
+  const byteLimited = await successfulRegistry.execute(
+    {
+      id: "budget_default",
+      actionClass: "inspect",
+      toolName: "local.inspection",
+      input: {
+        action: "read_text",
+        path: fixtureFile,
+      },
+    },
+    {
+      governance: {
+        maxBytes: 5,
+      },
+    },
+  );
+
+  assert.equal(byteLimited.result.status, "complete");
+  assert.equal(byteLimited.result.action.input.maxBytes, 5);
+  assert.equal(byteLimited.result.output.bytesRead, 5);
+
+  const badOutputTool = createTestTool({
+    name: "test.bad_output",
+    outputSchema: {
+      type: "object",
+      required: ["ok"],
+      properties: {
+        ok: {
+          type: "boolean",
+        },
+      },
+    },
+    output: {
+      bad: true,
+    },
+  });
+  const slowTool = createTestTool({
+    name: "test.slow",
+    delayMs: 20,
+    output: {
+      ok: true,
+    },
+  });
+  const hookTool = createTestTool({
+    name: "test.hooked",
+    validationHooks: ["after-deny"],
+    output: {
+      ok: true,
+    },
+  });
+  const registry = createResearchToolRegistry(
+    [badOutputTool, slowTool, hookTool],
+    {
+      validationHooks: {
+        "after-deny": ({ phase }) =>
+          phase === "after" ? "after hook denied result" : undefined,
+      },
+    },
+  );
+
+  const badOutput = await registry.execute({
+    id: "bad_output_call",
+    actionClass: "inspect",
+    toolName: "test.bad_output",
+    input: {},
+  });
+  const timedOut = await registry.execute(
+    {
+      id: "slow_call",
+      actionClass: "inspect",
+      toolName: "test.slow",
+      input: {},
+    },
+    {
+      governance: {
+        maxRuntimeMs: 1,
+      },
+    },
+  );
+  const hookDenied = await registry.execute({
+    id: "hook_call",
+    actionClass: "inspect",
+    toolName: "test.hooked",
+    input: {},
+  });
+
+  assert.equal(badOutput.result.status, "blocked");
+  assert.match(badOutput.result.summary, /Tool output failed schema validation/);
+  assert.equal(timedOut.result.status, "blocked");
+  assert.match(timedOut.result.summary, /runtime budget exceeded/);
+  assert.equal(hookDenied.result.status, "blocked");
+  assert.equal(hookDenied.result.summary, "after hook denied result");
+});
+
+test("controller records skipped candidates when governance denies tool policy", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tool-policy-controller-"));
+  const fixtureFile = join(fixtureRoot, "sample.txt");
+  await writeFile(fixtureFile, "policy parser note\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const goalFrame = createResearchGoalFrame(
+    [
+      `Goal: Inspect local parser evidence in ${fixtureFile}`,
+      "Scope constraints: local fixture only",
+    ].join("\n"),
+  );
+
+  const decision = createFirstRunMemoryController().decide({
+    goalFrame,
+    tools: [inspectionTool.descriptor],
+    governance: {
+      allowedSideEffects: ["none"],
+    },
+  });
+
+  assert.equal(decision.actionClass, "synthesize");
+  assert.equal(decision.contextPacket.toolPermissions.length, 0);
+  assert.equal(decision.candidateToolActions.length, 0);
+  assert.equal(decision.skippedToolActions.length, 1);
+  assert.equal(decision.skippedToolActions[0]?.code, "side_effect_not_permitted");
+});
+
 test("goal runtime continues active goals until loop budget when incomplete", async () => {
   const result = await bootstrapResearchRun({
     prompt: [
@@ -1246,6 +1452,42 @@ function createMockUsage() {
       cacheRead: 0,
       cacheWrite: 0,
       total: 0,
+    },
+  };
+}
+
+function createTestTool(options) {
+  const descriptor = {
+    name: options.name,
+    description: "Test executable tool",
+    actionClasses: ["inspect"],
+    sideEffects: "none",
+    requiredPermissions: [],
+    ...(options.inputSchema ? { inputSchema: options.inputSchema } : {}),
+    ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
+    ...(options.validationHooks
+      ? { validationHooks: options.validationHooks }
+      : {}),
+  };
+
+  return {
+    descriptor,
+    async execute(action) {
+      if (options.delayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+      }
+
+      return {
+        action,
+        status: "complete",
+        startedAt: "2026-06-24T00:00:00.000Z",
+        completedAt: "2026-06-24T00:00:00.001Z",
+        summary: "test tool complete",
+        output: options.output ?? {
+          ok: true,
+        },
+        followUpActions: [],
+      };
     },
   };
 }

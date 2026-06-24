@@ -23,12 +23,13 @@ import type {
   ResearchGoalNode,
   ResearchGoalRunOptions,
   ResearchGoalRunResult,
+  ResearchGovernancePolicy,
+  ResearchLoopExecutor,
   ResearchLoopPlan,
   ResearchLoopProcessingResult,
   ResearchMemoryControllerDecision,
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
-  ResearchLoopExecutor,
   ResearchToolDescriptor,
 } from "./types.js";
 
@@ -37,6 +38,7 @@ export interface BootstrapResearchRunInput extends ResearchGoalFrameOptions {
   events?: readonly ResearchEvent[];
   memory?: Partial<ResearchMemorySnapshot>;
   tools?: readonly ResearchToolDescriptor[];
+  governance?: ResearchGovernancePolicy;
   loopExecutor?: ResearchLoopExecutor;
   goalRun?: ResearchGoalRunOptions;
 }
@@ -94,6 +96,7 @@ export async function bootstrapResearchRun(
       events,
       memory,
       ...(input.tools ? { tools: input.tools } : {}),
+      ...(input.governance ? { governance: input.governance } : {}),
     };
     decision = createFirstRunMemoryController().decide(controllerInput);
     loopPlan = appendGoalContinuationToLoopPlan(

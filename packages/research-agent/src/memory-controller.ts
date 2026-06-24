@@ -176,6 +176,26 @@ function classifyCandidateToolActions(input: {
       continue;
     }
 
+    const sideEffectReason = getSideEffectPolicyReason(tool, input.governance);
+    if (sideEffectReason) {
+      skippedToolActions.push({
+        action,
+        code: "side_effect_not_permitted",
+        reason: sideEffectReason,
+      });
+      continue;
+    }
+
+    const permissionReason = getPermissionPolicyReason(tool, input.governance);
+    if (permissionReason) {
+      skippedToolActions.push({
+        action,
+        code: "permission_not_permitted",
+        reason: permissionReason,
+      });
+      continue;
+    }
+
     if (action.actionClass !== input.selectedAction) {
       skippedToolActions.push({
         action,
@@ -298,7 +318,11 @@ function supportsAction(
     return false;
   }
 
-  return tools.some((tool) => tool.actionClasses.includes(actionClass));
+  return tools.some(
+    (tool) =>
+      tool.actionClasses.includes(actionClass) &&
+      isToolAllowedByPolicy(tool, governance),
+  );
 }
 
 function isAllowed(
@@ -318,6 +342,56 @@ function isAllowed(
   return true;
 }
 
+function isToolAllowedByPolicy(
+  tool: ResearchToolDescriptor,
+  governance: ResearchGovernancePolicy | undefined,
+): boolean {
+  return (
+    !getSideEffectPolicyReason(tool, governance) &&
+    !getPermissionPolicyReason(tool, governance)
+  );
+}
+
+function getSideEffectPolicyReason(
+  tool: ResearchToolDescriptor,
+  governance: ResearchGovernancePolicy | undefined,
+): string | undefined {
+  if (governance?.deniedSideEffects?.includes(tool.sideEffects)) {
+    return `Tool side effect ${tool.sideEffects} is denied by governance policy.`;
+  }
+  if (
+    governance?.allowedSideEffects &&
+    !governance.allowedSideEffects.includes(tool.sideEffects)
+  ) {
+    return `Tool side effect ${tool.sideEffects} is not allowed by governance policy.`;
+  }
+
+  return undefined;
+}
+
+function getPermissionPolicyReason(
+  tool: ResearchToolDescriptor,
+  governance: ResearchGovernancePolicy | undefined,
+): string | undefined {
+  const deniedPermission = tool.requiredPermissions.find((permission) =>
+    governance?.deniedPermissions?.includes(permission),
+  );
+  if (deniedPermission) {
+    return `Tool permission ${deniedPermission} is denied by governance policy.`;
+  }
+
+  const missingAllowedPermission = tool.requiredPermissions.find(
+    (permission) =>
+      governance?.allowedPermissions &&
+      !governance.allowedPermissions.includes(permission),
+  );
+  if (missingAllowedPermission) {
+    return `Tool permission ${missingAllowedPermission} is not allowed by governance policy.`;
+  }
+
+  return undefined;
+}
+
 function createDecisionToolBudget(
   governance: ResearchGovernancePolicy | undefined,
   tools: readonly ResearchToolDescriptor[],
@@ -328,6 +402,7 @@ function createDecisionToolBudget(
       ? { maxRuntimeMs: governance.maxRuntimeMs }
       : {}),
     ...(governance?.maxFiles ? { maxFiles: governance.maxFiles } : {}),
+    ...(governance?.maxBytes ? { maxBytes: governance.maxBytes } : {}),
     ...(governance?.maxTokens ? { maxTokens: governance.maxTokens } : {}),
   };
 }
