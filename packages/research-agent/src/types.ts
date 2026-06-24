@@ -428,6 +428,12 @@ export interface ResearchToolDescriptor {
   actionClasses: readonly ResearchActionClass[];
   sideEffects: ResearchToolSideEffect;
   requiredPermissions: readonly string[];
+  transportName?: string;
+  inputSchema?: unknown;
+  outputSchema?: unknown;
+  expectedLatencyMs?: number;
+  estimatedCost?: string;
+  validationHooks?: readonly string[];
   artifactLocations?: readonly string[];
   memoryWritebackDefaults?: readonly ResearchMemoryStoreKind[];
 }
@@ -586,6 +592,7 @@ export interface ResearchLoopExecutionOutput {
   evidenceRefs: readonly ResearchMemoryRef[];
   claimRefs: readonly ResearchMemoryRef[];
   followUpActions: readonly string[];
+  toolEvents?: readonly ResearchEvent[];
   researchTrace?: ResearchTrace;
   raw?: unknown;
 }

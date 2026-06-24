@@ -10,6 +10,7 @@ import {
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
   createPiLoopExecutor,
+  createResearchToolRegistry,
   createResearchEventId,
   createResearchFlowCapture,
   createResearchTraceEvents,
@@ -322,6 +323,187 @@ test("Pi loop executor makes model calls and exposes execution metadata", async 
       (event) =>
         event.kind === "loop.processed" &&
         event.payload.executionMode === "model",
+    ),
+  );
+});
+
+test("Pi loop executor executes native tool calls before final response", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tool-native-"));
+  const fixtureFile = join(fixtureRoot, "sample.txt");
+  await writeFile(fixtureFile, "alpha parser note\nbeta branch note\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const toolRegistry = createResearchToolRegistry([inspectionTool.executable]);
+  let callCount = 0;
+  let finalContext;
+  const executor = createPiLoopExecutor({
+    provider: "mock-provider",
+    model: "mock-model",
+    toolRegistry,
+    models: {
+      getModel(provider, model) {
+        return {
+          provider,
+          id: model,
+          api: "responses",
+        };
+      },
+      async completeSimple(model, context) {
+        callCount += 1;
+        if (callCount === 1) {
+          assert.ok(
+            context.tools.some((tool) => tool.name === "local_inspection"),
+          );
+          return {
+            content: [
+              {
+                type: "toolCall",
+                id: "call_local_inspection",
+                name: "local_inspection",
+                arguments: {
+                  action: "read_text",
+                  path: fixtureFile,
+                  maxBytes: 64,
+                },
+              },
+            ],
+            stopReason: "toolUse",
+            responseId: "resp_tool_request",
+            usage: createMockUsage(),
+          };
+        }
+
+        finalContext = context;
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                "## Result",
+                "Tool evidence received.",
+                "```honeycrisp-research-trace-json",
+                JSON.stringify({
+                  observations: [
+                    {
+                      text: "The local inspection tool returned parser notes.",
+                    },
+                  ],
+                  goalAssessment: {
+                    status: "continue",
+                    rationale: "Tool evidence should now route through memory.",
+                  },
+                }),
+                "```",
+              ].join("\n"),
+            },
+          ],
+          stopReason: "stop",
+          responseId: "resp_final",
+          usage: createMockUsage(),
+        };
+      },
+    },
+  });
+
+  const result = await bootstrapResearchRun({
+    prompt: "Goal: Inspect local parser evidence\nScope constraints: fixture only",
+    tools: [inspectionTool.descriptor],
+    loopExecutor: executor,
+    goalRun: {
+      maxLoops: 1,
+    },
+  });
+
+  assert.equal(callCount, 2);
+  assert.equal(result.loopResult.output.raw.toolCallCount, 1);
+  assert.equal(result.loopResult.output.raw.modelCalls.length, 2);
+  assert.equal(result.loopResult.output.toolEvents?.length, 2);
+  assert.ok(
+    finalContext.messages.some((message) => message.role === "toolResult"),
+  );
+  assert.ok(result.events.some((event) => event.kind === "tool.requested"));
+  assert.ok(
+    result.memory.directEvidence.some((ref) =>
+      ref.summary?.includes("alpha parser note"),
+    ),
+  );
+});
+
+test("Pi loop executor recovers textual tool-call JSON", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tool-text-"));
+  const fixtureFile = join(fixtureRoot, "sample.txt");
+  await writeFile(fixtureFile, "gamma parser note\n");
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [fixtureRoot],
+    maxBytes: 128,
+  });
+  const toolRegistry = createResearchToolRegistry([inspectionTool.executable]);
+  let callCount = 0;
+  const executor = createPiLoopExecutor({
+    provider: "mock-provider",
+    model: "mock-model",
+    toolRegistry,
+    models: {
+      getModel(provider, model) {
+        return {
+          provider,
+          id: model,
+          api: "responses",
+        };
+      },
+      async completeSimple() {
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  toolName: "local.inspection",
+                  action: "inspect",
+                  path: fixtureFile,
+                  maxBytes: 64,
+                }),
+              },
+            ],
+            stopReason: "stop",
+            responseId: "resp_text_tool_request",
+            usage: createMockUsage(),
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: "## Result\nRecovered textual tool call and inspected local evidence.",
+            },
+          ],
+          stopReason: "stop",
+          responseId: "resp_text_final",
+          usage: createMockUsage(),
+        };
+      },
+    },
+  });
+
+  const result = await bootstrapResearchRun({
+    prompt: "Goal: Recover textual tool call\nScope constraints: fixture only",
+    tools: [inspectionTool.descriptor],
+    loopExecutor: executor,
+    goalRun: {
+      maxLoops: 1,
+    },
+  });
+
+  assert.equal(callCount, 2);
+  assert.equal(result.loopResult.output.raw.toolCallCount, 1);
+  assert.equal(result.loopResult.output.raw.modelCalls.length, 2);
+  assert.ok(
+    result.memory.directEvidence.some((ref) =>
+      ref.summary?.includes("gamma parser note"),
     ),
   );
 });
@@ -864,3 +1046,20 @@ test("loop processor executes a planned loop and preserves isolated model input"
   assert.ok(result.output.text.includes("Initial loop result:"));
   assert.deepEqual(result.output.artifacts, loopPlan.expectedArtifacts);
 });
+
+function createMockUsage() {
+  return {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}

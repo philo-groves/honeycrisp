@@ -4,8 +4,14 @@ import {
   realpath,
   stat,
 } from "node:fs/promises";
+import { Type } from "@earendil-works/pi-ai";
 import { isAbsolute, relative, resolve } from "node:path";
 import { createResearchEventId, nowIso } from "./ids.js";
+import type {
+  ResearchExecutableTool,
+  ResearchToolAction,
+  ResearchToolExecutionResult,
+} from "./tool-registry.js";
 import type {
   ResearchEvent,
   ResearchToolDescriptor,
@@ -47,12 +53,25 @@ export interface LocalInspectionResult {
 }
 
 export interface LocalInspectionTool {
+  executable: ResearchExecutableTool;
   descriptor: ResearchToolDescriptor;
   inspect(request: LocalInspectionRequest): Promise<LocalInspectionResult>;
 }
 
 const DEFAULT_MAX_BYTES = 32_768;
 const DEFAULT_MAX_ENTRIES = 200;
+const LOCAL_INSPECTION_TRANSPORT_NAME = "local_inspection";
+const localInspectionParameters = Type.Object({
+  action: Type.Optional(
+    Type.Union([
+      Type.Literal("inspect"),
+      Type.Literal("list"),
+      Type.Literal("read_text"),
+    ]),
+  ),
+  path: Type.String(),
+  maxBytes: Type.Optional(Type.Number()),
+});
 
 export function createLocalInspectionTool(
   options: LocalInspectionToolOptions,
@@ -64,17 +83,26 @@ export function createLocalInspectionTool(
   let rootPromise: Promise<readonly string[]> | undefined;
   const descriptor: ResearchToolDescriptor = {
     name: "local.inspection",
+    transportName: LOCAL_INSPECTION_TRANSPORT_NAME,
     description:
       "Read-only local project inspection for bounded directory listings and text excerpts.",
     actionClasses: ["inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
+    inputSchema: localInspectionParameters,
     artifactLocations: options.allowedRoots,
     memoryWritebackDefaults: ["event", "working", "episodic"],
   };
 
-  return {
+  const tool: LocalInspectionTool = {
     descriptor,
+    executable: {
+      descriptor,
+      parameters: localInspectionParameters,
+      async execute(action, context) {
+        return executeLocalInspectionAction(tool, action, context?.signal);
+      },
+    },
     async inspect(request) {
       const roots = await getAllowedRoots();
       const target = await resolveAllowedPath(request.path, roots);
@@ -135,6 +163,8 @@ export function createLocalInspectionTool(
     },
   };
 
+  return tool;
+
   async function getAllowedRoots(): Promise<readonly string[]> {
     rootPromise ??= Promise.all(
       options.allowedRoots.map((root) => realpath(resolve(root))),
@@ -164,6 +194,105 @@ export function createLocalInspectionObservationEvent(
       root: result.root,
       summary: result.summary,
       result,
+    },
+  };
+}
+
+async function executeLocalInspectionAction(
+  tool: LocalInspectionTool,
+  action: ResearchToolAction,
+  signal: AbortSignal | undefined,
+): Promise<ResearchToolExecutionResult> {
+  const startedAt = nowIso();
+  if (signal?.aborted) {
+    return createLocalInspectionErrorResult(
+      action,
+      startedAt,
+      "Local inspection was aborted before execution.",
+    );
+  }
+
+  try {
+    const result = await tool.inspect(normalizeLocalInspectionRequest(action));
+    return {
+      action,
+      status: "complete",
+      startedAt,
+      completedAt: nowIso(),
+      summary: result.summary,
+      output: result,
+      evidence: [result.summary],
+      claims: [],
+      followUpActions: createLocalInspectionFollowUps(result),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return createLocalInspectionErrorResult(action, startedAt, message);
+  }
+}
+
+function normalizeLocalInspectionRequest(
+  action: ResearchToolAction,
+): LocalInspectionRequest {
+  const input = action.input;
+  const path = readRequiredString(input, "path");
+  const rawAction = typeof input.action === "string" ? input.action : "read_text";
+  const localAction: LocalInspectionAction =
+    rawAction === "list" ? "list" : "read_text";
+  const maxBytes =
+    typeof input.maxBytes === "number" && Number.isFinite(input.maxBytes)
+      ? input.maxBytes
+      : undefined;
+
+  return {
+    action: localAction,
+    path,
+    ...(maxBytes ? { maxBytes } : {}),
+  };
+}
+
+function readRequiredString(
+  input: Record<string, unknown>,
+  key: string,
+): string {
+  const value = input[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`local.inspection requires a ${key} string.`);
+  }
+
+  return value;
+}
+
+function createLocalInspectionFollowUps(
+  result: LocalInspectionResult,
+): string[] {
+  if (result.truncated && result.type === "file") {
+    return ["Read a narrower or later file slice if parser-relevant content was truncated."];
+  }
+
+  if (result.type === "directory") {
+    return ["Select a file from the directory listing for a bounded read."];
+  }
+
+  return [];
+}
+
+function createLocalInspectionErrorResult(
+  action: ResearchToolAction,
+  startedAt: string,
+  message: string,
+): ResearchToolExecutionResult {
+  return {
+    action,
+    status: "error",
+    startedAt,
+    completedAt: nowIso(),
+    summary: message,
+    claims: [],
+    evidence: [],
+    followUpActions: ["Report the local inspection error before continuing."],
+    error: {
+      message,
     },
   };
 }

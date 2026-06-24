@@ -110,6 +110,7 @@ export async function bootstrapResearchRun(
     events.push(createMemoryDecisionEvent(goalFrame.root.id, decision));
     events.push(createContextCompiledEvent(goalFrame.root.id, decision));
     events.push(createLoopPlannedEvent(goalFrame.root.id, loopPlan));
+    events.push(...(loopResult.output.toolEvents ?? []));
     events.push(createLoopProcessedEvent(goalFrame.root.id, loopResult));
     events.push(
       ...createResearchTraceEventsFromLoopResult(loopResult, {

@@ -11,6 +11,7 @@ import {
   createMemoryDrivenController,
   createMemoryInspector,
   createPiLoopExecutor,
+  createResearchToolRegistry,
   createResearchFlowCapture,
   createResearchGoalFrame,
   createSqliteMemoryEventLog,
@@ -30,6 +31,7 @@ import type {
   ResearchEvent,
   ResearchMemorySnapshot,
   ResearchToolDescriptor,
+  ResearchToolRegistry,
 } from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
@@ -388,7 +390,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 
     const loopExecutor = args.mock
       ? undefined
-      : await createRealLoopExecutor(args);
+      : await createRealLoopExecutor(args, inspectionSeed.toolRegistry);
 
     const inspectionState =
       inspectionSeed.events.length > 0 && inspectionSeed.memory
@@ -434,7 +436,10 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
   }
 }
 
-async function createRealLoopExecutor(args: ParsedArgs) {
+async function createRealLoopExecutor(
+  args: ParsedArgs,
+  toolRegistry: ResearchToolRegistry | undefined,
+) {
   const auth = await verifyProviderAuth(args.provider, args.model);
   if (!auth.configured) {
     throw new Error(
@@ -447,6 +452,7 @@ async function createRealLoopExecutor(args: ParsedArgs) {
     model: args.model,
     ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
     ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+    ...(toolRegistry ? { toolRegistry } : {}),
   });
 }
 
@@ -801,6 +807,7 @@ async function createInspectionSeed(args: ParsedArgs): Promise<{
   events: ResearchEvent[];
   memory: ResearchMemorySnapshot | undefined;
   tools: ResearchToolDescriptor[];
+  toolRegistry: ResearchToolRegistry | undefined;
 }> {
   if (args.inspectPaths.length > 0 && args.inspectRoots.length === 0) {
     throw new Error("--inspect-path requires at least one --inspect-root.");
@@ -811,6 +818,7 @@ async function createInspectionSeed(args: ParsedArgs): Promise<{
       events: [],
       memory: undefined,
       tools: [],
+      toolRegistry: undefined,
     };
   }
 
@@ -833,6 +841,7 @@ async function createInspectionSeed(args: ParsedArgs): Promise<{
     events,
     memory: events.length > 0 ? routeEventsToMemorySnapshot(events) : undefined,
     tools: [tool.descriptor],
+    toolRegistry: createResearchToolRegistry([tool.executable]),
   };
 }
 

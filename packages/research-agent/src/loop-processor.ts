@@ -7,13 +7,21 @@ import {
 } from "./research-trace.js";
 import type {
   Context,
+  Message,
+  ToolCall,
   Model,
   Models,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import {
+  createToolResultMessage,
+  type ResearchToolExecutionResult,
+  type ResearchToolRegistry,
+} from "./tool-registry.js";
 import type {
   ResearchCompletionGateResult,
   ResearchContextPacket,
+  ResearchEvent,
   ResearchLoopContextSection,
   ResearchLoopExecutionMode,
   ResearchLoopExecutionInput,
@@ -130,7 +138,13 @@ export interface CreatePiLoopExecutorOptions {
   maxTokens?: number;
   reasoning?: SimpleStreamOptions["reasoning"];
   models?: Pick<Models, "getModel" | "completeSimple">;
+  toolRegistry?: ResearchToolRegistry;
 }
+
+type ExtractedToolCall = {
+  call: ToolCall;
+  source: "native" | "text";
+};
 
 export function createPiLoopExecutor(
   options: CreatePiLoopExecutorOptions,
@@ -150,9 +164,49 @@ export function createPiLoopExecutor(
         );
       }
 
-      const context = createPiContext(input.modelInput);
+      const context = createPiContext(input.modelInput, options.toolRegistry);
       const streamOptions = createPiStreamOptions(options, input.signal);
-      const message = await models.completeSimple(model, context, streamOptions);
+      const toolEvents: ResearchEvent[] = [];
+      let message = await models.completeSimple(model, context, streamOptions);
+      const modelCalls = [createModelCallMetadata(message)];
+      let toolCallCount = 0;
+
+      for (
+        let turnIndex = 0;
+        turnIndex < input.loopPlan.actionBudget.maxToolCalls;
+        turnIndex += 1
+      ) {
+        if (message.stopReason === "error" || message.stopReason === "aborted") {
+          break;
+        }
+
+        const toolCalls = extractModelToolCalls(message, options.toolRegistry);
+        if (toolCalls.length === 0 || !options.toolRegistry) {
+          break;
+        }
+
+        context.messages.push(message);
+        for (const toolCall of toolCalls) {
+          if (toolCallCount >= input.loopPlan.actionBudget.maxToolCalls) {
+            break;
+          }
+
+          const execution = await options.toolRegistry.executeToolCall(toolCall.call, {
+            goalId: input.loopPlan.rootGoalId,
+            subGoalId: input.loopPlan.subGoal.id,
+            permittedActionClasses: input.loopPlan.permittedToolClasses,
+            defaultActionClass: input.loopPlan.subGoal.actionClass,
+            ...(input.signal ? { signal: input.signal } : {}),
+          });
+          toolCallCount += 1;
+          toolEvents.push(...execution.events);
+          context.messages.push(createToolResultContextMessage(toolCall, execution.result));
+        }
+
+        message = await models.completeSimple(model, context, streamOptions);
+        modelCalls.push(createModelCallMetadata(message));
+      }
+
       const text = extractAssistantText(message.content);
       const researchTrace = extractResearchTraceFromText(text);
 
@@ -170,6 +224,7 @@ export function createPiLoopExecutor(
         followUpActions: [
           "Ask the memory controller whether to continue this branch, create a sibling, refine the goal tree, or respond.",
         ],
+        ...(toolEvents.length > 0 ? { toolEvents } : {}),
         ...(researchTrace ? { researchTrace } : {}),
         raw: {
           provider: model.provider,
@@ -178,6 +233,8 @@ export function createPiLoopExecutor(
           stopReason: message.stopReason,
           responseId: message.responseId,
           usage: message.usage,
+          toolCallCount,
+          modelCalls,
         },
       };
     },
@@ -266,12 +323,18 @@ function createLoopContextSections(
   ];
 }
 
-function createPiContext(modelInput: ResearchLoopModelInput): Context {
+function createPiContext(
+  modelInput: ResearchLoopModelInput,
+  toolRegistry: ResearchToolRegistry | undefined,
+): Context {
   return {
     systemPrompt: [
       "You are Honeycrisp, a goal-oriented research agent built on Pi.",
       "Execute only the current bounded loop. Preserve evidence, inference, hypotheses, uncertainty, and user commitments as distinct categories.",
       "Do not claim that files were inspected unless evidence is present in the supplied context.",
+      toolRegistry && toolRegistry.size > 0
+        ? "Use available tool calls for permitted bounded actions. Do not print tool-call JSON when native tool calls are available."
+        : "If a tool action is needed but unavailable, return a concise tool action JSON object before explaining the blocker.",
     ].join("\n"),
     messages: [
       {
@@ -297,6 +360,9 @@ function createPiContext(modelInput: ResearchLoopModelInput): Context {
         ].join("\n"),
       },
     ],
+    ...(toolRegistry && toolRegistry.size > 0
+      ? { tools: toolRegistry.toPiTools() }
+      : {}),
   };
 }
 
@@ -333,6 +399,152 @@ function extractAssistantText(
     .map((item) => item.text)
     .join("\n")
     .trim();
+}
+
+function extractModelToolCalls(
+  message: Awaited<ReturnType<Models["completeSimple"]>>,
+  toolRegistry: ResearchToolRegistry | undefined,
+): ExtractedToolCall[] {
+  const nativeCalls = message.content.filter(
+    (item): item is ToolCall => item.type === "toolCall",
+  );
+  if (nativeCalls.length > 0) {
+    return nativeCalls.map((call) => ({ call, source: "native" }));
+  }
+
+  const text = extractAssistantText(message.content);
+  const textCall = text
+    ? extractTextToolCall(text, toolRegistry)
+    : undefined;
+  return textCall ? [{ call: textCall, source: "text" }] : [];
+}
+
+function createModelCallMetadata(
+  message: Awaited<ReturnType<Models["completeSimple"]>>,
+): Record<string, unknown> {
+  return {
+    stopReason: message.stopReason,
+    responseId: message.responseId,
+    usage: message.usage,
+    contentTypes: message.content.map((item) => item.type),
+  };
+}
+
+function extractTextToolCall(
+  text: string,
+  toolRegistry: ResearchToolRegistry | undefined,
+): ToolCall | undefined {
+  const json = extractFirstJsonObject(text);
+  if (!json) {
+    return undefined;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!isRecord(parsed)) {
+      return undefined;
+    }
+
+    const toolName = readToolName(parsed);
+    if (!toolName || !toolRegistry?.find(toolName)) {
+      return undefined;
+    }
+
+    const args = { ...parsed };
+    delete args.toolName;
+    delete args.name;
+
+    return {
+      type: "toolCall",
+      id: createId("toolcall"),
+      name: toolName,
+      arguments: args,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readToolName(payload: Record<string, unknown>): string | undefined {
+  const value = payload.toolName ?? payload.name;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function extractFirstJsonObject(text: string): string | undefined {
+  const start = text.indexOf("{");
+  if (start < 0) {
+    return undefined;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      escaping = inString;
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1).trim();
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function createToolResultContextMessage(
+  toolCall: ExtractedToolCall,
+  result: ResearchToolExecutionResult,
+): Message {
+  if (toolCall.source === "native") {
+    return createToolResultMessage(result, toolCall.call.id, toolCall.call.name);
+  }
+
+  return {
+    role: "user",
+    timestamp: Date.now(),
+    content: [
+      "Tool result for the textual tool action request:",
+      JSON.stringify(
+        {
+          toolCallId: toolCall.call.id,
+          toolName: toolCall.call.name,
+          status: result.status,
+          summary: result.summary,
+          output: result.output,
+          error: result.error,
+          followUpActions: result.followUpActions,
+        },
+        null,
+        2,
+      ),
+    ].join("\n"),
+  };
 }
 
 function renderDeterministicLoopOutput(loopPlan: ResearchLoopPlan): string {

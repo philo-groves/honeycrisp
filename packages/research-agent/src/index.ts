@@ -77,6 +77,23 @@ export type {
   LocalInspectionToolOptions,
 } from "./local-inspection.js";
 export {
+  createResearchToolRegistry,
+  createToolObservedEvent,
+  createToolRequestedEvent,
+  createToolResultMessage,
+  getToolTransportName,
+  ResearchToolRegistry,
+} from "./tool-registry.js";
+export type {
+  ExecuteToolCallOptions,
+  ResearchExecutableTool,
+  ResearchToolAction,
+  ResearchToolExecutionContext,
+  ResearchToolExecutionRecord,
+  ResearchToolExecutionResult,
+  ResearchToolExecutionStatus,
+} from "./tool-registry.js";
+export {
   deleteMemoryRecordUnderPolicy,
   expireMemoryRecord,
   supersedeMemoryRecord,
