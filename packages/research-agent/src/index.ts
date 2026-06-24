@@ -106,6 +106,12 @@ export {
   RESEARCH_MEMORY_RECORD_KINDS,
 } from "./memory-contracts.js";
 export {
+  createDeterministicMemoryWritePipeline,
+  DeterministicMemoryWritePipeline,
+  summarizeMemoryEvent,
+} from "./memory-write-pipeline.js";
+export type { MemoryWritePipeline } from "./memory-write-pipeline.js";
+export {
   ACCEPTED_RAW_EVENT_KINDS,
   isAcceptedRawEventKind,
   routeEventsToMemorySnapshot,

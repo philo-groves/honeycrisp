@@ -1,11 +1,13 @@
 import { normalizeMemorySnapshot } from "./context-packet.js";
-import { createResearchMemoryRecordId } from "./ids.js";
+import {
+  createDeterministicMemoryWritePipeline,
+  summarizeMemoryEvent,
+} from "./memory-write-pipeline.js";
 import type {
   ResearchAcceptedRawEventKind,
-  ResearchDerivedMemoryStatus,
+  ResearchDerivedMemoryRecord,
   ResearchEvent,
   ResearchMemoryRef,
-  ResearchMemoryRecordKind,
   ResearchMemoryRoute,
   ResearchMemoryRouteTarget,
   ResearchMemorySnapshot,
@@ -30,6 +32,7 @@ export const ACCEPTED_RAW_EVENT_KINDS = [
 ] as const satisfies readonly ResearchAcceptedRawEventKind[];
 
 const acceptedRawEventKindSet = new Set<string>(ACCEPTED_RAW_EVENT_KINDS);
+const memoryWritePipeline = createDeterministicMemoryWritePipeline();
 
 export function isAcceptedRawEventKind(
   kind: string,
@@ -40,99 +43,9 @@ export function isAcceptedRawEventKind(
 export function routeEventToMemory(
   event: ResearchEvent,
 ): ResearchMemoryRoute[] {
-  switch (event.kind) {
-    case "tool.observed":
-      return [
-        createRefRoute({
-          event,
-          target: "directEvidence",
-          store: "evidence",
-          recordKind: "evidence",
-          status: "confirmed",
-          reason: "Tool observations are direct evidence for later loops.",
-          confidence: 0.95,
-        }),
-      ];
-    case "loop.processed":
-    case "goal.updated":
-      return [
-        createRefRoute({
-          event,
-          target: "priorEpisodes",
-          store: "episodic",
-          recordKind: "episodic",
-          status: "active",
-          reason:
-            event.kind === "goal.updated"
-              ? "Goal status transitions are part of the research trajectory."
-              : "Completed loop output becomes an episodic trajectory.",
-          confidence: 0.8,
-        }),
-      ];
-    case "tool.requested":
-    case "model.visible_note":
-      return [
-        createRefRoute({
-          event,
-          target: "priorEpisodes",
-          store: "working",
-          recordKind: "working",
-          status: "active",
-          reason:
-            "Visible notes and tool requests are model-visible process observations.",
-          confidence: 0.7,
-        }),
-      ];
-    case "model.claim":
-      return [
-        createRefRoute({
-          event,
-          target: "currentHypotheses",
-          store: "semantic",
-          recordKind: "semantic_claim",
-          status: "candidate",
-          reason:
-            "Model-visible claims should be preserved as candidates until validated.",
-          confidence: 0.55,
-        }),
-      ];
-    case "model.hypothesis":
-      return [
-        createRefRoute({
-          event,
-          target: "currentHypotheses",
-          store: "hypothesis",
-          recordKind: "hypothesis",
-          status: "candidate",
-          reason: "Hypotheses should be available to the next loop.",
-          confidence: 0.65,
-        }),
-      ];
-    case "user.commitment":
-      return [
-        createStringRoute({
-          event,
-          target: "userCommitments",
-          reason: "User commitments are carried forward as context constraints.",
-          confidence: 1,
-        }),
-      ];
-    case "error.observed":
-      return [
-        createRefRoute({
-          event,
-          target: "contradictions",
-          store: "event",
-          recordKind: "evidence",
-          status: "active",
-          reason:
-            "Observed errors may contradict assumptions or block planned paths.",
-          confidence: 0.85,
-        }),
-      ];
-    default:
-      return [];
-  }
+  return memoryWritePipeline
+    .derive(event)
+    .flatMap((record) => createRoutesForRecord(event, record));
 }
 
 export function routeEventsToMemorySnapshot(
@@ -162,54 +75,127 @@ export function routeEventsToMemorySnapshot(
   return next;
 }
 
-function createRefRoute(input: {
-  event: ResearchEvent;
-  target: ResearchMemoryRouteTarget;
-  store: ResearchMemoryStoreKind;
-  recordKind: ResearchMemoryRecordKind;
-  status: ResearchDerivedMemoryStatus;
-  reason: string;
-  confidence: number;
-}): ResearchMemoryRoute {
-  const summary = summarizeEvent(input.event);
-  const recordId = createResearchMemoryRecordId({
-    kind: input.recordKind,
-    sourceEventIds: [input.event.id],
-    discriminator: input.target,
-  });
+function createRoutesForRecord(
+  event: ResearchEvent,
+  record: ResearchDerivedMemoryRecord,
+): ResearchMemoryRoute[] {
+  if (record.kind === "prospective_check") {
+    return [
+      createStringRoute({
+        event,
+        record,
+        target:
+          record.tags.includes("user-commitment")
+            ? "userCommitments"
+            : "prospectiveCommitments",
+        reason: "Prospective checks and user commitments are carried forward as context constraints.",
+      }),
+    ];
+  }
+
+  const target = selectRouteTarget(event, record);
+  const store = selectStore(record);
   const memoryRef: ResearchMemoryRef = {
-    store: input.store,
-    id: recordId,
-    recordKind: input.recordKind,
-    status: input.status,
-    sourceEventIds: [input.event.id],
-    summary,
-    confidence: input.confidence,
+    store,
+    id: record.id,
+    recordKind: record.kind,
+    status: record.status,
+    sourceEventIds: record.sourceEventIds,
+    summary: record.summary,
+    ...(typeof record.confidence === "number"
+      ? { confidence: record.confidence }
+      : {}),
   };
 
-  return {
-    id: `${recordId}:${input.target}`,
-    sourceEventId: input.event.id,
-    target: input.target,
-    reason: input.reason,
-    confidence: input.confidence,
-    memoryRef,
-  };
+  return [
+    {
+      id: `${record.id}:${target}`,
+      sourceEventId: event.id,
+      target,
+      reason: createRouteReason(event, record),
+      confidence: record.confidence ?? 0.5,
+      memoryRef,
+    },
+  ];
+}
+
+function selectRouteTarget(
+  event: ResearchEvent,
+  record: ResearchDerivedMemoryRecord,
+): Exclude<
+  ResearchMemoryRouteTarget,
+  "prospectiveCommitments" | "userCommitments"
+> {
+  if (record.kind === "evidence") {
+    return event.kind === "error.observed" ||
+      record.tags.includes("contradiction")
+      ? "contradictions"
+      : "directEvidence";
+  }
+  if (record.kind === "semantic_claim" || record.kind === "hypothesis") {
+    return "currentHypotheses";
+  }
+  if (record.kind === "procedure") {
+    return "candidateProcedures";
+  }
+
+  return "priorEpisodes";
+}
+
+function selectStore(
+  record: ResearchDerivedMemoryRecord,
+): ResearchMemoryStoreKind {
+  switch (record.kind) {
+    case "semantic_claim":
+    case "belief":
+      return "semantic";
+    case "procedure":
+      return "procedural";
+    case "prospective_check":
+      return "prospective";
+    default:
+      return record.kind;
+  }
+}
+
+function createRouteReason(
+  event: ResearchEvent,
+  record: ResearchDerivedMemoryRecord,
+): string {
+  if (record.kind === "evidence" && event.kind === "tool.observed") {
+    return "Tool observations are direct evidence for later loops.";
+  }
+  if (record.kind === "evidence" && event.kind === "error.observed") {
+    return "Observed errors may contradict assumptions or block planned paths.";
+  }
+  if (record.kind === "semantic_claim") {
+    return "Model-visible claims are preserved as candidate semantic claims until validated.";
+  }
+  if (record.kind === "hypothesis") {
+    return "Model-visible hypotheses are available to later loops with separated evidence links.";
+  }
+  if (record.kind === "procedure") {
+    return "Procedures remain candidates until repeated usefulness or explicit promotion.";
+  }
+
+  return "Accepted events are converted into typed memory records for later context.";
 }
 
 function createStringRoute(input: {
   event: ResearchEvent;
+  record?: ResearchDerivedMemoryRecord;
   target: "prospectiveCommitments" | "userCommitments";
   reason: string;
-  confidence: number;
 }): ResearchMemoryRoute {
+  const value = input.record?.summary ?? summarizeMemoryEvent(input.event);
+
   return {
-    id: `${input.event.id}:${input.target}`,
+    id: `${input.record?.id ?? input.event.id}:${input.target}`,
     sourceEventId: input.event.id,
     target: input.target,
     reason: input.reason,
-    confidence: input.confidence,
-    value: summarizeEvent(input.event),
+    confidence: input.record?.confidence ?? 1,
+    value,
   };
 }
 
@@ -266,63 +252,6 @@ function isStringMemoryTarget(
   target: ResearchMemoryRouteTarget,
 ): target is "prospectiveCommitments" | "userCommitments" {
   return target === "prospectiveCommitments" || target === "userCommitments";
-}
-
-function summarizeEvent(event: ResearchEvent): string {
-  const payload = event.payload;
-  if (isRecord(payload)) {
-    const summary = readString(payload, "summary");
-    if (summary) {
-      return truncate(summary, 700);
-    }
-
-    const objective = readString(payload, "objective");
-    if (objective) {
-      return truncate(objective, 700);
-    }
-
-    const text = readString(payload, "text");
-    if (text) {
-      return truncate(text, 700);
-    }
-  }
-
-  return truncate(`${event.kind}: ${formatPayload(payload)}`, 700);
-}
-
-function formatPayload(payload: unknown): string {
-  if (typeof payload === "string") {
-    return payload;
-  }
-
-  try {
-    return JSON.stringify(payload);
-  } catch {
-    return String(payload);
-  }
-}
-
-function readString(
-  payload: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = payload[key];
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function truncate(value: string, maxLength: number): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  if (compact.length <= maxLength) {
-    return compact;
-  }
-
-  return `${compact.slice(0, maxLength - 1)}...`;
 }
 
 type MutableResearchMemorySnapshot = {

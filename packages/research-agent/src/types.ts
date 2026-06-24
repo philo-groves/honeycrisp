@@ -170,6 +170,8 @@ export interface ResearchBaseMemoryRecord {
   kind: ResearchMemoryRecordKind;
   status: ResearchDerivedMemoryStatus;
   summary: string;
+  sourceEventIds: readonly string[];
+  evidenceRefIds: readonly string[];
   provenance: ResearchMemoryProvenance;
   goalId?: string;
   subGoalId?: string;
@@ -195,7 +197,15 @@ export interface ResearchEvidenceMemoryRecord
 export interface ResearchEpisodicMemoryRecord
   extends ResearchBaseMemoryRecord {
   kind: "episodic";
-  episodeKind: "goal_transition" | "loop_result" | "visible_note" | "error";
+  episodeKind:
+    | "goal_transition"
+    | "loop_plan"
+    | "loop_result"
+    | "memory_decision"
+    | "context_compilation"
+    | "visible_note"
+    | "tool_request"
+    | "error";
 }
 
 export interface ResearchSemanticClaimRecord
