@@ -15,10 +15,21 @@ import type {
 } from "@earendil-works/pi-ai";
 import {
   createToolResultMessage,
+  getToolTransportName,
+  type ResearchExecutableTool,
   type ResearchToolExecutionResult,
   type ResearchToolExecutionRecord,
   type ResearchToolRegistry,
 } from "./tool-registry.js";
+import { runAgentLoop } from "@earendil-works/pi-agent-core";
+import type {
+  AgentEvent,
+  AgentMessage,
+  AgentTool,
+  AgentToolResult,
+  BeforeToolCallContext,
+  ToolExecutionMode,
+} from "@earendil-works/pi-agent-core";
 import type {
   ResearchCompletionGateResult,
   ResearchEvent,
@@ -294,6 +305,214 @@ export function createPiLoopExecutor(
   };
 }
 
+export interface CreatePiAgentLoopExecutorOptions {
+  provider: string;
+  model: string;
+  authFile?: string;
+  maxTokens?: number;
+  reasoning?: SimpleStreamOptions["reasoning"];
+  models?: Pick<Models, "getModel" | "streamSimple">;
+  toolRegistry?: ResearchToolRegistry;
+  toolExecution?: ToolExecutionMode;
+}
+
+export function createPiAgentLoopExecutor(
+  options: CreatePiAgentLoopExecutorOptions,
+): ResearchLoopExecutor {
+  return {
+    name: `pi:${options.provider}/${options.model}:agent`,
+    async execute(input: ResearchLoopExecutionInput) {
+      const models =
+        options.models ??
+        createAuthenticatedModels(
+          options.authFile ? { authFile: options.authFile } : {},
+        );
+      const model = models.getModel(options.provider, options.model);
+      if (!model) {
+        throw new Error(
+          `Unknown model ${options.provider}/${options.model}`,
+        );
+      }
+
+      const toolEvents: ResearchEvent[] = [];
+      const agentEvents: Record<string, unknown>[] = [];
+      let toolCallCount = 0;
+      const plannedExecutions = await executeControllerPlannedToolActions({
+        loopPlan: input.loopPlan,
+        ...(options.toolRegistry ? { toolRegistry: options.toolRegistry } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+      toolCallCount += plannedExecutions.length;
+      toolEvents.push(...plannedExecutions.flatMap((record) => record.events));
+
+      const toolExecutionRecords = new Map<string, ResearchToolExecutionRecord>();
+      const capturedToolCallIds = new Set<string>();
+      const toolCallReservations = new Map<string, number>();
+      const agentTools = createPiAgentTools({
+        loopPlan: input.loopPlan,
+        toolRegistry: createFreeFormToolRegistry(
+          options.toolRegistry,
+          input.modelInput,
+          input.loopPlan.actionBudget.maxToolCalls - toolCallCount,
+        ),
+        getReservedToolCallCount(toolCallId) {
+          const reserved = toolCallReservations.get(toolCallId);
+          if (typeof reserved === "number") {
+            return reserved;
+          }
+
+          const fallback = toolCallCount;
+          toolCallReservations.set(toolCallId, fallback);
+          toolCallCount += 1;
+          return fallback;
+        },
+        recordExecution(record) {
+          toolExecutionRecords.set(record.action.id, record);
+        },
+      });
+      const prompts = [
+        createPiAgentUserMessage(input.modelInput),
+        ...(plannedExecutions.length > 0
+          ? [createPlannedToolResultContextMessage(plannedExecutions)]
+          : []),
+      ];
+      const context: {
+        systemPrompt: string;
+        messages: AgentMessage[];
+        tools?: AgentTool[];
+      } = {
+        systemPrompt: createPiSystemPrompt(agentTools.length > 0),
+        messages: [],
+        ...(agentTools.length > 0 ? { tools: agentTools } : {}),
+      };
+      const toolExecution = options.toolExecution ?? "sequential";
+
+      const agentMessages = await runAgentLoop(
+        prompts,
+        context,
+        {
+          model,
+          convertToLlm: convertAgentMessagesToLlm,
+          ...(typeof options.maxTokens === "number"
+            ? { maxTokens: options.maxTokens }
+            : {}),
+          ...(options.reasoning ? { reasoning: options.reasoning } : {}),
+          toolExecution,
+          beforeToolCall: async (hookContext, signal) => {
+            const toolCall = createToolCallFromAgentHook(hookContext);
+            const preflight = options.toolRegistry?.preflightToolCall(toolCall, {
+              goalId: input.loopPlan.rootGoalId,
+              subGoalId: input.loopPlan.subGoal.id,
+              permittedActionClasses: input.loopPlan.permittedToolClasses,
+              defaultActionClass: input.loopPlan.subGoal.actionClass,
+              toolCallCount,
+              ...(input.loopPlan.governancePolicy
+                ? { governance: input.loopPlan.governancePolicy }
+                : {}),
+              ...(signal ? { signal } : {}),
+            });
+            if (preflight) {
+              toolCallReservations.set(toolCall.id, toolCallCount);
+              toolCallCount += 1;
+              toolExecutionRecords.set(toolCall.id, preflight);
+              capturedToolCallIds.add(toolCall.id);
+              toolEvents.push(...preflight.events);
+              return {
+                block: true,
+                reason: preflight.result.summary,
+              };
+            }
+
+            toolCallReservations.set(toolCall.id, toolCallCount);
+            toolCallCount += 1;
+            return undefined;
+          },
+          afterToolCall: async (hookContext) => {
+            const record = toolExecutionRecords.get(hookContext.toolCall.id);
+            if (record && !capturedToolCallIds.has(hookContext.toolCall.id)) {
+              capturedToolCallIds.add(hookContext.toolCall.id);
+              toolEvents.push(...record.events);
+            }
+
+            const result = record?.result;
+            return result
+              ? {
+                  content: createPiAgentToolContent(result),
+                  details: result,
+                  isError: result.status !== "complete",
+                }
+              : undefined;
+          },
+          prepareNextTurn: ({ context: nextContext }) => {
+            if (
+              toolCallCount >= input.loopPlan.actionBudget.maxToolCalls &&
+              nextContext.tools &&
+              nextContext.tools.length > 0
+            ) {
+              return {
+                context: {
+                  ...nextContext,
+                  tools: [],
+                },
+              };
+            }
+
+            return undefined;
+          },
+          getSteeringMessages: async () => [],
+          getFollowUpMessages: async () => [],
+        },
+        (event) => {
+          agentEvents.push(captureAgentEvent(event));
+        },
+        input.signal,
+        models.streamSimple.bind(models),
+      );
+
+      const assistantMessages = agentMessages.filter(isAssistantMessage);
+      const finalAssistant = assistantMessages[assistantMessages.length - 1];
+      const text = finalAssistant
+        ? extractAssistantText(finalAssistant.content)
+        : "";
+      const researchTrace = extractResearchTraceFromText(text);
+
+      if (
+        finalAssistant &&
+        (finalAssistant.stopReason === "error" ||
+          finalAssistant.stopReason === "aborted")
+      ) {
+        throw new Error(
+          finalAssistant.errorMessage ?? `Model stopped: ${finalAssistant.stopReason}`,
+        );
+      }
+
+      return {
+        text,
+        artifacts: [...input.loopPlan.expectedArtifacts],
+        evidenceRefs: [],
+        claimRefs: [],
+        followUpActions: [
+          "Ask the memory controller whether to continue this branch, create a sibling, refine the goal tree, or respond.",
+        ],
+        ...(toolEvents.length > 0 ? { toolEvents } : {}),
+        ...(researchTrace ? { researchTrace } : {}),
+        raw: {
+          provider: model.provider,
+          model: model.id,
+          api: model.api,
+          lifecycle: "pi-agent",
+          toolExecutionMode: toolExecution,
+          toolCallCount,
+          plannedToolCallCount: plannedExecutions.length,
+          skippedCandidateToolActions: input.loopPlan.skippedToolActions,
+          modelCalls: assistantMessages.map(createModelCallMetadata),
+          agentEvents,
+        },
+      };
+    },
+  };
+}
+
 export function inferResearchLoopExecutionMode(
   loopResult: Pick<ResearchLoopProcessingResult, "executorName" | "output">,
 ): ResearchLoopExecutionMode {
@@ -458,41 +677,239 @@ function createPiContext(
   toolRegistry: ResearchToolRegistry | undefined,
 ): Context {
   return {
-    systemPrompt: [
-      "You are Honeycrisp, a goal-oriented research agent built on Pi.",
-      "Execute only the current bounded loop. Preserve evidence, inference, hypotheses, uncertainty, and user commitments as distinct categories.",
-      "Do not claim that files were inspected unless evidence is present in the supplied context.",
-      toolRegistry && toolRegistry.size > 0
-        ? "Use available tool calls for permitted bounded actions. Do not print tool-call JSON when native tool calls are available."
-        : "If a tool action is needed but unavailable, return a concise tool action JSON object before explaining the blocker.",
-    ].join("\n"),
-    messages: [
-      {
-        role: "user",
-        timestamp: Date.now(),
-        content: [
-          "Execute this planned research loop.",
-          "",
-          "## Loop Prompt",
-          modelInput.loopPrompt,
-          "",
-          "## Labeled Context Sections",
-          ...modelInput.contextSections.map(
-            (section) =>
-              `### ${section.label} (${section.required ? "required" : "optional"})\n${formatContextContent(section.content)}`,
-          ),
-          "",
-          "## Output Shape",
-          "Return concise markdown with: Result, Evidence Used, Assumptions, Open Questions, Suggested Next Step.",
-          "",
-          "## Visible Research Trace",
-          renderResearchTraceContract(),
-        ].join("\n"),
-      },
-    ],
+    systemPrompt: createPiSystemPrompt(Boolean(toolRegistry && toolRegistry.size > 0)),
+    messages: [createPiAgentUserMessage(modelInput)],
     ...(toolRegistry && toolRegistry.size > 0
       ? { tools: toolRegistry.toPiTools() }
       : {}),
+  };
+}
+
+function createPiSystemPrompt(hasTools: boolean): string {
+  return [
+    "You are Honeycrisp, a goal-oriented research agent built on Pi.",
+    "Execute only the current bounded loop. Preserve evidence, inference, hypotheses, uncertainty, and user commitments as distinct categories.",
+    "Do not claim that files were inspected unless evidence is present in the supplied context.",
+    hasTools
+      ? "Use available tool calls for permitted bounded actions. Do not print tool-call JSON when native tool calls are available."
+      : "If a tool action is needed but unavailable, return a concise tool action JSON object before explaining the blocker.",
+  ].join("\n");
+}
+
+function createPiAgentUserMessage(modelInput: ResearchLoopModelInput): Message {
+  return {
+    role: "user",
+    timestamp: Date.now(),
+    content: [
+      "Execute this planned research loop.",
+      "",
+      "## Loop Prompt",
+      modelInput.loopPrompt,
+      "",
+      "## Labeled Context Sections",
+      ...modelInput.contextSections.map(
+        (section) =>
+          `### ${section.label} (${section.required ? "required" : "optional"})\n${formatContextContent(section.content)}`,
+      ),
+      "",
+      "## Output Shape",
+      "Return concise markdown with: Result, Evidence Used, Assumptions, Open Questions, Suggested Next Step.",
+      "",
+      "## Visible Research Trace",
+      renderResearchTraceContract(),
+    ].join("\n"),
+  };
+}
+
+function createPiAgentTools(input: {
+  loopPlan: ResearchLoopPlan;
+  toolRegistry: ResearchToolRegistry | undefined;
+  getReservedToolCallCount(toolCallId: string): number;
+  recordExecution(record: ResearchToolExecutionRecord): void;
+}): AgentTool[] {
+  if (!input.toolRegistry) {
+    return [];
+  }
+
+  return input.toolRegistry
+    .listTools()
+    .filter((tool) => tool.parameters)
+    .map((tool) => createPiAgentTool(tool, input));
+}
+
+function createPiAgentTool(
+  tool: ResearchExecutableTool,
+  input: {
+    loopPlan: ResearchLoopPlan;
+    toolRegistry: ResearchToolRegistry | undefined;
+    getReservedToolCallCount(toolCallId: string): number;
+    recordExecution(record: ResearchToolExecutionRecord): void;
+  },
+): AgentTool {
+  const agentTool = {
+    name: getToolTransportName(tool),
+    label: tool.descriptor.name,
+    description: tool.descriptor.description,
+    parameters: tool.parameters!,
+    prepareArguments(args: unknown) {
+      return isRecord(args) ? args : {};
+    },
+    async execute(
+      toolCallId: string,
+      params: Record<string, unknown>,
+      signal?: AbortSignal,
+      onUpdate?: (partialResult: AgentToolResult<Record<string, unknown>>) => void,
+    ) {
+      onUpdate?.({
+        content: [
+          {
+            type: "text",
+            text: `Executing ${tool.descriptor.name}.`,
+          },
+        ],
+        details: {
+          phase: "executing",
+          toolName: tool.descriptor.name,
+        },
+      });
+      const record = await input.toolRegistry!.executeToolCall(
+        {
+          id: toolCallId,
+          name: getToolTransportName(tool),
+          arguments: params,
+        },
+        {
+          goalId: input.loopPlan.rootGoalId,
+          subGoalId: input.loopPlan.subGoal.id,
+          permittedActionClasses: input.loopPlan.permittedToolClasses,
+          defaultActionClass: input.loopPlan.subGoal.actionClass,
+          toolCallCount: input.getReservedToolCallCount(toolCallId),
+          ...(input.loopPlan.governancePolicy
+            ? { governance: input.loopPlan.governancePolicy }
+            : {}),
+          ...(signal ? { signal } : {}),
+        },
+      );
+      input.recordExecution(record);
+      return {
+        content: createPiAgentToolContent(record.result),
+        details: record.result,
+        terminate: false,
+      };
+    },
+    ...(tool.descriptor.sideEffects === "write" ||
+    tool.descriptor.sideEffects === "network" ||
+    tool.descriptor.sideEffects === "process"
+      ? { executionMode: "sequential" as const }
+      : {}),
+  };
+
+  return agentTool as AgentTool;
+}
+
+function convertAgentMessagesToLlm(messages: AgentMessage[]): Message[] {
+  return messages.filter(isLlmMessage);
+}
+
+function isLlmMessage(message: AgentMessage): message is Message {
+  return (
+    isRecord(message) &&
+    (message.role === "user" ||
+      message.role === "assistant" ||
+      message.role === "toolResult")
+  );
+}
+
+function isAssistantMessage(
+  message: AgentMessage,
+): message is Extract<Message, { role: "assistant" }> {
+  return isRecord(message) && message.role === "assistant";
+}
+
+function createToolCallFromAgentHook(
+  hookContext: BeforeToolCallContext,
+): Pick<ToolCall, "id" | "name" | "arguments"> {
+  return {
+    id: hookContext.toolCall.id,
+    name: hookContext.toolCall.name,
+    arguments: isRecord(hookContext.args) ? hookContext.args : {},
+  };
+}
+
+function createPiAgentToolContent(
+  result: ResearchToolExecutionResult,
+): [{ type: "text"; text: string }] {
+  return [
+    {
+      type: "text",
+      text: JSON.stringify(
+        {
+          status: result.status,
+          summary: result.summary,
+          output: result.output,
+          error: result.error,
+          followUpActions: result.followUpActions,
+        },
+        null,
+        2,
+      ),
+    },
+  ];
+}
+
+function captureAgentEvent(event: AgentEvent): Record<string, unknown> {
+  if (event.type === "agent_start" || event.type === "agent_end") {
+    return {
+      type: event.type,
+      ...(event.type === "agent_end" ? { messageCount: event.messages.length } : {}),
+    };
+  }
+
+  if (event.type === "turn_start") {
+    return {
+      type: event.type,
+    };
+  }
+
+  if (event.type === "turn_end") {
+    return {
+      type: event.type,
+      messageRole: event.message.role,
+      toolResultCount: event.toolResults.length,
+    };
+  }
+
+  if (
+    event.type === "message_start" ||
+    event.type === "message_update" ||
+    event.type === "message_end"
+  ) {
+    return {
+      type: event.type,
+      messageRole: event.message.role,
+      ...(event.type === "message_update"
+        ? { updateType: event.assistantMessageEvent.type }
+        : {}),
+    };
+  }
+
+  if (
+    event.type === "tool_execution_start" ||
+    event.type === "tool_execution_update" ||
+    event.type === "tool_execution_end"
+  ) {
+    return {
+      type: event.type,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      ...(event.type === "tool_execution_end"
+        ? { isError: event.isError }
+        : {}),
+    };
+  }
+
+  return {
+    type: "unknown",
   };
 }
 
@@ -550,7 +967,10 @@ function extractModelToolCalls(
 }
 
 function createModelCallMetadata(
-  message: Awaited<ReturnType<Models["completeSimple"]>>,
+  message: Pick<
+    Awaited<ReturnType<Models["completeSimple"]>>,
+    "content" | "responseId" | "stopReason" | "usage"
+  >,
 ): Record<string, unknown> {
   return {
     stopReason: message.stopReason,

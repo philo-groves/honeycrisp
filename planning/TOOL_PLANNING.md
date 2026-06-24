@@ -39,11 +39,12 @@ The project already has a first executable tool slice:
 - MCP clients can be adapted into Honeycrisp tools through an allowlisted connector abstraction. MCP tools, resource reads, and resource-template discovery preserve MCP provenance and normalize external content as untrusted output.
 - Skills can be registered, loaded from local `SKILL.md` directories, created from MCP metadata, selected from prompt/memory/user ids, and injected as auditable context. Skill runbooks can appear as candidate procedural refs, but skills cannot grant tool permission or override governance.
 - Built-in tool families can now be registered from the library layer for memory recall, repository search, structured file reads, deterministic analysis transforms, allowlisted experiments, and deterministic synthesis. Each built-in preserves a canonical dotted Honeycrisp name plus a provider-safe transport alias.
+- A Pi Agent lifecycle executor is available from the library layer. It maps Honeycrisp tools to Pi `AgentTool`s, uses Agent tool hooks for governance preflight and event capture, supports sequential or parallel tool batches, and keeps the older `completeSimple` executor as the fallback/default path.
 
 Known limitations to address:
 
 - Only local inspection is wired into the CLI by default; broader built-in tool family configuration is still library-only until the operator UX phase.
-- The runtime uses Pi model tool calls through `completeSimple`, not the fuller Pi `Agent` lifecycle.
+- The CLI still uses the `completeSimple` executor path by default; operator-facing selection of the Agent lifecycle path belongs in the configuration and UX phase.
 
 ## Phase 1: Core Tool Contract And Local Inspection Bridge
 
@@ -227,16 +228,25 @@ Verification:
 
 Evaluate and adopt the fuller Pi `Agent` lifecycle where it provides better streaming, callbacks, queueing, and native tool execution control than `completeSimple`.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Map Honeycrisp tools to Pi `AgentTool` objects where appropriate.
-- [ ] Use `beforeToolCall` for Honeycrisp governance validation.
-- [ ] Use `afterToolCall` for event capture and result normalization.
-- [ ] Preserve Honeycrisp memory event ordering across streamed model/tool events.
-- [ ] Support sequential and parallel tool execution modes.
-- [ ] Stream tool progress into captures or runtime status when useful.
-- [ ] Preserve the current `completeSimple` path as a simpler fallback if needed.
-- [ ] Add tests for lifecycle hooks and event ordering.
+- [x] Map Honeycrisp tools to Pi `AgentTool` objects where appropriate.
+- [x] Use `beforeToolCall` for Honeycrisp governance validation.
+- [x] Use `afterToolCall` for event capture and result normalization.
+- [x] Preserve Honeycrisp memory event ordering across streamed model/tool events.
+- [x] Support sequential and parallel tool execution modes.
+- [x] Stream tool progress into captures or runtime status when useful.
+- [x] Preserve the current `completeSimple` path as a simpler fallback if needed.
+- [x] Add tests for lifecycle hooks and event ordering.
+
+Verification:
+
+- `pnpm test` passed with 99 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/14-real-agent-lifecycle-search.json`.
+- The health check used the real `openai-codex/gpt-5.3-codex-spark` path through the Pi Agent lifecycle executor with sequential tool execution. It produced one `repository.search` call, one complete `tool.observed` event, two model calls, and lifecycle capture entries for `tool_execution_start`, `tool_execution_update`, and `tool_execution_end`.
+- The zsh evidence remained stable: `parse_context_save` matched `context.c:67` and `parse.c:295`. The tighter prompt avoided the earlier over-specific first query from Phase 7.
 
 ## Phase 9: Operator Configuration And UX
 

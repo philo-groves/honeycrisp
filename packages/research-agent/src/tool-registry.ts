@@ -104,6 +104,10 @@ export class ResearchToolRegistry {
     return [...this.#toolsByName.values()].map((tool) => tool.descriptor);
   }
 
+  listTools(): ResearchExecutableTool[] {
+    return [...this.#toolsByName.values()];
+  }
+
   toPiTools(): Tool[] {
     return [...this.#toolsByName.values()]
       .filter((tool) => tool.parameters)
@@ -197,6 +201,40 @@ export class ResearchToolRegistry {
     const tool = this.find(toolCall.name);
     const action = createToolActionFromCall(toolCall, tool, options);
     return this.execute(action, {
+      ...options,
+      toolCallId: toolCall.id,
+    });
+  }
+
+  preflight(
+    action: ResearchToolAction,
+    options: ExecuteToolCallOptions = {},
+  ): ResearchToolExecutionRecord | undefined {
+    const tool = this.find(action.toolName);
+    if (!tool) {
+      return createExecutionRecord(
+        createBlockedToolResult(action, `Unknown tool: ${action.toolName}`),
+        options,
+      );
+    }
+
+    const normalizedAction = applyBudgetDefaults(action, options.governance);
+    const validationError = validateToolAction(tool, normalizedAction, options);
+    return validationError
+      ? createExecutionRecord(
+          createBlockedToolResult(normalizedAction, validationError),
+          options,
+        )
+      : undefined;
+  }
+
+  preflightToolCall(
+    toolCall: Pick<ToolCall, "id" | "name" | "arguments">,
+    options: ExecuteToolCallOptions = {},
+  ): ResearchToolExecutionRecord | undefined {
+    const tool = this.find(toolCall.name);
+    const action = createToolActionFromCall(toolCall, tool, options);
+    return this.preflight(action, {
       ...options,
       toolCallId: toolCall.id,
     });

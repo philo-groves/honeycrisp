@@ -161,12 +161,14 @@ export type { PlanResearchLoopInput } from "./loop-planner.js";
 export {
   compileLoopModelInput,
   createDeterministicLoopExecutor,
+  createPiAgentLoopExecutor,
   createPiLoopExecutor,
   inferResearchLoopExecutionMode,
   processResearchLoop,
 } from "./loop-processor.js";
 export type {
   CreateDeterministicLoopExecutorOptions,
+  CreatePiAgentLoopExecutorOptions,
   CreatePiLoopExecutorOptions,
   ProcessResearchLoopInput,
 } from "./loop-processor.js";
