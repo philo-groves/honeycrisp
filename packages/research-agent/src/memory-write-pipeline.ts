@@ -86,6 +86,7 @@ export class DeterministicMemoryWritePipeline implements MemoryWritePipeline {
             tags: ["loop-result"],
           }),
         ];
+      case "artifact.updated":
       case "artifact.tombstoned":
         return [
           createEpisodeRecord(event, {
@@ -93,7 +94,10 @@ export class DeterministicMemoryWritePipeline implements MemoryWritePipeline {
             summary: summarizeMemoryEvent(event),
             status: "confirmed",
             confidence: 0.9,
-            tags: ["artifact", "tombstone"],
+            tags:
+              event.kind === "artifact.tombstoned"
+                ? ["artifact", "tombstone"]
+                : ["artifact", "updated"],
           }),
         ];
       case "tool.requested":

@@ -233,19 +233,19 @@ Checklist:
 
 Move general steering actions from Beale into Honeycrisp while keeping Beale-specific report/export actions in Beale.
 
-Status: not started.
+Status: completed.
 
 Checklist:
 
-- [ ] Add Honeycrisp APIs or CLI commands for promoting a hypothesis to finding.
-- [ ] Add Honeycrisp APIs or CLI commands for reviewing, rejecting, superseding, or tombstoning hypotheses and findings.
-- [ ] Add Honeycrisp APIs or CLI commands for requesting proof, attaching proof attempts, and reviewing proof outcomes.
-- [ ] Add Honeycrisp APIs or CLI commands for marking artifacts as important, sensitive, or tombstoned.
-- [ ] Keep vulnerability-specific classification, disclosure readiness, and report/export steering in Beale.
-- [ ] Update Beale steering actions to call Honeycrisp APIs for general state changes.
-- [ ] Ensure all steering changes append Honeycrisp events before mutating derived records.
-- [ ] Add tests for Beale-to-Honeycrisp steering calls and memory audit records.
-- [ ] Run a UI steering health check on a fixture run.
+- [x] Add Honeycrisp APIs or CLI commands for promoting a hypothesis to finding.
+- [x] Add Honeycrisp APIs or CLI commands for reviewing, rejecting, superseding, or tombstoning hypotheses and findings.
+- [x] Add Honeycrisp APIs or CLI commands for requesting proof, attaching proof attempts, and reviewing proof outcomes.
+- [x] Add Honeycrisp APIs or CLI commands for marking artifacts as important, sensitive, or tombstoned.
+- [x] Keep vulnerability-specific classification, disclosure readiness, and report/export steering in Beale.
+- [x] Update Beale steering actions to call Honeycrisp APIs for general state changes.
+- [x] Ensure all steering changes append Honeycrisp events before mutating derived records.
+- [x] Add tests for Beale-to-Honeycrisp steering calls and memory audit records.
+- [x] Run a UI steering health check on a fixture run.
 
 ## Phase 11: Beale Cleanup And Compatibility Boundary
 

@@ -48,6 +48,7 @@ export type ResearchAcceptedRawEventKind =
   | "context.compiled"
   | "loop.planned"
   | "loop.processed"
+  | "artifact.updated"
   | "artifact.tombstoned"
   | "tool.requested"
   | "tool.observed"

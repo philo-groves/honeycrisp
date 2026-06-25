@@ -22,6 +22,7 @@ export const ACCEPTED_RAW_EVENT_KINDS = [
   "context.compiled",
   "loop.planned",
   "loop.processed",
+  "artifact.updated",
   "artifact.tombstoned",
   "tool.requested",
   "tool.observed",

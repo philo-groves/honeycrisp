@@ -14,6 +14,7 @@ import {
   createDeterministicLoopExecutor,
   createMemoryDrivenController,
   createMemoryInspector,
+  createMemorySteeringController,
   createPiAgentLoopExecutor,
   createPiLoopExecutor,
   createRepositorySearchTool,
@@ -41,6 +42,13 @@ import {
   loginAuthProvider,
   logoutAuthProvider,
   mergeResearchWorkspaceContexts,
+  parseResearchDerivedMemoryStatus,
+  parseResearchFindingStatus,
+  parseResearchProofAttemptStatus,
+  parseResearchProofMethodKind,
+  parseResearchProofObligationStatus,
+  parseResearchProofResultStatus,
+  parseResearchProofSubjectKind,
   resolveResearchModelConfig,
   routeEventsToMemorySnapshot,
   verifyProviderAuth,
@@ -52,6 +60,7 @@ import type {
   AuthLoginCallbacks,
   AuthPrompt,
   LocalInspectionAction,
+  ResearchArtifactRef,
   ResearchModelEffort,
   ResearchEvent,
   ResearchExecutableTool,
@@ -59,6 +68,7 @@ import type {
   ResearchLoopExecutor,
   ResearchMemorySnapshot,
   ResearchModelConfigPreference,
+  ResearchProofMethodDescriptor,
   ResolvedResearchModelConfig,
   ResearchSkillDescriptor,
   ResearchToolDescriptor,
@@ -151,6 +161,27 @@ interface ParsedMemoryArgs {
   goal: string | undefined;
   questions: string[];
   limit: number | undefined;
+  summary: string | undefined;
+  status: string | undefined;
+  findingStatus: string | undefined;
+  supersededByRecordId: string | undefined;
+  confidence: number | undefined;
+  goalId: string | undefined;
+  loopId: string | undefined;
+  subGoalId: string | undefined;
+  question: string | undefined;
+  methodKind: string | undefined;
+  methodName: string | undefined;
+  result: string | undefined;
+  verifier: string | undefined;
+  requiredResult: string | undefined;
+  obligationStatus: string | undefined;
+  obligationId: string | undefined;
+  attemptStatus: string | undefined;
+  artifactKind: string | undefined;
+  artifactUri: string | undefined;
+  mark: string | undefined;
+  policy: string | undefined;
   json: boolean;
   help: boolean;
 }
@@ -425,6 +456,27 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
   let workspaceRoot = process.cwd();
   let goal: string | undefined;
   let limit: number | undefined;
+  let summary: string | undefined;
+  let status: string | undefined;
+  let findingStatus: string | undefined;
+  let supersededByRecordId: string | undefined;
+  let confidence: number | undefined;
+  let goalId: string | undefined;
+  let loopId: string | undefined;
+  let subGoalId: string | undefined;
+  let question: string | undefined;
+  let methodKind: string | undefined;
+  let methodName: string | undefined;
+  let result: string | undefined;
+  let verifier: string | undefined;
+  let requiredResult: string | undefined;
+  let obligationStatus: string | undefined;
+  let obligationId: string | undefined;
+  let attemptStatus: string | undefined;
+  let artifactKind: string | undefined;
+  let artifactUri: string | undefined;
+  let mark: string | undefined;
+  let policy: string | undefined;
   let json = false;
   let help = false;
   const questions: string[] = [];
@@ -440,7 +492,9 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
       goal = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--question") {
-      questions.push(readOptionValue(argv, index, arg));
+      const value = readOptionValue(argv, index, arg);
+      questions.push(value);
+      question = value;
       index += 1;
     } else if (arg === "--limit") {
       const value = Number.parseInt(readOptionValue(argv, index, arg), 10);
@@ -448,6 +502,73 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
         throw new Error("--limit requires a positive integer.");
       }
       limit = value;
+      index += 1;
+    } else if (arg === "--summary" || arg === "--note") {
+      summary = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--status") {
+      status = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--finding-status") {
+      findingStatus = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--superseded-by") {
+      supersededByRecordId = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--confidence") {
+      const value = Number.parseFloat(readOptionValue(argv, index, arg));
+      if (!Number.isFinite(value) || value < 0 || value > 1) {
+        throw new Error("--confidence requires a number from 0 to 1.");
+      }
+      confidence = value;
+      index += 1;
+    } else if (arg === "--goal-id") {
+      goalId = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--loop-id") {
+      loopId = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--sub-goal-id") {
+      subGoalId = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--question") {
+      question = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--method-kind") {
+      methodKind = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--method-name") {
+      methodName = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--result") {
+      result = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--verifier") {
+      verifier = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--required-result") {
+      requiredResult = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--obligation-status") {
+      obligationStatus = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--obligation-id") {
+      obligationId = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--attempt-status") {
+      attemptStatus = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--artifact-kind") {
+      artifactKind = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--artifact-uri") {
+      artifactUri = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--mark") {
+      mark = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--policy") {
+      policy = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--json") {
       json = true;
@@ -467,6 +588,27 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
     goal,
     questions,
     limit,
+    summary,
+    status,
+    findingStatus,
+    supersededByRecordId,
+    confidence,
+    goalId,
+    loopId,
+    subGoalId,
+    question,
+    methodKind,
+    methodName,
+    result,
+    verifier,
+    requiredResult,
+    obligationStatus,
+    obligationId,
+    attemptStatus,
+    artifactKind,
+    artifactUri,
+    mark,
+    policy,
     json,
     help,
   };
@@ -1049,8 +1191,28 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
     workspaceRoot: args.workspaceRoot,
   });
   const inspector = createMemoryInspector({ eventLog, recordStore, proofStore });
+  const steering = createMemorySteeringController({
+    eventLog,
+    recordStore,
+    proofStore,
+  });
 
   try {
+    if (isMemorySteeringCommand(args.command)) {
+      const result = handleMemorySteeringCommand(args, steering);
+      printMemoryOutput(
+        args,
+        {
+          ...result,
+          agentState: inspector.showAgentState({
+            storage: createMemoryCommandStorageReadModel(args),
+          }),
+        },
+        renderMemorySteeringResult,
+      );
+      return;
+    }
+
     if (args.command === "timeline") {
       printMemoryOutput(args, inspector.eventTimeline(), renderTimeline);
       return;
@@ -1538,6 +1700,15 @@ function memoryUsage(): string {
     "  proof-obligation <id>      Show one proof obligation",
     "  proof-attempts             Show proof attempts",
     "  proof-attempt <id>         Show one proof attempt",
+    "  promote-hypothesis <id>    Promote a hypothesis record to a finding",
+    "  review-record <id>         Review a hypothesis/finding/record status",
+    "  reject-record <id>         Reject a hypothesis/finding/record",
+    "  supersede-record <id>      Supersede a record with --superseded-by",
+    "  tombstone-record <id>      Tombstone a record",
+    "  request-proof <kind> <id>  Request a proof obligation for a subject",
+    "  attach-proof-attempt <id>  Attach a proof attempt to an obligation",
+    "  review-proof-attempt <id>  Review a proof attempt outcome",
+    "  mark-artifact <id>         Mark an artifact important/sensitive/tombstoned",
     "  claim-graph                Show claim graph edges",
     "  prospective-checks         Show prospective checks",
     "  debug-capture              Show read-only memory debug capture",
@@ -1550,6 +1721,271 @@ function memoryUsage(): string {
     "  --json                  Print JSON",
     "  -h, --help              Show help",
   ].join("\n");
+}
+
+function isMemorySteeringCommand(
+  command: string | undefined,
+): command is
+  | "promote-hypothesis"
+  | "review-record"
+  | "reject-record"
+  | "supersede-record"
+  | "tombstone-record"
+  | "request-proof"
+  | "attach-proof-attempt"
+  | "review-proof-attempt"
+  | "mark-artifact" {
+  return (
+    command === "promote-hypothesis" ||
+    command === "review-record" ||
+    command === "reject-record" ||
+    command === "supersede-record" ||
+    command === "tombstone-record" ||
+    command === "request-proof" ||
+    command === "attach-proof-attempt" ||
+    command === "review-proof-attempt" ||
+    command === "mark-artifact"
+  );
+}
+
+function handleMemorySteeringCommand(
+  args: ParsedMemoryArgs,
+  steering: ReturnType<typeof createMemorySteeringController>,
+) {
+  const context = memorySteeringContext(args);
+
+  if (args.command === "promote-hypothesis") {
+    const hypothesisRecordId = requireMemoryPositional(args, "promote-hypothesis <record-id>");
+    const findingStatus = args.findingStatus
+      ? parseResearchFindingStatus(args.findingStatus)
+      : undefined;
+    if (
+      findingStatus &&
+      findingStatus !== "candidate" &&
+      findingStatus !== "needs_evidence" &&
+      findingStatus !== "supported" &&
+      findingStatus !== "verified"
+    ) {
+      throw new Error("promote-hypothesis finding status must be candidate, needs_evidence, supported, or verified.");
+    }
+    return steering.promoteHypothesisToFinding({
+      ...context,
+      hypothesisRecordId,
+      ...(args.summary ? { summary: args.summary } : {}),
+      ...(findingStatus ? { findingStatus } : {}),
+      ...(typeof args.confidence === "number"
+        ? { confidence: args.confidence }
+        : {}),
+    });
+  }
+
+  if (args.command === "review-record") {
+    const recordId = requireMemoryPositional(args, "review-record <record-id> --status <status>");
+    if (!args.status) {
+      throw new Error("review-record requires --status.");
+    }
+    return steering.reviewRecord({
+      ...context,
+      recordId,
+      status: parseResearchDerivedMemoryStatus(args.status),
+      ...(args.summary ? { summary: args.summary } : {}),
+      ...(args.findingStatus
+        ? { findingStatus: parseResearchFindingStatus(args.findingStatus) }
+        : {}),
+      ...(args.supersededByRecordId
+        ? { supersededByRecordId: args.supersededByRecordId }
+        : {}),
+    });
+  }
+
+  if (args.command === "reject-record") {
+    const recordId = requireMemoryPositional(args, "reject-record <record-id>");
+    const findingStatus = args.findingStatus
+      ? parseResearchFindingStatus(args.findingStatus)
+      : undefined;
+    if (
+      findingStatus &&
+      findingStatus !== "rejected" &&
+      findingStatus !== "out_of_scope"
+    ) {
+      throw new Error("reject-record finding status must be rejected or out_of_scope.");
+    }
+    return steering.rejectRecord({
+      ...context,
+      recordId,
+      ...(args.summary ? { summary: args.summary } : {}),
+      ...(findingStatus ? { findingStatus } : {}),
+    });
+  }
+
+  if (args.command === "supersede-record") {
+    const recordId = requireMemoryPositional(args, "supersede-record <record-id> --superseded-by <record-id>");
+    const supersededByRecordId = args.supersededByRecordId ?? args.positionals[1];
+    if (!supersededByRecordId) {
+      throw new Error("supersede-record requires --superseded-by or a replacement positional.");
+    }
+    return steering.supersedeRecord({
+      ...context,
+      recordId,
+      supersededByRecordId,
+      ...(args.summary ? { summary: args.summary } : {}),
+    });
+  }
+
+  if (args.command === "tombstone-record") {
+    const recordId = requireMemoryPositional(args, "tombstone-record <record-id>");
+    return steering.tombstoneRecord({
+      ...context,
+      recordId,
+      ...(args.summary ? { summary: args.summary } : {}),
+    });
+  }
+
+  if (args.command === "request-proof") {
+    const subjectKind = args.positionals[0];
+    const subjectId = args.positionals[1];
+    if (!subjectKind || !subjectId) {
+      throw new Error("request-proof requires <subject-kind> <subject-id>.");
+    }
+    const question = args.question ?? args.summary;
+    if (!question) {
+      throw new Error("request-proof requires --question or --summary.");
+    }
+    return steering.requestProof({
+      ...context,
+      subject: {
+        kind: parseResearchProofSubjectKind(subjectKind),
+        id: subjectId,
+        ...(args.summary ? { summary: args.summary } : {}),
+      },
+      question,
+      acceptableMethods: [proofMethodFromArgs(args)],
+      ...(args.requiredResult
+        ? { requiredResult: parseResearchProofResultStatus(args.requiredResult) }
+        : {}),
+      ...(args.obligationStatus
+        ? { status: parseResearchProofObligationStatus(args.obligationStatus) }
+        : {}),
+      ...(subjectKind === "memory_record"
+        ? { hypothesisRecordIds: [subjectId] }
+        : {}),
+    });
+  }
+
+  if (args.command === "attach-proof-attempt") {
+    const obligationId = requireMemoryPositional(args, "attach-proof-attempt <obligation-id> --summary <text>");
+    if (!args.summary) {
+      throw new Error("attach-proof-attempt requires --summary.");
+    }
+    return steering.attachProofAttempt({
+      ...context,
+      obligationId,
+      summary: args.summary,
+      method: proofMethodFromArgs(args),
+      ...(args.attemptStatus
+        ? { status: parseResearchProofAttemptStatus(args.attemptStatus) }
+        : {}),
+      ...(args.result ? { result: parseResearchProofResultStatus(args.result) } : {}),
+      ...(args.verifier ? { verifier: args.verifier } : {}),
+    });
+  }
+
+  if (args.command === "review-proof-attempt") {
+    const attemptId = requireMemoryPositional(args, "review-proof-attempt <attempt-id>");
+    return steering.reviewProofAttempt({
+      ...context,
+      attemptId,
+      ...(args.summary ? { summary: args.summary } : {}),
+      ...(args.attemptStatus
+        ? { status: parseResearchProofAttemptStatus(args.attemptStatus) }
+        : {}),
+      ...(args.result ? { result: parseResearchProofResultStatus(args.result) } : {}),
+      ...(args.verifier ? { verifier: args.verifier } : {}),
+      ...(args.obligationStatus
+        ? { obligationStatus: parseResearchProofObligationStatus(args.obligationStatus) }
+        : {}),
+    });
+  }
+
+  if (args.command === "mark-artifact") {
+    const artifactId = requireMemoryPositional(args, "mark-artifact <artifact-id> --mark <important|sensitive|tombstoned>");
+    const mark = args.mark;
+    if (mark !== "important" && mark !== "sensitive" && mark !== "tombstoned") {
+      throw new Error("mark-artifact requires --mark important, sensitive, or tombstoned.");
+    }
+    return steering.markArtifact({
+      ...context,
+      mark,
+      artifact: artifactRefFromArgs(args, artifactId),
+      ...(args.policy ? { policy: args.policy } : {}),
+      ...(args.summary ? { summary: args.summary } : {}),
+    });
+  }
+
+  throw new Error(`Unknown memory steering command: ${String(args.command)}`);
+}
+
+function memorySteeringContext(args: ParsedMemoryArgs) {
+  return {
+    ...(args.goalId ? { goalId: args.goalId } : {}),
+    ...(args.loopId ? { loopId: args.loopId } : {}),
+    ...(args.subGoalId ? { subGoalId: args.subGoalId } : {}),
+    ...(args.summary ? { note: args.summary } : {}),
+  };
+}
+
+function proofMethodFromArgs(args: ParsedMemoryArgs): ResearchProofMethodDescriptor {
+  const kind = args.methodKind
+    ? parseResearchProofMethodKind(args.methodKind)
+    : "human_review";
+  return {
+    kind,
+    name: args.methodName ?? kind.replaceAll("_", " "),
+  };
+}
+
+function artifactRefFromArgs(
+  args: ParsedMemoryArgs,
+  artifactId: string,
+): ResearchArtifactRef {
+  return {
+    id: artifactId,
+    kind: args.artifactKind ?? "artifact",
+    ...(args.artifactUri ? { uri: args.artifactUri } : {}),
+    ...(args.summary ? { summary: args.summary } : {}),
+  };
+}
+
+function renderMemorySteeringResult(input: {
+  action: string;
+  event: ResearchEvent;
+  record?: { id: string; kind: string; status: string; summary: string };
+  obligation?: { id: string; status: string; question: string };
+  attempt?: { id: string; status: string; result?: string; summary: string };
+}): string {
+  const lines = [
+    `Action: ${input.action}`,
+    `Event: ${input.event.kind} ${input.event.id}`,
+  ];
+  if (input.record) {
+    lines.push(
+      `Record: ${input.record.kind} ${input.record.status} ${input.record.id}`,
+      input.record.summary,
+    );
+  }
+  if (input.obligation) {
+    lines.push(
+      `Proof obligation: ${input.obligation.status} ${input.obligation.id}`,
+      input.obligation.question,
+    );
+  }
+  if (input.attempt) {
+    lines.push(
+      `Proof attempt: ${input.attempt.status}${input.attempt.result ? `/${input.attempt.result}` : ""} ${input.attempt.id}`,
+      input.attempt.summary,
+    );
+  }
+  return lines.join("\n");
 }
 
 function createMemoryCommandStorageReadModel(args: ParsedMemoryArgs) {

@@ -329,6 +329,29 @@ export {
   RESEARCH_PROOF_SUBJECT_KINDS,
 } from "./memory-contracts.js";
 export {
+  createMemorySteeringController,
+  MemorySteeringController,
+  parseResearchDerivedMemoryStatus,
+  parseResearchFindingStatus,
+  parseResearchProofAttemptStatus,
+  parseResearchProofMethodKind,
+  parseResearchProofObligationStatus,
+  parseResearchProofResultStatus,
+  parseResearchProofSubjectKind,
+} from "./memory-steering.js";
+export type {
+  AttachProofAttemptInput,
+  MarkArtifactInput,
+  MemorySteeringControllerOptions,
+  MemorySteeringResult,
+  PromoteHypothesisToFindingInput,
+  RequestProofInput,
+  ResearchArtifactMark,
+  ReviewMemoryRecordInput,
+  ReviewProofAttemptInput,
+  SteeringEventContext,
+} from "./memory-steering.js";
+export {
   createDeterministicMemoryWritePipeline,
   DeterministicMemoryWritePipeline,
   summarizeMemoryEvent,

@@ -573,6 +573,182 @@ test("memory CLI prints recall, context, decision, and debug capture data", asyn
   proofStore.close();
 });
 
+test("memory CLI steers hypothesis and finding lifecycle mutations", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-steer-"));
+  const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
+  const recordStore = createSqliteMemoryRecordStore({ workspaceRoot });
+  const seedEvent = eventLog.append(createEvent("model.hypothesis", {
+    hypothesis: "Parser expansion may skip normalization.",
+    confidence: 0.64,
+  }));
+  recordStore.writeMany(
+    createDeterministicMemoryWritePipeline().deriveMany([seedEvent]),
+  );
+  const hypothesis = recordStore.list({ kind: "hypothesis" })[0];
+  eventLog.close();
+  recordStore.close();
+
+  const promoted = runMemoryCliJson(
+    "promote-hypothesis",
+    hypothesis.id,
+    "--workspace-root",
+    workspaceRoot,
+    "--summary",
+    "Parser expansion skip is verifier-backed.",
+    "--finding-status",
+    "verified",
+    "--confidence",
+    "0.88",
+  );
+  assert.equal(promoted.event.kind, "finding.updated");
+  assert.equal(promoted.record.kind, "finding");
+  assert.equal(promoted.record.findingStatus, "verified");
+
+  const reviewed = runMemoryCliJson(
+    "review-record",
+    hypothesis.id,
+    "--workspace-root",
+    workspaceRoot,
+    "--status",
+    "active",
+    "--summary",
+    "Keep the hypothesis active while verifying adjacent paths.",
+  );
+  assert.equal(reviewed.record.status, "active");
+
+  const rejected = runMemoryCliJson(
+    "reject-record",
+    promoted.record.id,
+    "--workspace-root",
+    workspaceRoot,
+    "--finding-status",
+    "rejected",
+    "--summary",
+    "User rejected this finding after review.",
+  );
+  assert.equal(rejected.record.status, "contradicted");
+  assert.equal(rejected.record.findingStatus, "rejected");
+
+  const superseded = runMemoryCliJson(
+    "supersede-record",
+    hypothesis.id,
+    "--workspace-root",
+    workspaceRoot,
+    "--superseded-by",
+    promoted.record.id,
+  );
+  assert.equal(superseded.record.status, "superseded");
+
+  const tombstoned = runMemoryCliJson(
+    "tombstone-record",
+    promoted.record.id,
+    "--workspace-root",
+    workspaceRoot,
+  );
+  assert.equal(tombstoned.record.status, "tombstoned");
+  assert.equal(tombstoned.record.findingStatus, "tombstoned");
+
+  const timeline = runMemoryCliJson("timeline", "--workspace-root", workspaceRoot);
+  assert.ok(timeline.some((event) => event.kind === "finding.updated"));
+  assert.ok(timeline.some((event) => event.kind === "finding.reviewed"));
+  assert.ok(timeline.some((event) => event.kind === "memory.decision"));
+});
+
+test("memory CLI steers proof requests, attempts, and reviews", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-proof-steer-"));
+  const requested = runMemoryCliJson(
+    "request-proof",
+    "external",
+    "claim-cli",
+    "--workspace-root",
+    workspaceRoot,
+    "--question",
+    "Can the CLI steering proof claim be checked?",
+    "--method-kind",
+    "human_review",
+    "--required-result",
+    "pass",
+  );
+  assert.equal(requested.event.kind, "proof.requested");
+  assert.equal(requested.obligation.status, "open");
+
+  const attached = runMemoryCliJson(
+    "attach-proof-attempt",
+    requested.obligation.id,
+    "--workspace-root",
+    workspaceRoot,
+    "--summary",
+    "Initial human review was inconclusive.",
+    "--result",
+    "inconclusive",
+  );
+  assert.equal(attached.event.kind, "proof.observed");
+  assert.equal(attached.attempt.result, "inconclusive");
+
+  const reviewed = runMemoryCliJson(
+    "review-proof-attempt",
+    attached.attempt.id,
+    "--workspace-root",
+    workspaceRoot,
+    "--summary",
+    "Reviewer accepted the proof outcome.",
+    "--result",
+    "pass",
+    "--obligation-status",
+    "satisfied",
+  );
+  assert.equal(reviewed.event.kind, "proof.reviewed");
+  assert.equal(reviewed.attempt.result, "pass");
+
+  const proofState = runMemoryCliJson("proof-state", "--workspace-root", workspaceRoot);
+  assert.equal(proofState.obligations[0]?.status, "satisfied");
+  assert.equal(proofState.attempts[0]?.result, "pass");
+});
+
+test("memory CLI marks artifacts with audited events", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-artifact-steer-"));
+
+  const important = runMemoryCliJson(
+    "mark-artifact",
+    "artifact_cli",
+    "--workspace-root",
+    workspaceRoot,
+    "--mark",
+    "important",
+    "--artifact-kind",
+    "report",
+    "--summary",
+    "Important parser report.",
+  );
+  const sensitive = runMemoryCliJson(
+    "mark-artifact",
+    "artifact_cli",
+    "--workspace-root",
+    workspaceRoot,
+    "--mark",
+    "sensitive",
+    "--artifact-kind",
+    "report",
+  );
+  const tombstoned = runMemoryCliJson(
+    "mark-artifact",
+    "artifact_cli",
+    "--workspace-root",
+    workspaceRoot,
+    "--mark",
+    "tombstoned",
+    "--artifact-kind",
+    "report",
+  );
+
+  assert.equal(important.event.kind, "artifact.updated");
+  assert.equal(sensitive.event.kind, "artifact.updated");
+  assert.equal(tombstoned.event.kind, "artifact.tombstoned");
+  const timeline = runMemoryCliJson("timeline", "--workspace-root", workspaceRoot);
+  assert.equal(timeline.filter((event) => event.kind === "artifact.updated").length, 2);
+  assert.equal(timeline.filter((event) => event.kind === "artifact.tombstoned").length, 1);
+});
+
 async function createCliFixture() {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-cli-"));
   const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
