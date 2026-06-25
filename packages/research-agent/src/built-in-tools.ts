@@ -10,6 +10,10 @@ import {
   resolve,
 } from "node:path";
 import { nowIso } from "./ids.js";
+import {
+  getResearchStorageManifestPath,
+  listResearchStorageArtifacts,
+} from "./storage.js";
 import type {
   ResearchExecutableTool,
   ResearchToolExecutionResult,
@@ -17,6 +21,7 @@ import type {
 import type {
   ResearchArtifactRef,
   ResearchMemoryRef,
+  ResearchStorageLayout,
   ResearchToolAction,
   ResearchToolDescriptor,
 } from "./types.js";
@@ -75,6 +80,13 @@ const SYNTHESIS_PARAMETERS = {
     artifactKind: { type: "string" },
   },
 };
+const STORAGE_LIST_PARAMETERS = {
+  type: "object",
+  properties: {
+    kind: { type: "string" },
+    sourceEventId: { type: "string" },
+  },
+};
 
 export interface BuiltInMemoryRecallToolOptions {
   recall(input: {
@@ -101,11 +113,16 @@ export interface BuiltInExperimentToolOptions {
   >;
 }
 
+export interface BuiltInStorageListToolOptions {
+  storageLayout: ResearchStorageLayout;
+}
+
 export interface DefaultBuiltInToolFamilyOptions {
   recall?: BuiltInMemoryRecallToolOptions;
   repositorySearch?: BuiltInRepositorySearchToolOptions;
   fileRead?: BuiltInStructuredFileReadToolOptions;
   experiments?: BuiltInExperimentToolOptions;
+  storage?: BuiltInStorageListToolOptions;
 }
 
 export function createMemoryRecallTool(
@@ -419,6 +436,71 @@ export function createSynthesisTool(): ResearchExecutableTool {
   };
 }
 
+export function createStorageListTool(
+  options: BuiltInStorageListToolOptions,
+): ResearchExecutableTool {
+  const descriptor = createDescriptor({
+    name: "storage.list",
+    transportName: "storage_list",
+    description: "List durable Honeycrisp storage directories and registered artifact metadata.",
+    actionClasses: ["inspect"],
+    sideEffects: "read",
+    requiredPermissions: ["storage:read"],
+    inputSchema: STORAGE_LIST_PARAMETERS,
+    artifactLocations: [options.storageLayout.rootPath],
+    metadata: {
+      provider: "honeycrisp.built_in",
+      safetyProfile: "storage-read",
+      defaultBudget: {
+        maxToolCalls: 1,
+      },
+    },
+  });
+
+  return {
+    descriptor,
+    parameters: STORAGE_LIST_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
+    async execute(action) {
+      const startedAt = nowIso();
+      return completeOrError(action, startedAt, async () => {
+        const kind =
+          typeof action.input.kind === "string" && action.input.kind.trim()
+            ? action.input.kind.trim()
+            : undefined;
+        const sourceEventId =
+          typeof action.input.sourceEventId === "string" &&
+          action.input.sourceEventId.trim()
+            ? action.input.sourceEventId.trim()
+            : undefined;
+        const artifacts = listResearchStorageArtifacts(options.storageLayout, {
+          ...(kind ? { kind } : {}),
+          ...(sourceEventId ? { sourceEventId } : {}),
+        });
+
+        return completeResult(action, startedAt, {
+          summary: `Storage manifest contains ${artifacts.length} artifact(s).`,
+          output: {
+            rootPath: options.storageLayout.rootPath,
+            databasePath: options.storageLayout.databasePath,
+            manifestPath: getResearchStorageManifestPath(options.storageLayout),
+            directories: options.storageLayout.directories,
+            filters: {
+              ...(kind ? { kind } : {}),
+              ...(sourceEventId ? { sourceEventId } : {}),
+            },
+            artifactCount: artifacts.length,
+            artifacts,
+          },
+          evidence: artifacts.map(
+            (artifact) =>
+              `${artifact.id} ${artifact.kind} ${artifact.relativePath} ${artifact.contentHash}`,
+          ),
+        });
+      });
+    },
+  };
+}
+
 export function createDefaultBuiltInToolFamily(
   options: DefaultBuiltInToolFamilyOptions = {},
 ): ResearchExecutableTool[] {
@@ -428,6 +510,7 @@ export function createDefaultBuiltInToolFamily(
       ? [createRepositorySearchTool(options.repositorySearch)]
       : []),
     ...(options.fileRead ? [createStructuredFileReadTool(options.fileRead)] : []),
+    ...(options.storage ? [createStorageListTool(options.storage)] : []),
     createAnalysisTool(),
     ...(options.experiments ? [createExperimentTool(options.experiments)] : []),
     createSynthesisTool(),

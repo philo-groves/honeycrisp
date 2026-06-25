@@ -16,6 +16,7 @@ import {
 import {
   createResearchStorageLayout,
   ensureResearchStorageLayout,
+  registerResearchStorageArtifactRef,
 } from "./storage.js";
 import type { ResearchContextPacketV2 } from "./context-packet-v2.js";
 import {
@@ -313,6 +314,7 @@ export async function bootstrapResearchRun(
 }
 
 interface DurableMemoryRuntime {
+  storageLayout: ResearchStorageLayout;
   eventLog: MemoryEventLog;
   recordStore: MemoryRecordStore;
   writePipeline: MemoryWritePipeline;
@@ -361,6 +363,7 @@ function createDurableMemoryRuntime(input: {
     options.closeStores ?? (!options.eventLog && !options.recordStore);
 
   return {
+    storageLayout: input.storageLayout,
     eventLog,
     recordStore,
     writePipeline,
@@ -399,6 +402,7 @@ function appendAndConsolidateDurableEvents(input: {
   const appended = input.durableMemory.eventLog.appendMany(input.events);
   input.stats.eventsAppended += appended.length;
   const candidateRecords = input.durableMemory.writePipeline.deriveMany(appended);
+  registerEventArtifactRefs(input.durableMemory.storageLayout, appended);
   const newRecords = candidateRecords.filter(
     (record) => !input.durableMemory.recordStore.getById(record.id),
   );
@@ -408,6 +412,17 @@ function appendAndConsolidateDurableEvents(input: {
   }
 
   return appended;
+}
+
+function registerEventArtifactRefs(
+  storageLayout: ResearchStorageLayout,
+  events: readonly ResearchEvent[],
+): void {
+  for (const event of events) {
+    for (const artifactRef of event.artifactRefs ?? []) {
+      registerResearchStorageArtifactRef(storageLayout, artifactRef, [event.id]);
+    }
+  }
 }
 
 function refreshMemorySnapshot(input: {

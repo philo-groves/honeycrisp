@@ -10,9 +10,13 @@ import {
   createExperimentTool,
   createMemoryRecallTool,
   createRepositorySearchTool,
+  createResearchStorageLayout,
   createResearchToolRegistry,
+  createStorageListTool,
   createStructuredFileReadTool,
   createSynthesisTool,
+  ensureResearchStorageLayout,
+  registerResearchStorageArtifact,
 } from "../packages/research-agent/dist/index.js";
 
 test("memory recall exposes retriever refs as evidence", async () => {
@@ -222,6 +226,45 @@ test("synthesis tool returns report output and artifact references", async () =>
   assert.equal(result.result.output.text, "# Parser Notes\n\nObserved bounded parsing behavior.");
   assert.equal(result.result.artifactRefs[0].kind, "report");
   assert.deepEqual(result.result.claims, ["Observed bounded parsing behavior."]);
+});
+
+test("storage list tool exposes manifest artifact metadata read-only", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-storage-tool-"));
+  const layout = ensureResearchStorageLayout(
+    createResearchStorageLayout({ workspaceRoot }),
+  );
+  const artifactDir = join(layout.artifactDirectoryPath, "analysis");
+  const artifactPath = join(artifactDir, "notes.txt");
+  await mkdir(artifactDir, { recursive: true });
+  await writeFile(artifactPath, "analysis notes\n", "utf8");
+  const entry = registerResearchStorageArtifact(layout, {
+    path: artifactPath,
+    kind: "analysis-note",
+    purpose: "Tool listing fixture.",
+    sourceEventIds: ["evt_tool"],
+  });
+
+  try {
+    const tool = createStorageListTool({ storageLayout: layout });
+    const result = await createResearchToolRegistry([tool]).execute({
+      id: "storage_1",
+      actionClass: "inspect",
+      toolName: "storage.list",
+      input: {
+        kind: "analysis-note",
+      },
+    });
+
+    assert.equal(result.result.status, "complete");
+    assert.equal(result.result.output.artifactCount, 1);
+    assert.equal(result.result.output.artifacts[0].id, entry.id);
+    assert.equal(result.result.output.directories.length, 8);
+    assert.match(result.result.evidence[0], /analysis-note/);
+    assert.equal(tool.descriptor.sideEffects, "read");
+    assert.deepEqual(tool.descriptor.requiredPermissions, ["storage:read"]);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
 });
 
 test("default built-in family assembles configured tool surfaces", async () => {

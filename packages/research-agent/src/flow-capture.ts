@@ -5,6 +5,11 @@ import type {
 } from "./context-packet-v2.js";
 import { nowIso } from "./ids.js";
 import { inferResearchLoopExecutionMode } from "./loop-processor.js";
+import {
+  getResearchStorageManifestPath,
+  loadResearchStorageManifest,
+  type ResearchStorageArtifactManifestEntry,
+} from "./storage.js";
 import type {
   ResearchContextPacket,
   ResearchEvent,
@@ -110,6 +115,20 @@ export interface ResearchFlowCapture {
     usedMemoryDrivenController: boolean;
     usedFirstRunFallback: boolean;
   };
+  storageManifest: {
+    path: string;
+    artifactCount: number;
+    artifacts: readonly Pick<
+      ResearchStorageArtifactManifestEntry,
+      | "id"
+      | "kind"
+      | "purpose"
+      | "relativePath"
+      | "sizeBytes"
+      | "contentHash"
+      | "sourceEventIds"
+    >[];
+  };
   memory: {
     counts: {
       eventLog: number;
@@ -180,6 +199,7 @@ export function createResearchFlowCapture(
     ...(result.durableMemory
       ? { memoryIntegration: createMemoryIntegrationCapture(result.durableMemory) }
       : {}),
+    storageManifest: createStorageManifestCapture(result.storageLayout),
     memory: createMemoryCapture(result.memory),
     eventTimeline: result.events.map(captureEvent),
   };
@@ -200,6 +220,26 @@ function createMemoryIntegrationCapture(
     latestRetrievalCandidateCount: durableMemory.latestRetrievalCandidateCount,
     usedMemoryDrivenController: durableMemory.usedMemoryDrivenController,
     usedFirstRunFallback: durableMemory.usedFirstRunFallback,
+  };
+}
+
+function createStorageManifestCapture(
+  storageLayout: ResearchStorageLayout,
+): ResearchFlowCapture["storageManifest"] {
+  const manifest = loadResearchStorageManifest(storageLayout);
+
+  return {
+    path: getResearchStorageManifestPath(storageLayout),
+    artifactCount: manifest.artifacts.length,
+    artifacts: manifest.artifacts.map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      purpose: artifact.purpose,
+      relativePath: artifact.relativePath,
+      sizeBytes: artifact.sizeBytes,
+      contentHash: artifact.contentHash,
+      sourceEventIds: artifact.sourceEventIds,
+    })),
   };
 }
 

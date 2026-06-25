@@ -15,9 +15,11 @@ import {
   createPiAgentLoopExecutor,
   createPiLoopExecutor,
   createRepositorySearchTool,
-  createResearchToolRegistry,
   createResearchFlowCapture,
   createResearchGoalFrame,
+  createResearchStorageLayout,
+  createResearchToolRegistry,
+  createStorageListTool,
   createStructuredFileReadTool,
   createSqliteMemoryEventLog,
   createSqliteMemoryRecordStore,
@@ -55,7 +57,8 @@ type ToolFamily =
   | "repository-search"
   | "file-read"
   | "analysis"
-  | "synthesis";
+  | "synthesis"
+  | "storage";
 
 type CliExecutorKind = "complete-simple" | "agent";
 type CliToolExecutionMode = "sequential" | "parallel";
@@ -108,6 +111,7 @@ interface ParsedArgs {
 interface ParsedToolsArgs {
   command: string | undefined;
   runtimeTools: RuntimeToolConfig;
+  workspaceRoot: string;
   inspectRoots: string[];
   inspectPaths: string[];
   inspectAction: LocalInspectionAction;
@@ -409,6 +413,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
   let json = false;
   let help = false;
+  let workspaceRoot = process.cwd();
   let inspectAction: LocalInspectionAction = "read_text";
   let inspectBytes: number | undefined;
   const inspectRoots: string[] = [];
@@ -430,7 +435,10 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   for (let index = command ? 1 : 0; index < argv.length; index += 1) {
     const arg = argv[index];
 
-    if (arg === "--inspect-root") {
+    if (arg === "--workspace-root") {
+      workspaceRoot = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--inspect-root") {
       inspectRoots.push(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "--inspect-path") {
@@ -509,6 +517,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       ...(toolMaxBytes ? { toolMaxBytes } : {}),
       ...(toolMaxTokens ? { toolMaxTokens } : {}),
     },
+    workspaceRoot,
     inspectRoots,
     inspectPaths,
     inspectAction,
@@ -575,13 +584,14 @@ function parseToolFamily(value: string): ToolFamily {
     value === "repository-search" ||
     value === "file-read" ||
     value === "analysis" ||
-    value === "synthesis"
+    value === "synthesis" ||
+    value === "storage"
   ) {
     return value;
   }
 
   throw new Error(
-    "--tool-family must be one of local-inspection, repository-search, file-read, analysis, synthesis.",
+    "--tool-family must be one of local-inspection, repository-search, file-read, analysis, synthesis, storage.",
   );
 }
 
@@ -654,7 +664,7 @@ function usage(): string {
     "  --inspect-path <path>  Inspect a local path before the loop",
     "  --inspect-action <a>   Inspection action: read_text or list",
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
-    "  --tool-family <name>   Enable local-inspection, repository-search, file-read, analysis, or synthesis",
+    "  --tool-family <name>   Enable local-inspection, repository-search, file-read, analysis, synthesis, or storage",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --repo-root <path>     Enable repository.search for this root unless disabled",
     "  --file-read-root <p>   Enable file.read for this allowed root unless disabled",
@@ -1013,7 +1023,7 @@ function toolsUsage(): string {
     "Usage: honeycrisp tools list [options]",
     "",
     "Options:",
-    "  --tool-family <name>        Enable local-inspection, repository-search, file-read, analysis, or synthesis",
+    "  --tool-family <name>        Enable local-inspection, repository-search, file-read, analysis, synthesis, or storage",
     "  --disable-tool-family <n>   Disable a tool family after implicit/default enables",
     "  --repo-root <path>          Enable repository.search for this root unless disabled",
     "  --file-read-root <path>     Enable file.read for this allowed root unless disabled",
@@ -1027,6 +1037,7 @@ function toolsUsage(): string {
     "  --allow-mcp-server <name>   Record an allowed MCP server name",
     "  --skill-dir <path>          Load local skills from child directories containing SKILL.md",
     "  --skill <id>                Request a loaded skill by id",
+    "  --workspace-root <path>     Workspace root for storage.list metadata",
     "  --json                      Print JSON",
   ].join("\n");
 }
@@ -1281,6 +1292,7 @@ async function createRuntimeConfig(args: {
   inspectAction: LocalInspectionAction;
   inspectBytes: number | undefined;
   runtimeTools: RuntimeToolConfig;
+  workspaceRoot?: string;
 }): Promise<{
   events: ResearchEvent[];
   memory: ResearchMemorySnapshot | undefined;
@@ -1372,6 +1384,16 @@ async function createRuntimeConfig(args: {
 
   if (families.has("synthesis")) {
     const tool = createSynthesisTool();
+    executableTools.push(tool);
+    toolDescriptors.push(tool.descriptor);
+  }
+
+  if (families.has("storage")) {
+    const tool = createStorageListTool({
+      storageLayout: createResearchStorageLayout({
+        workspaceRoot: args.workspaceRoot ?? process.cwd(),
+      }),
+    });
     executableTools.push(tool);
     toolDescriptors.push(tool.descriptor);
   }

@@ -45,6 +45,7 @@ export {
   createExperimentTool,
   createMemoryRecallTool,
   createRepositorySearchTool,
+  createStorageListTool,
   createStructuredFileReadTool,
   createSynthesisTool,
 } from "./built-in-tools.js";
@@ -52,6 +53,7 @@ export type {
   BuiltInExperimentToolOptions,
   BuiltInMemoryRecallToolOptions,
   BuiltInRepositorySearchToolOptions,
+  BuiltInStorageListToolOptions,
   BuiltInStructuredFileReadToolOptions,
   DefaultBuiltInToolFamilyOptions,
 } from "./built-in-tools.js";
@@ -89,6 +91,18 @@ export {
   findResearchStorageDirectory,
   getDefaultMemoryArtifactDirectoryPath,
   getDefaultMemoryDatabasePath,
+  getResearchStorageManifestPath,
+  listResearchStorageArtifacts,
+  loadResearchStorageManifest,
+  registerResearchStorageArtifact,
+  registerResearchStorageArtifactRef,
+  resolveResearchStorageArtifact,
+  saveResearchStorageManifest,
+} from "./storage.js";
+export type {
+  RegisterResearchStorageArtifactInput,
+  ResearchStorageArtifactManifest,
+  ResearchStorageArtifactManifestEntry,
 } from "./storage.js";
 export {
   advanceGoalRunState,

@@ -138,6 +138,10 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
     repoRoot,
     "--tool-family",
     "analysis",
+    "--tool-family",
+    "storage",
+    "--workspace-root",
+    repoRoot,
     "--allowed-side-effect",
     "read",
     "--tool-max-calls",
@@ -157,7 +161,7 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(
     payload.tools.map((tool) => tool.name).sort(),
-    ["analysis.transform", "repository.search"],
+    ["analysis.transform", "repository.search", "storage.list"],
   );
   assert.deepEqual(payload.governance.allowedSideEffects, ["read"]);
   assert.equal(payload.governance.maxToolCalls, 2);

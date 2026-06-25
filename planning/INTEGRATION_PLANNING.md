@@ -68,19 +68,27 @@ Verification:
 
 Make storage inspectable and actionable without confusing storage with memory.
 
-Status: pending.
+Status: completed on 2026-06-24.
 
 Checklist:
 
-- [ ] Add a storage manifest format under `.honeycrisp/memory/artifacts/` or `.honeycrisp/memory/`.
-- [ ] Record artifact path, kind, purpose, size, hash, created time, and source event ids.
-- [ ] Add helper APIs to register, list, and resolve stored artifacts.
-- [ ] Add a read-only storage listing tool.
-- [ ] Add a storage artifact registration helper for generated outputs.
-- [ ] Ensure memory records store summaries and artifact pointers rather than large file contents.
-- [ ] Include storage manifest metadata in flow captures.
-- [ ] Add tests for manifest registration, listing, hashing, and restart-safe reload.
-- [ ] Run a real health check that produces or registers a stored artifact and review the manifest plus memory pointer.
+- [x] Add a storage manifest format under `.honeycrisp/memory/artifacts/` or `.honeycrisp/memory/`.
+- [x] Record artifact path, kind, purpose, size, hash, created time, and source event ids.
+- [x] Add helper APIs to register, list, and resolve stored artifacts.
+- [x] Add a read-only storage listing tool.
+- [x] Add a storage artifact registration helper for generated outputs.
+- [x] Ensure memory records store summaries and artifact pointers rather than large file contents.
+- [x] Include storage manifest metadata in flow captures.
+- [x] Add tests for manifest registration, listing, hashing, and restart-safe reload.
+- [x] Run a real health check that produces or registers a stored artifact and review the manifest plus memory pointer.
+
+Verification:
+
+- `pnpm test` passed with 112 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase2/phase2-real.json`.
+- Durable SQLite workspace: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase2/workspace/.honeycrisp/memory/memory.sqlite`.
+- Storage manifest: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase2/workspace/.honeycrisp/memory/artifacts/manifest.json`.
+- The real run registered one `tool_raw_output` artifact spilled from the `tool.observed` event for local zsh `parse.c`; the manifest recorded `artifact_evt_4a2a2ba7-9010-4482-a9b4-07a8e2e7e4a9_tool_result`, 97,500 bytes, SHA-256 hash `sha256:5fbbacb181615e0e04cb1958413d71924edf563211ffc792cd523a26af02fd18`, and source event `evt_4a2a2ba7-9010-4482-a9b4-07a8e2e7e4a9`.
 
 ## Phase 3: Live MCP Client Integration
 
