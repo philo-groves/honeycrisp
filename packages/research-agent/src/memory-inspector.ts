@@ -13,6 +13,7 @@ import type {
   ResearchClaimGraphEdge,
   ResearchDerivedMemoryRecord,
   ResearchEvent,
+  ResearchFindingMemoryRecord,
 } from "./types.js";
 
 export interface RejectedMemoryEventInspection {
@@ -107,6 +108,7 @@ export class MemoryInspector {
         reasons: candidate.reasons,
         warnings: candidate.warnings,
       })),
+      findings: retrieval.findings.map((candidate) => candidate.record.id),
       contradictions: retrieval.contradictions.map((candidate) => candidate.record.id),
       procedures: retrieval.procedures.map((candidate) => candidate.record.id),
       prospectiveChecks: retrieval.prospectiveChecks.map(
@@ -158,6 +160,40 @@ export class MemoryInspector {
       ...store.list({ kind: "semantic_claim" }),
       ...store.list({ kind: "hypothesis" }),
     ];
+  }
+
+  showFindings(): readonly ResearchFindingMemoryRecord[] {
+    return this.requireRecordStore().list({ kind: "finding" })
+      .filter((record): record is ResearchFindingMemoryRecord =>
+        record.kind === "finding",
+      );
+  }
+
+  showFindingById(recordId: string):
+    | {
+        finding: ResearchFindingMemoryRecord;
+        evidenceFor: ResearchFindingMemoryRecord["provenance"]["evidenceFor"];
+        evidenceAgainst: ResearchFindingMemoryRecord["provenance"]["evidenceAgainst"];
+        linkedHypothesisRecordIds: readonly string[];
+        linkedClaimRecordIds: readonly string[];
+        proofAttemptIds: readonly string[];
+        artifactRefs: ResearchFindingMemoryRecord["provenance"]["artifactRefs"];
+      }
+    | undefined {
+    const record = this.requireRecordStore().getById(recordId);
+    if (!record || record.kind !== "finding") {
+      return undefined;
+    }
+
+    return {
+      finding: record,
+      evidenceFor: record.provenance.evidenceFor,
+      evidenceAgainst: record.provenance.evidenceAgainst,
+      linkedHypothesisRecordIds: record.linkedHypothesisRecordIds,
+      linkedClaimRecordIds: record.linkedClaimRecordIds,
+      proofAttemptIds: record.proofAttemptIds,
+      artifactRefs: record.provenance.artifactRefs,
+    };
   }
 
   showClaimGraph(): readonly ResearchClaimGraphEdge[] {

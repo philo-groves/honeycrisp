@@ -1,5 +1,8 @@
 import { createResearchMemoryRecordId } from "./ids.js";
-import { createResearchMemoryProvenance } from "./memory-contracts.js";
+import {
+  createResearchMemoryProvenance,
+  isResearchFindingStatus,
+} from "./memory-contracts.js";
 import type {
   ResearchArtifactRef,
   ResearchBaseMemoryRecord,
@@ -8,6 +11,8 @@ import type {
   ResearchEpisodicMemoryRecord,
   ResearchEvent,
   ResearchEvidenceMemoryRecord,
+  ResearchFindingMemoryRecord,
+  ResearchFindingStatus,
   ResearchHypothesisMemoryRecord,
   ResearchMemoryDerivationKind,
   ResearchMemoryEvidenceRef,
@@ -107,6 +112,19 @@ export class DeterministicMemoryWritePipeline implements MemoryWritePipeline {
         return [createSemanticClaimRecord(event)];
       case "model.hypothesis":
         return [createHypothesisRecord(event)];
+      case "finding.proposed":
+      case "finding.updated":
+        return [createFindingRecord(event)];
+      case "finding.reviewed":
+        return [
+          createEpisodeRecord(event, {
+            episodeKind: "memory_decision",
+            summary: summarizeMemoryEvent(event),
+            status: "confirmed",
+            confidence: 0.85,
+            tags: ["finding-review"],
+          }),
+        ];
       case "user.commitment":
         return [createProspectiveCommitmentRecord(event)];
       case "error.observed":
@@ -137,6 +155,7 @@ export function summarizeMemoryEvent(event: ResearchEvent): string {
       "summary",
       "claim",
       "hypothesis",
+      "finding",
       "procedure",
       "check",
       "objective",
@@ -310,6 +329,57 @@ function createHypothesisRecord(
   };
 }
 
+function createFindingRecord(
+  event: ResearchEvent,
+): ResearchFindingMemoryRecord {
+  const payload = isRecord(event.payload) ? event.payload : {};
+  const finding =
+    readFirstString(payload, ["finding", "text", "summary"]) ??
+    summarizeMemoryEvent(event);
+  const findingStatus = readFindingStatus(
+    payload,
+    event.kind === "finding.updated" ? "supported" : "candidate",
+  );
+  const derivedFromRecordIds = [
+    ...readStringArray(payload, "derivedFromRecordIds"),
+    ...readStringArray(payload, "recordIds"),
+    ...readOptionalString(payload, "recordId"),
+  ];
+
+  return {
+    ...createBaseRecord(event, {
+      kind: "finding",
+      status: baseStatusForFinding(findingStatus),
+      summary: truncate(finding, 700),
+      derivation: "model_visible_inference",
+      confidence: readConfidence(event.payload, 0.7),
+      tags: ["finding", `finding:${findingStatus}`],
+      evidenceFor: createPayloadEvidenceRefs(event, "supports"),
+      evidenceAgainst: createPayloadEvidenceRefs(event, "weakens"),
+      derivedFromRecordIds,
+    }),
+    kind: "finding",
+    finding,
+    findingStatus,
+    linkedHypothesisRecordIds: [
+      ...readStringArray(payload, "linkedHypothesisRecordIds"),
+      ...readStringArray(payload, "hypothesisRecordIds"),
+    ],
+    linkedClaimRecordIds: [
+      ...readStringArray(payload, "linkedClaimRecordIds"),
+      ...readStringArray(payload, "claimRecordIds"),
+    ],
+    proofAttemptIds: readStringArray(payload, "proofAttemptIds"),
+    domainLabels: [
+      ...readStringArray(payload, "domainLabels"),
+      ...readStringArray(payload, "labels"),
+    ],
+    ...(isRecord(payload.domainMetadata)
+      ? { domainMetadata: payload.domainMetadata }
+      : {}),
+  };
+}
+
 function createProcedureRecord(
   event: ResearchEvent,
   procedure: string,
@@ -405,6 +475,7 @@ function createBaseRecord(
     evidenceFor?: readonly ResearchMemoryEvidenceRef[];
     evidenceAgainst?: readonly ResearchMemoryEvidenceRef[];
     artifactRefs?: readonly ResearchArtifactRef[];
+    derivedFromRecordIds?: readonly string[];
     discriminator?: string;
   },
 ): ResearchBaseMemoryRecord {
@@ -434,6 +505,7 @@ function createBaseRecord(
       evidenceFor,
       evidenceAgainst,
       artifactRefs: input.artifactRefs ?? event.artifactRefs ?? [],
+      derivedFromRecordIds: input.derivedFromRecordIds ?? [],
     }),
     confidence: input.confidence,
     tags,
@@ -443,6 +515,35 @@ function createBaseRecord(
     ...(event.goalId ? { goalId: event.goalId } : {}),
     ...(event.subGoalId ? { subGoalId: event.subGoalId } : {}),
   };
+}
+
+function readFindingStatus(
+  payload: Record<string, unknown>,
+  fallback: ResearchFindingStatus,
+): ResearchFindingStatus {
+  const status = readFirstString(payload, ["findingStatus", "status"]);
+
+  return status && isResearchFindingStatus(status) ? status : fallback;
+}
+
+function baseStatusForFinding(
+  findingStatus: ResearchFindingStatus,
+): ResearchDerivedMemoryStatus {
+  switch (findingStatus) {
+    case "supported":
+    case "verified":
+      return "confirmed";
+    case "superseded":
+      return "superseded";
+    case "rejected":
+    case "out_of_scope":
+      return "contradicted";
+    case "tombstoned":
+      return "tombstoned";
+    case "candidate":
+    case "needs_evidence":
+      return "candidate";
+  }
 }
 
 function createPayloadEvidenceRefs(
@@ -565,6 +666,17 @@ function readStringArray(
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
+}
+
+function readOptionalString(
+  payload: Record<string, unknown>,
+  key: string,
+): string[] {
+  const value = payload[key];
+
+  return typeof value === "string" && value.trim().length > 0
+    ? [value.trim()]
+    : [];
 }
 
 function formatPayload(payload: unknown): string {

@@ -14,9 +14,14 @@ import {
   createSqliteMemoryEventLog,
   createResearchGoalFrame,
   createSqliteMemoryRecordStore,
+  deleteFindingUnderPolicy,
   deleteMemoryRecordUnderPolicy,
   expireMemoryRecord,
+  promoteFinding,
+  rejectFinding,
   supersedeMemoryRecord,
+  supersedeFinding,
+  tombstoneFinding,
   tombstoneMemoryArtifact,
   tombstoneMemoryRecord,
 } from "../packages/research-agent/dist/index.js";
@@ -225,6 +230,111 @@ test("memory lifecycle audits writes, promotions, and contradictions", async () 
   );
   assert.ok(
     store.listAuditRecords({ recordId: claim.id, operation: "contradiction" }).length > 0,
+  );
+
+  store.close();
+});
+
+test("memory lifecycle promotes, rejects, supersedes, tombstones, and deletes findings", async () => {
+  const store = createSqliteMemoryRecordStore({
+    workspaceRoot: await createTempWorkspace(),
+  });
+  const [candidateFinding, replacementFinding, rejectedFinding, deletedFinding] =
+    createRecords([
+      createEvent("finding.proposed", {
+        finding: "Candidate parser finding.",
+        findingStatus: "candidate",
+        evidenceRefIds: ["candidate_support"],
+      }),
+      createEvent("finding.proposed", {
+        finding: "Replacement parser finding.",
+        findingStatus: "supported",
+        evidenceRefIds: ["replacement_support"],
+      }),
+      createEvent("finding.proposed", {
+        finding: "Rejectable parser finding.",
+        findingStatus: "candidate",
+        evidenceRefIds: ["reject_support"],
+      }),
+      createEvent("finding.proposed", {
+        finding: "Deletable parser finding.",
+        findingStatus: "candidate",
+      }),
+    ]);
+  store.writeMany([
+    candidateFinding,
+    replacementFinding,
+    rejectedFinding,
+    deletedFinding,
+  ]);
+
+  const promoted = promoteFinding({
+    store,
+    recordId: candidateFinding.id,
+    findingStatus: "verified",
+    timestamp: "2026-06-24T00:00:01.000Z",
+    evidenceFor: [
+      {
+        id: "verification_support",
+        relationship: "supports",
+      },
+    ],
+  });
+  const rejected = rejectFinding({
+    store,
+    recordId: rejectedFinding.id,
+    timestamp: "2026-06-24T00:00:02.000Z",
+    evidenceAgainst: [
+      {
+        id: "negative_review",
+        relationship: "contradicts",
+      },
+    ],
+  });
+  const superseded = supersedeFinding({
+    store,
+    recordId: promoted.id,
+    supersededByRecordId: replacementFinding.id,
+    timestamp: "2026-06-24T00:00:03.000Z",
+  });
+  const tombstoned = tombstoneFinding({
+    store,
+    recordId: replacementFinding.id,
+    timestamp: "2026-06-24T00:00:04.000Z",
+  });
+  deleteFindingUnderPolicy({
+    store,
+    recordId: deletedFinding.id,
+    policy: "finding-retention-test",
+    timestamp: "2026-06-24T00:00:05.000Z",
+  });
+
+  assert.equal(promoted.findingStatus, "verified");
+  assert.equal(promoted.status, "confirmed");
+  assert.ok(
+    promoted.provenance.evidenceFor.some(
+      (ref) => ref.id === "verification_support",
+    ),
+  );
+  assert.equal(rejected.findingStatus, "rejected");
+  assert.equal(rejected.status, "contradicted");
+  assert.equal(superseded.findingStatus, "superseded");
+  assert.equal(superseded.status, "superseded");
+  assert.equal(tombstoned.findingStatus, "tombstoned");
+  assert.equal(tombstoned.status, "tombstoned");
+  assert.equal(store.getById(deletedFinding.id), undefined);
+  assert.equal(
+    store.list({ includeAudited: true }).some((record) => record.id === promoted.id),
+    true,
+  );
+  assert.equal(
+    createMemorySnapshotFromRecordStore(store).currentFindings.length,
+    0,
+  );
+  assert.ok(
+    store
+      .listAuditRecords({ recordId: deletedFinding.id, operation: "deletion" })
+      .some((audit) => audit.policy === "finding-retention-test"),
   );
 
   store.close();

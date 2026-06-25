@@ -84,6 +84,57 @@ test("memory write pipeline keeps hypothesis evidence-for and evidence-against s
   );
 });
 
+test("memory write pipeline stores finding proposals and updates as finding records", () => {
+  const pipeline = createDeterministicMemoryWritePipeline();
+  const proposalEvent = createEvent("finding.proposed", {
+    finding: "Parser normalization order is evidence-backed.",
+    findingStatus: "supported",
+    evidenceRefIds: ["parser_source"],
+    linkedHypothesisRecordIds: ["mem_hypothesis_parser"],
+    linkedClaimRecordIds: ["mem_claim_parser"],
+    proofAttemptIds: ["proof_attempt_parser"],
+    domainLabels: ["parser"],
+    domainMetadata: {
+      subsystem: "parser",
+    },
+  });
+  const updateEvent = createEvent("finding.updated", {
+    finding: "Parser normalization order is verified by a second pass.",
+    status: "verified",
+    recordId: "mem_previous_finding",
+    evidenceRefIds: ["parser_source", "parser_second_pass"],
+  });
+  const reviewEvent = createEvent("finding.reviewed", {
+    summary: "Reviewed parser finding.",
+  });
+
+  const proposal = pipeline.derive(proposalEvent)[0];
+  const update = pipeline.derive(updateEvent)[0];
+  const review = pipeline.derive(reviewEvent)[0];
+
+  assert.equal(proposal.kind, "finding");
+  assert.equal(proposal.status, "confirmed");
+  assert.equal(proposal.findingStatus, "supported");
+  assert.equal(proposal.finding, proposalEvent.payload.finding);
+  assert.deepEqual(proposal.linkedHypothesisRecordIds, ["mem_hypothesis_parser"]);
+  assert.deepEqual(proposal.linkedClaimRecordIds, ["mem_claim_parser"]);
+  assert.deepEqual(proposal.proofAttemptIds, ["proof_attempt_parser"]);
+  assert.deepEqual(proposal.domainLabels, ["parser"]);
+  assert.deepEqual(proposal.domainMetadata, { subsystem: "parser" });
+  assert.deepEqual(
+    proposal.provenance.evidenceFor.map((ref) => ref.id),
+    ["parser_source"],
+  );
+  assert.equal(update.kind, "finding");
+  assert.equal(update.findingStatus, "verified");
+  assert.equal(update.status, "confirmed");
+  assert.deepEqual(update.provenance.derivedFromRecordIds, [
+    "mem_previous_finding",
+  ]);
+  assert.equal(review.kind, "episodic");
+  assert.ok(review.tags.includes("finding-review"));
+});
+
 test("memory write pipeline creates episodic summaries for terminal goal transitions", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
   const completeEvent = createEvent("goal.updated", {

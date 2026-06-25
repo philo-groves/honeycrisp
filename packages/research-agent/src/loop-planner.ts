@@ -166,6 +166,12 @@ function createRequiredContext(
       required: false,
     },
     {
+      label: "current_findings",
+      description: "Evidence-backed findings selected for this loop.",
+      itemCount: packet.currentFindings.length,
+      required: false,
+    },
+    {
       label: "contradictions",
       description: "Known contradictions or uncertainty warnings.",
       itemCount: packet.contradictions.length,

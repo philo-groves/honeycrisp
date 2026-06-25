@@ -81,6 +81,57 @@ test("memory retriever includes contradictions that affect active claims", () =>
   );
 });
 
+test("memory retriever ranks supported findings above weak hypotheses and omits rejected findings", () => {
+  const pipeline = createDeterministicMemoryWritePipeline();
+  const retriever = createDeterministicMemoryRetriever();
+  const goalFrame = createResearchGoalFrame("Goal: Review parser finding state");
+  const [weakHypothesis] = pipeline.derive(
+    createEvent("model.hypothesis", {
+      hypothesis: "Parser normalization may happen before expansion.",
+      confidence: 0.25,
+      evidenceRefIds: ["parser_source"],
+    }, {
+      goalId: goalFrame.root.id,
+    }),
+  );
+  const [supportedFinding] = pipeline.derive(
+    createEvent("finding.proposed", {
+      finding: "Parser normalization happens before expansion.",
+      findingStatus: "supported",
+      confidence: 0.8,
+      evidenceRefIds: ["parser_source"],
+    }, {
+      goalId: goalFrame.root.id,
+    }),
+  );
+  const [rejectedFinding] = pipeline.derive(
+    createEvent("finding.proposed", {
+      finding: "Rejected parser finding should stay out of recall.",
+      findingStatus: "rejected",
+      confidence: 0.8,
+      evidenceRefIds: ["parser_source"],
+    }, {
+      goalId: goalFrame.root.id,
+    }),
+  );
+
+  const result = retriever.retrieve({
+    activeGoal: goalFrame.root,
+    records: [weakHypothesis, supportedFinding, rejectedFinding],
+    openQuestions: ["What parser finding state is supported?"],
+  });
+
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.findings[0]?.record.id, supportedFinding.id);
+  assert.equal(result.candidates[0]?.record.id, supportedFinding.id);
+  assert.ok(!result.candidates.some((candidate) => candidate.record.id === rejectedFinding.id));
+  assert.ok(
+    result.findings[0]?.reasons.some((reason) =>
+      reason.includes("Finding status"),
+    ),
+  );
+});
+
 test("memory retriever returns procedures only for applicable action classes", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
   const retriever = createDeterministicMemoryRetriever();

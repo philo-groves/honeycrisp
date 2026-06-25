@@ -17,6 +17,7 @@ The current runtime has the integrated first slice of the architecture in place:
 
 - Real CLI runs use durable SQLite memory by default, append accepted events during each loop, consolidate derived records, retrieve before later loops, and capture context packet v2 plus memory-controller metadata.
 - General agent-state contracts are owned by Honeycrisp. Evidence, episodes, semantic claims, hypotheses, findings, beliefs, procedures, prospective checks, proof state, storage refs, goal state, and context usage should be exposed through Honeycrisp APIs/CLI rather than reimplemented by client interfaces.
+- Findings are first-class durable memory records. The event log accepts finding proposal/update/review events, the write pipeline derives finding records, lifecycle helpers promote/reject/supersede/tombstone/delete findings, retrieval ranks supported findings separately from hypotheses, and context packet v2 exposes a `current_findings` section.
 - Built-in tools are registered through the tool registry, governed by side-effect and budget policy, emitted as `tool.requested` and `tool.observed` events, and routed through the memory write pipeline.
 - Local MCP servers can be configured through an explicit stdio JSON-RPC config and allowlist. MCP outputs are treated as untrusted external content.
 - Local skills can be loaded from `SKILL.md` directories, selected by id, and injected as bounded runtime context without overriding governance.
@@ -26,7 +27,7 @@ The current runtime has the integrated first slice of the architecture in place:
 
 Known limitations after this slice:
 
-- Findings and proof/verifier contracts are defined as general interfaces, but their lifecycle write pipeline, inspector commands, and Beale-facing steering APIs remain future work.
+- Proof/verifier contracts are defined as general interfaces, but their persistence, lifecycle write pipeline, inspector commands, and Beale-facing steering APIs remain future work.
 - MCP support currently targets configured stdio servers; richer transport management, authentication handoff, and long-lived server health monitoring remain future work.
 - Experiment tools are allowlisted and auditable, but they are not a security sandbox. Operators must still choose safe commands and working directories.
 - Memory retrieval is sparse/structured and graph-aware enough for the current integration path; dense embedding retrieval and more advanced utility learning remain future work.
@@ -43,7 +44,7 @@ The runtime flow is:
 4. The memory controller retrieves relevant memory, selects an action class, and proposes one or more tool actions.
 5. The model executes the sub-goal with the supplied context packet and action budget.
 6. Tool results, observations, decisions, and artifacts are appended to the immutable event log.
-7. The memory write pipeline updates working, episodic, semantic, procedural, hypothesis, and prospective memory. Later phases add first-class finding and proof lifecycle writes.
+7. The memory write pipeline updates working, episodic, semantic, procedural, hypothesis, finding, and prospective memory. Later phases add proof lifecycle writes.
 8. The loop repeats until the root goal is complete, blocked, or ready for user response.
 
 The memory controller is therefore the action driver. The processing layer owns the loop shape; memory owns the next-action policy.

@@ -44,6 +44,7 @@ export function compileContextPacket(
       ...createSkillProcedureRefs(input.selectedSkills ?? []),
     ],
     currentHypotheses: input.memory.currentHypotheses,
+    currentFindings: input.memory.currentFindings,
     contradictions: input.memory.contradictions,
     openQuestions: createOpenQuestions(input.goalFrame, input.memory),
     userCommitments: [
@@ -93,6 +94,7 @@ export function createEmptyMemorySnapshot(
     priorEpisodes: [],
     candidateProcedures: [],
     currentHypotheses: [],
+    currentFindings: [],
     contradictions: [],
     prospectiveCommitments: [],
     userCommitments: [],
@@ -112,6 +114,7 @@ export function normalizeMemorySnapshot(
     candidateProcedures:
       memory?.candidateProcedures ?? empty.candidateProcedures,
     currentHypotheses: memory?.currentHypotheses ?? empty.currentHypotheses,
+    currentFindings: memory?.currentFindings ?? empty.currentFindings,
     contradictions: memory?.contradictions ?? empty.contradictions,
     prospectiveCommitments:
       memory?.prospectiveCommitments ?? empty.prospectiveCommitments,

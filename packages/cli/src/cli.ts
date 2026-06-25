@@ -805,6 +805,8 @@ function usage(): string {
     "  memory context --goal <text>      Show compiled context selections",
     "  memory decision --goal <text>     Explain selected action",
     "  memory hypotheses                 Show hypotheses and semantic claims",
+    "  memory findings                   Show finding records",
+    "  memory finding <record-id>        Show one finding with evidence/proof links",
     "  memory claim-graph                Show claim graph edges",
     "  memory prospective-checks         Show prospective checks",
     "  memory debug-capture              Show read-only memory debug capture",
@@ -1067,6 +1069,21 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
 
     if (args.command === "hypotheses") {
       printMemoryOutput(args, inspector.showHypotheses(), renderRecords);
+      return;
+    }
+
+    if (args.command === "findings") {
+      printMemoryOutput(args, inspector.showFindings(), renderRecords);
+      return;
+    }
+
+    if (args.command === "finding") {
+      const recordId = requireMemoryPositional(args, "finding <record-id>");
+      printMemoryOutput(
+        args,
+        inspector.showFindingById(recordId) ?? null,
+        renderFindingDetails,
+      );
       return;
     }
 
@@ -1402,6 +1419,8 @@ function memoryUsage(): string {
     "  context --goal <text>      Show compiled context selections",
     "  decision --goal <text>     Explain selected action",
     "  hypotheses                 Show hypotheses and semantic claims",
+    "  findings                   Show finding records",
+    "  finding <record-id>        Show one finding with evidence/proof links",
     "  claim-graph                Show claim graph edges",
     "  prospective-checks         Show prospective checks",
     "  debug-capture              Show read-only memory debug capture",
@@ -1498,7 +1517,13 @@ function renderTimeline(
 }
 
 function renderRecords(
-  records: ReturnType<ReturnType<typeof createMemoryInspector>["showHypotheses"]>,
+  records: readonly {
+    kind: string;
+    status: string;
+    id: string;
+    confidence?: number;
+    summary: string;
+  }[],
 ): string {
   if (records.length === 0) {
     return "No memory records found.";
@@ -1579,6 +1604,27 @@ function renderDecisionExplanation(
     `Rationale: ${decision.rationale}`,
     `Supporting records: ${decision.supportingRecordIds.join(", ") || "-"}`,
     `Warnings: ${decision.warnings.join(", ") || "-"}`,
+  ].join("\n");
+}
+
+function renderFindingDetails(
+  detail: ReturnType<
+    ReturnType<typeof createMemoryInspector>["showFindingById"]
+  > | null,
+): string {
+  if (!detail) {
+    return "No finding found.";
+  }
+
+  return [
+    `${detail.finding.kind}\t${detail.finding.findingStatus}\t${detail.finding.id}`,
+    detail.finding.summary,
+    `Evidence for: ${detail.evidenceFor.map((ref) => ref.id).join(", ") || "-"}`,
+    `Evidence against: ${detail.evidenceAgainst.map((ref) => ref.id).join(", ") || "-"}`,
+    `Hypotheses: ${detail.linkedHypothesisRecordIds.join(", ") || "-"}`,
+    `Claims: ${detail.linkedClaimRecordIds.join(", ") || "-"}`,
+    `Proof attempts: ${detail.proofAttemptIds.join(", ") || "-"}`,
+    `Artifacts: ${detail.artifactRefs.map((ref) => ref.id).join(", ") || "-"}`,
   ].join("\n");
 }
 

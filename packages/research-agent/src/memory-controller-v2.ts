@@ -515,6 +515,7 @@ function createEmptyRetrieval(): MemoryRetrievalResult {
   return {
     candidates: [],
     directEvidence: [],
+    findings: [],
     contradictions: [],
     procedures: [],
     prospectiveChecks: [],

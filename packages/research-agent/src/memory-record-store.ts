@@ -8,6 +8,7 @@ import {
   type SqliteMemoryEventLogOptions,
 } from "./memory-event-log.js";
 import {
+  isResearchFindingStatus,
   isResearchDerivedMemoryStatus,
   isResearchMemoryRecordKind,
 } from "./memory-contracts.js";
@@ -18,6 +19,7 @@ import type {
   ResearchDerivedMemoryRecord,
   ResearchDerivedMemoryStatus,
   ResearchEvent,
+  ResearchFindingStatus,
   ResearchMemoryAuditOperation,
   ResearchMemoryAuditRecord,
   ResearchMemoryRef,
@@ -47,6 +49,7 @@ export interface UpdateMemoryRecordStatusInput {
   evidenceFor?: readonly ResearchDerivedMemoryRecord["provenance"]["evidenceFor"][number][];
   evidenceAgainst?: readonly ResearchDerivedMemoryRecord["provenance"]["evidenceAgainst"][number][];
   supersededByRecordId?: string;
+  findingStatus?: ResearchFindingStatus;
 }
 
 export interface ListClaimGraphEdgesOptions {
@@ -143,6 +146,17 @@ export function createMemorySnapshotFromRecords(
     }
     if (record.kind === "semantic_claim" || record.kind === "hypothesis") {
       appendUniqueRef(snapshot.currentHypotheses as ResearchMemoryRef[], ref);
+      continue;
+    }
+    if (record.kind === "finding") {
+      if (
+        record.findingStatus !== "rejected" &&
+        record.findingStatus !== "out_of_scope" &&
+        record.findingStatus !== "superseded" &&
+        record.findingStatus !== "tombstoned"
+      ) {
+        appendUniqueRef(snapshot.currentFindings as ResearchMemoryRef[], ref);
+      }
       continue;
     }
     if (record.kind === "procedure") {
@@ -320,9 +334,18 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
           ...(input.evidenceAgainst ?? []).map((ref) => ref.id),
         ]),
       } satisfies ResearchDerivedMemoryRecord;
+      const nextRecord: ResearchDerivedMemoryRecord =
+        existing.kind === "finding" && input.findingStatus
+          ? {
+              ...existing,
+              ...next,
+              kind: "finding",
+              findingStatus: input.findingStatus,
+            }
+          : next;
 
       this.deleteRecordIndexes(input.recordId);
-      this.replaceRecord(next);
+      this.replaceRecord(nextRecord);
       if (input.supersededByRecordId) {
         this.addClaimGraphEdge({
           sourceRecordId: input.supersededByRecordId,
@@ -342,7 +365,7 @@ export class SqliteMemoryRecordStore implements MemoryRecordStore {
           : {}),
       }));
 
-      return next;
+      return nextRecord;
     });
   }
 
@@ -727,6 +750,14 @@ function validateMemoryRecord(record: ResearchDerivedMemoryRecord): void {
   }
   if (record.sourceEventIds.length === 0) {
     throw new Error(`Memory record sourceEventIds are required: ${record.id}`);
+  }
+  if (
+    record.kind === "finding" &&
+    !isResearchFindingStatus(record.findingStatus)
+  ) {
+    throw new Error(
+      `Unsupported finding status: ${String(record.findingStatus)}`,
+    );
   }
 }
 

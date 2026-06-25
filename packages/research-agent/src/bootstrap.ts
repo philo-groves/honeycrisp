@@ -540,6 +540,7 @@ function hasUsefulDurableRetrieval(retrieval: MemoryRetrievalResult): boolean {
       record.kind === "evidence" ||
       record.kind === "semantic_claim" ||
       record.kind === "hypothesis" ||
+      record.kind === "finding" ||
       record.kind === "belief" ||
       record.kind === "procedure" ||
       record.kind === "prospective_check"
@@ -572,6 +573,8 @@ function mergeMemoryDrivenDecision(input: {
       memory.candidateProcedures ?? input.fallback.contextPacket.candidateProcedures,
     currentHypotheses:
       memory.currentHypotheses ?? input.fallback.contextPacket.currentHypotheses,
+    currentFindings:
+      memory.currentFindings ?? input.fallback.contextPacket.currentFindings,
     contradictions:
       memory.contradictions ?? input.fallback.contextPacket.contradictions,
     userCommitments: mergeContextStrings([

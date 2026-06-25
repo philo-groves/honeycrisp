@@ -5,6 +5,7 @@ import type {
   ResearchCompletionGate,
   ResearchDerivedMemoryRecord,
   ResearchEvent,
+  ResearchFindingStatus,
   ResearchGoalNode,
   ResearchGovernancePolicy,
   ResearchSubGoal,
@@ -37,6 +38,7 @@ export interface MemoryRetrievalCandidate {
 export interface MemoryRetrievalResult {
   candidates: readonly MemoryRetrievalCandidate[];
   directEvidence: readonly MemoryRetrievalCandidate[];
+  findings: readonly MemoryRetrievalCandidate[];
   contradictions: readonly MemoryRetrievalCandidate[];
   procedures: readonly MemoryRetrievalCandidate[];
   prospectiveChecks: readonly MemoryRetrievalCandidate[];
@@ -79,6 +81,7 @@ export class DeterministicMemoryRetriever implements MemoryRetriever {
           candidate.record.kind === "evidence" &&
           !isContradictionRecord(candidate.record),
       ),
+      findings: scored.filter((candidate) => candidate.record.kind === "finding"),
       contradictions: scored.filter((candidate) =>
         isContradictionCandidate(candidate),
       ),
@@ -145,6 +148,14 @@ function scoreRecord(input: {
   if (input.record.kind === "procedure") {
     score += 12;
     reasons.push("Applicable procedure for this action class (+12).");
+  }
+  if (input.record.kind === "finding") {
+    const findingScore = scoreFindingStatus(input.record.findingStatus);
+    score += findingScore;
+    reasons.push(`Finding status contributes +${findingScore}.`);
+    if (input.record.findingStatus === "needs_evidence") {
+      warnings.push("Finding still needs evidence.");
+    }
   }
   if (input.record.kind === "prospective_check") {
     const triggerScore = scoreProspectiveTrigger(input.record, input.input);
@@ -223,7 +234,19 @@ function loadGraphEdges(input: MemoryRetrievalInput): readonly ResearchClaimGrap
 }
 
 function isOrdinaryRecord(record: ResearchDerivedMemoryRecord): boolean {
-  return record.status !== "tombstoned" && record.status !== "superseded";
+  if (record.status === "tombstoned" || record.status === "superseded") {
+    return false;
+  }
+  if (record.kind === "finding") {
+    return (
+      record.findingStatus !== "rejected" &&
+      record.findingStatus !== "out_of_scope" &&
+      record.findingStatus !== "superseded" &&
+      record.findingStatus !== "tombstoned"
+    );
+  }
+
+  return true;
 }
 
 function isApplicableRecord(
@@ -303,6 +326,24 @@ function scoreProspectiveTrigger(
   const matched = [...triggerTokens].some((token) => activeTokens.has(token));
 
   return matched || record.tags.includes("user-commitment") ? 20 : 5;
+}
+
+function scoreFindingStatus(status: ResearchFindingStatus): number {
+  switch (status) {
+    case "verified":
+      return 35;
+    case "supported":
+      return 28;
+    case "candidate":
+      return 12;
+    case "needs_evidence":
+      return 4;
+    case "superseded":
+    case "rejected":
+    case "out_of_scope":
+    case "tombstoned":
+      return -30;
+  }
 }
 
 function scoreRecency(updatedAt: string): number {

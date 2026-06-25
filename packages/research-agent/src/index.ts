@@ -190,14 +190,23 @@ export type {
 } from "./skills.js";
 export {
   deleteMemoryRecordUnderPolicy,
+  deleteFindingUnderPolicy,
   expireMemoryRecord,
+  promoteFinding,
+  rejectFinding,
   supersedeMemoryRecord,
+  supersedeFinding,
+  tombstoneFinding,
   tombstoneMemoryArtifact,
   tombstoneMemoryRecord,
 } from "./memory-lifecycle.js";
 export type {
+  DeleteFindingUnderPolicyInput,
   DeleteMemoryRecordUnderPolicyInput,
   MemoryLifecycleInput,
+  PromoteFindingInput,
+  RejectFindingInput,
+  SupersedeFindingInput,
   SupersedeMemoryRecordInput,
   TombstoneMemoryArtifactInput,
 } from "./memory-lifecycle.js";

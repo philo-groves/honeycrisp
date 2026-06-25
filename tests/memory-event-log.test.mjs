@@ -210,15 +210,24 @@ test("sqlite memory event log remains compatible with existing memory snapshot r
   }, {
     goalId: "goal_snapshot",
   });
+  const findingEvent = createEvent("finding.proposed", {
+    finding: "SQLite event rows can also feed finding memory.",
+    findingStatus: "supported",
+    evidenceRefIds: ["evt_snapshot_evidence"],
+  }, {
+    goalId: "goal_snapshot",
+  });
 
-  log.append(observationEvent);
+  log.appendMany([observationEvent, findingEvent]);
 
   const memory = createMemorySnapshotFromEventLog(log);
 
-  assert.equal(memory.eventLog.length, 1);
+  assert.equal(memory.eventLog.length, 2);
   assert.equal(memory.eventLog[0]?.sequence, 1);
   assert.equal(memory.directEvidence.length, 1);
   assert.equal(memory.directEvidence[0]?.recordKind, "evidence");
+  assert.equal(memory.currentFindings.length, 1);
+  assert.equal(memory.currentFindings[0]?.recordKind, "finding");
   assert.match(
     memory.directEvidence[0]?.summary ?? "",
     /SQLite event rows can still feed/,

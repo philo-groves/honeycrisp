@@ -78,6 +78,7 @@ export interface ResearchFlowCapture {
     directEvidence: readonly ResearchMemoryRef[];
     priorObservations: readonly ResearchMemoryRef[];
     currentHypotheses: readonly ResearchMemoryRef[];
+    currentFindings: readonly ResearchMemoryRef[];
     openQuestions: readonly string[];
     userCommitments: readonly string[];
     toolPermissions: readonly ResearchToolPermission[];
@@ -146,6 +147,7 @@ export interface ResearchFlowCapture {
       priorEpisodes: number;
       candidateProcedures: number;
       currentHypotheses: number;
+      currentFindings: number;
       contradictions: number;
       prospectiveCommitments: number;
       userCommitments: number;
@@ -153,6 +155,7 @@ export interface ResearchFlowCapture {
     directEvidence: readonly ResearchMemoryRef[];
     priorEpisodes: readonly ResearchMemoryRef[];
     currentHypotheses: readonly ResearchMemoryRef[];
+    currentFindings: readonly ResearchMemoryRef[];
     contradictions: readonly ResearchMemoryRef[];
     prospectiveCommitments: readonly string[];
     userCommitments: readonly string[];
@@ -279,6 +282,7 @@ function createContextCapture(
     directEvidence: contextPacket.directEvidence,
     priorObservations: contextPacket.priorObservations,
     currentHypotheses: contextPacket.currentHypotheses,
+    currentFindings: contextPacket.currentFindings,
     openQuestions: contextPacket.openQuestions,
     userCommitments: contextPacket.userCommitments,
     toolPermissions: contextPacket.toolPermissions,
@@ -326,6 +330,7 @@ function createMemoryCapture(
       priorEpisodes: memory.priorEpisodes.length,
       candidateProcedures: memory.candidateProcedures.length,
       currentHypotheses: memory.currentHypotheses.length,
+      currentFindings: memory.currentFindings.length,
       contradictions: memory.contradictions.length,
       prospectiveCommitments: memory.prospectiveCommitments.length,
       userCommitments: memory.userCommitments.length,
@@ -333,6 +338,7 @@ function createMemoryCapture(
     directEvidence: memory.directEvidence,
     priorEpisodes: memory.priorEpisodes,
     currentHypotheses: memory.currentHypotheses,
+    currentFindings: memory.currentFindings,
     contradictions: memory.contradictions,
     prospectiveCommitments: memory.prospectiveCommitments,
     userCommitments: memory.userCommitments,

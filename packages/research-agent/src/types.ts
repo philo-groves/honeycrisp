@@ -54,6 +54,9 @@ export type ResearchAcceptedRawEventKind =
   | "model.visible_note"
   | "model.claim"
   | "model.hypothesis"
+  | "finding.proposed"
+  | "finding.updated"
+  | "finding.reviewed"
   | "user.commitment"
   | "error.observed";
 
@@ -62,6 +65,7 @@ export type ResearchMemoryRouteTarget =
   | "priorEpisodes"
   | "candidateProcedures"
   | "currentHypotheses"
+  | "currentFindings"
   | "contradictions"
   | "prospectiveCommitments"
   | "userCommitments";
@@ -687,6 +691,7 @@ export interface ResearchMemorySnapshot {
   priorEpisodes: readonly ResearchMemoryRef[];
   candidateProcedures: readonly ResearchMemoryRef[];
   currentHypotheses: readonly ResearchMemoryRef[];
+  currentFindings: readonly ResearchMemoryRef[];
   contradictions: readonly ResearchMemoryRef[];
   prospectiveCommitments: readonly string[];
   userCommitments: readonly string[];
@@ -720,6 +725,7 @@ export interface ResearchContextPacket {
   priorObservations: readonly ResearchMemoryRef[];
   candidateProcedures: readonly ResearchMemoryRef[];
   currentHypotheses: readonly ResearchMemoryRef[];
+  currentFindings: readonly ResearchMemoryRef[];
   contradictions: readonly ResearchMemoryRef[];
   openQuestions: readonly string[];
   userCommitments: readonly string[];
@@ -766,6 +772,7 @@ export interface ResearchRequiredContextSection {
     | "prior_observations"
     | "candidate_procedures"
     | "current_hypotheses"
+    | "current_findings"
     | "contradictions"
     | "open_questions"
     | "user_commitments"

@@ -20,6 +20,7 @@ export type ResearchContextPacketV2SectionLabel =
   | "prior_episodes"
   | "candidate_procedures"
   | "current_hypotheses"
+  | "current_findings"
   | "contradictions_uncertainty"
   | "prospective_commitments";
 
@@ -104,6 +105,7 @@ const DEFAULT_SECTION_TOKEN_BUDGETS: Record<
   prior_episodes: 180,
   candidate_procedures: 160,
   current_hypotheses: 180,
+  current_findings: 180,
   contradictions_uncertainty: 160,
   prospective_commitments: 120,
 };
@@ -140,6 +142,11 @@ export function compileContextPacketV2(
         isCurrentHypothesisCandidate(candidate),
       ),
       sectionBudgets.current_hypotheses,
+    ),
+    compileSection(
+      "current_findings",
+      input.retrieval.findings,
+      sectionBudgets.current_findings,
     ),
     compileSection(
       "contradictions_uncertainty",
@@ -399,7 +406,6 @@ function isCurrentHypothesisCandidate(
   return (
     candidate.record.kind === "semantic_claim" ||
     candidate.record.kind === "hypothesis" ||
-    candidate.record.kind === "finding" ||
     candidate.record.kind === "belief"
   );
 }

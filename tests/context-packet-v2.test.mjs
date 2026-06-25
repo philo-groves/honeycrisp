@@ -114,6 +114,11 @@ test("context packet v2 keeps evidence and inference labels separate", () => {
       hypothesis: "Expansion may still affect nested state.",
       evidenceRefIds: ["source_inspection"],
     }),
+    createEvent("finding.proposed", {
+      finding: "Normalization before expansion is supported.",
+      findingStatus: "supported",
+      evidenceRefIds: ["source_inspection"],
+    }),
   ]);
 
   const packet = compileContextPacketV2({
@@ -129,6 +134,9 @@ test("context packet v2 keeps evidence and inference labels separate", () => {
   const currentHypotheses = packet.sections.find(
     (section) => section.label === "current_hypotheses",
   );
+  const currentFindings = packet.sections.find(
+    (section) => section.label === "current_findings",
+  );
 
   assert.equal(directEvidence?.items[0]?.label, "direct_evidence");
   assert.ok(
@@ -136,6 +144,12 @@ test("context packet v2 keeps evidence and inference labels separate", () => {
   );
   assert.ok(
     currentHypotheses?.items.some((item) => item.label === "hypothesis"),
+  );
+  assert.ok(
+    !currentHypotheses?.items.some((item) => item.label === "finding"),
+  );
+  assert.ok(
+    currentFindings?.items.some((item) => item.label === "finding"),
   );
 });
 

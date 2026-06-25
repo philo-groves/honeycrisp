@@ -48,6 +48,17 @@ test("memory inspector exposes hypotheses, claim graph, and prospective checks",
       .showProspectiveChecks()
       .some((record) => record.kind === "prospective_check"),
   );
+  const finding = inspector.showFindings()[0];
+  assert.ok(finding);
+  assert.equal(finding.findingStatus, "supported");
+  assert.equal(
+    inspector.showFindingById(finding.id)?.finding.id,
+    finding.id,
+  );
+  assert.deepEqual(
+    inspector.showFindingById(finding.id)?.proofAttemptIds,
+    ["proof_attempt_parser"],
+  );
 
   eventLog.close();
   recordStore.close();
@@ -146,6 +157,13 @@ async function createInspectorFixture() {
     createEvent("model.claim", {
       claim: "Parser normalization happens before expansion.",
       evidenceRefIds: ["parser_source"],
+    }),
+    createEvent("finding.proposed", {
+      finding: "Parser normalization before expansion is supported.",
+      findingStatus: "supported",
+      evidenceRefIds: ["parser_source"],
+      linkedClaimRecordIds: ["mem_claim_parser"],
+      proofAttemptIds: ["proof_attempt_parser"],
     }),
     createEvent("user.commitment", {
       commitment: "Keep parser inspection local.",

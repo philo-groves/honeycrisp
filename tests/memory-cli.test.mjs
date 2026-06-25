@@ -430,7 +430,7 @@ test("memory CLI prints event timelines and records as JSON", async () => {
   const { workspaceRoot, eventId, eventLog, recordStore } = await createCliFixture();
 
   const timeline = runMemoryCliJson("timeline", "--workspace-root", workspaceRoot);
-  assert.equal(timeline.length, 3);
+  assert.equal(timeline.length, 4);
   assert.equal(timeline[1]?.id, eventId);
 
   const records = runMemoryCliJson(
@@ -440,6 +440,24 @@ test("memory CLI prints event timelines and records as JSON", async () => {
     workspaceRoot,
   );
   assert.ok(records.some((record) => record.kind === "semantic_claim"));
+
+  const findings = runMemoryCliJson(
+    "findings",
+    "--workspace-root",
+    workspaceRoot,
+  );
+  const finding = findings[0];
+  assert.equal(finding.kind, "finding");
+  assert.equal(finding.findingStatus, "supported");
+
+  const findingDetail = runMemoryCliJson(
+    "finding",
+    finding.id,
+    "--workspace-root",
+    workspaceRoot,
+  );
+  assert.equal(findingDetail.finding.id, finding.id);
+  assert.deepEqual(findingDetail.proofAttemptIds, ["proof_attempt_cli"]);
 
   eventLog.close();
   recordStore.close();
@@ -507,6 +525,12 @@ async function createCliFixture() {
     createEvent("model.claim", {
       claim: "Parser normalization happens before expansion.",
       evidenceRefIds: ["parser_source"],
+    }),
+    createEvent("finding.proposed", {
+      finding: "Parser normalization before expansion is supported.",
+      findingStatus: "supported",
+      evidenceRefIds: ["parser_source"],
+      proofAttemptIds: ["proof_attempt_cli"],
     }),
     createEvent("user.commitment", {
       commitment: "Keep parser inspection local.",

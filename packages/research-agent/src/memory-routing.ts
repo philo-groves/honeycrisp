@@ -28,6 +28,9 @@ export const ACCEPTED_RAW_EVENT_KINDS = [
   "model.visible_note",
   "model.claim",
   "model.hypothesis",
+  "finding.proposed",
+  "finding.updated",
+  "finding.reviewed",
   "user.commitment",
   "error.observed",
 ] as const satisfies readonly ResearchAcceptedRawEventKind[];
@@ -62,6 +65,7 @@ export function routeEventsToMemorySnapshot(
     priorEpisodes: [...memory.priorEpisodes],
     candidateProcedures: [...memory.candidateProcedures],
     currentHypotheses: [...memory.currentHypotheses],
+    currentFindings: [...memory.currentFindings],
     contradictions: [...memory.contradictions],
     prospectiveCommitments: [...memory.prospectiveCommitments],
     userCommitments: [...memory.userCommitments],
@@ -136,6 +140,9 @@ function selectRouteTarget(
   if (record.kind === "semantic_claim" || record.kind === "hypothesis") {
     return "currentHypotheses";
   }
+  if (record.kind === "finding") {
+    return "currentFindings";
+  }
   if (record.kind === "procedure") {
     return "candidateProcedures";
   }
@@ -174,6 +181,9 @@ function createRouteReason(
   }
   if (record.kind === "hypothesis") {
     return "Model-visible hypotheses are available to later loops with separated evidence links.";
+  }
+  if (record.kind === "finding") {
+    return "Evidence-backed findings are carried forward separately from hypotheses.";
   }
   if (record.kind === "procedure") {
     return "Procedures remain candidates until repeated usefulness or explicit promotion.";
@@ -261,6 +271,7 @@ type MutableResearchMemorySnapshot = {
   priorEpisodes: ResearchMemoryRef[];
   candidateProcedures: ResearchMemoryRef[];
   currentHypotheses: ResearchMemoryRef[];
+  currentFindings: ResearchMemoryRef[];
   contradictions: ResearchMemoryRef[];
   prospectiveCommitments: string[];
   userCommitments: string[];

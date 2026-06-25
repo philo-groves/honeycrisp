@@ -593,6 +593,11 @@ function createLoopContextSections(
       content: packet.currentHypotheses,
     },
     {
+      label: "current_findings",
+      required: false,
+      content: packet.currentFindings,
+    },
+    {
       label: "contradictions",
       required: false,
       content: packet.contradictions,

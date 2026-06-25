@@ -82,20 +82,20 @@ Checklist:
 
 Implement general findings as durable Honeycrisp memory, then teach the controller and inspector how to use them.
 
-Status: not started.
+Status: completed.
 
 Checklist:
 
-- [ ] Add `finding` to Honeycrisp memory record contracts and SQLite validation.
-- [ ] Add migration support for existing `memory_records` rows without requiring a database rebuild.
-- [ ] Add write-pipeline support for model-visible finding proposals and finding updates.
-- [ ] Add event kinds for finding lifecycle updates, such as `finding.proposed`, `finding.updated`, and `finding.reviewed`.
-- [ ] Add lifecycle operations for finding promotion, rejection, supersession, tombstone, and policy deletion.
-- [ ] Add retrieval scoring so supported or verified findings are recalled above weak hypotheses, while rejected findings remain auditable but ordinary retrieval avoids them.
-- [ ] Add context packet sections that separate findings from hypotheses and semantic claims.
-- [ ] Add memory inspector commands for listing findings and showing one finding with linked evidence/proof/artifacts.
-- [ ] Add tests for finding write, retrieval, lifecycle, context selection, and inspector output.
-- [ ] Run a real Honeycrisp health check that promotes a non-security finding from evidence and verifies it appears in memory/context.
+- [x] Add `finding` to Honeycrisp memory record contracts and SQLite validation.
+- [x] Add migration support for existing `memory_records` rows without requiring a database rebuild.
+- [x] Add write-pipeline support for model-visible finding proposals and finding updates.
+- [x] Add event kinds for finding lifecycle updates, such as `finding.proposed`, `finding.updated`, and `finding.reviewed`.
+- [x] Add lifecycle operations for finding promotion, rejection, supersession, tombstone, and policy deletion.
+- [x] Add retrieval scoring so supported or verified findings are recalled above weak hypotheses, while rejected findings remain auditable but ordinary retrieval avoids them.
+- [x] Add context packet sections that separate findings from hypotheses and semantic claims.
+- [x] Add memory inspector commands for listing findings and showing one finding with linked evidence/proof/artifacts.
+- [x] Add tests for finding write, retrieval, lifecycle, context selection, and inspector output.
+- [x] Run a real Honeycrisp health check that promotes a non-security finding from evidence and verifies it appears in memory/context.
 
 ## Phase 3: Generic Proof And Verifier Layer
 
