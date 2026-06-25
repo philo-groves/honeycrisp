@@ -1548,16 +1548,24 @@ function renderContextSelections(
     return "No context sections found.";
   }
 
-  return context.sections
-    .map((section) =>
-      [
-        section.label,
-        `items=${section.itemCount}`,
-        `tokens=${section.estimatedTokens}/${section.tokenBudget}`,
-        `selected=${section.selectedRecordIds.join(",") || "-"}`,
-      ].join("\t"),
-    )
-    .join("\n");
+  return [
+    [
+      "context",
+      `items=${context.sections.reduce((sum, section) => sum + section.itemCount, 0)}`,
+      `tokens=${context.estimatedTokens}/${context.tokenBudget}`,
+      `compaction=${context.compaction.reason}`,
+      `removed=${context.compaction.removedRecordIds.join(",") || "-"}`,
+    ].join("\t"),
+    ...context.sections
+      .map((section) =>
+        [
+          section.label,
+          `items=${section.itemCount}`,
+          `tokens=${section.estimatedTokens}/${section.tokenBudget}`,
+          `selected=${section.selectedRecordIds.join(",") || "-"}`,
+        ].join("\t"),
+      ),
+  ].join("\n");
 }
 
 function renderDecisionExplanation(

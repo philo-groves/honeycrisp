@@ -357,6 +357,7 @@ Required packet sections:
 Compiler responsibilities:
 
 - Enforce section-level token budgets.
+- Enforce an overall context token budget by pruning the lowest-ranked selected items after section compilation.
 - Prefer direct evidence over inference.
 - Preserve labels for evidence, inference, belief, and uncertainty.
 - Include selection reasons for inspectability.
@@ -367,6 +368,7 @@ Checklist:
 - [x] Add preconscious-memory input type.
 - [x] Add conscious-context packet v2 type.
 - [x] Enforce section-level token budgets.
+- [x] Enforce whole-packet token budgets by excluding lowest-ranked selected context items.
 - [x] Prefer direct evidence over inference when budget is tight.
 - [x] Preserve labels for evidence, inference, belief, and uncertainty.
 - [x] Include selection reasons in context packet metadata.

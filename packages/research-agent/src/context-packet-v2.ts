@@ -62,6 +62,16 @@ export interface ResearchContextPacketV2 {
   activeSubGoal: ResearchSubGoal;
   actionClass?: ResearchActionClass;
   preconsciousCandidateCount: number;
+  tokenBudget: number;
+  estimatedTokens: number;
+  compaction: {
+    reason: "context_token_budget_exceeded" | "not_needed";
+    acceptedTokenBudget: number;
+    estimatedTokensBeforeCompaction: number;
+    estimatedTokensAfterCompaction: number;
+    removedRecordIds: readonly string[];
+    removedTokenCount: number;
+  };
   sections: readonly ResearchContextPacketV2Section[];
   openQuestions: readonly string[];
   userCommitments: readonly string[];
@@ -82,6 +92,7 @@ export interface CompileContextPacketV2Input {
   userCommitments?: readonly string[];
   writebackExpectations?: readonly ResearchMemoryStoreKind[];
   sectionTokenBudgets?: Partial<Record<ResearchContextPacketV2SectionLabel, number>>;
+  contextTokenBudget?: number;
 }
 
 const DEFAULT_SECTION_TOKEN_BUDGETS: Record<
@@ -95,6 +106,7 @@ const DEFAULT_SECTION_TOKEN_BUDGETS: Record<
   contradictions_uncertainty: 160,
   prospective_commitments: 120,
 };
+const DEFAULT_CONTEXT_TOKEN_BUDGET = 800;
 
 export function compileContextPacketV2(
   input: CompileContextPacketV2Input,
@@ -103,7 +115,7 @@ export function compileContextPacketV2(
     ...DEFAULT_SECTION_TOKEN_BUDGETS,
     ...(input.sectionTokenBudgets ?? {}),
   };
-  const sections: ResearchContextPacketV2Section[] = [
+  const compiledSections: ResearchContextPacketV2Section[] = [
     compileSection(
       "direct_evidence",
       input.retrieval.directEvidence,
@@ -140,6 +152,12 @@ export function compileContextPacketV2(
       sectionBudgets.prospective_commitments,
     ),
   ];
+  const acceptedTokenBudget =
+    positiveInteger(input.contextTokenBudget) ?? DEFAULT_CONTEXT_TOKEN_BUDGET;
+  const compacted = compactSectionsToTokenBudget(
+    compiledSections,
+    acceptedTokenBudget,
+  );
 
   return {
     schemaVersion: 2,
@@ -148,7 +166,10 @@ export function compileContextPacketV2(
     activeSubGoal: input.activeSubGoal,
     ...(input.actionClass ? { actionClass: input.actionClass } : {}),
     preconsciousCandidateCount: input.retrieval.candidates.length,
-    sections,
+    tokenBudget: acceptedTokenBudget,
+    estimatedTokens: compacted.estimatedTokensAfterCompaction,
+    compaction: compacted.compaction,
+    sections: compacted.sections,
     openQuestions: input.openQuestions ?? [],
     userCommitments: [
       ...input.goalFrame.scopeConstraints,
@@ -163,6 +184,107 @@ export function compileContextPacketV2(
       "episodic",
     ],
   };
+}
+
+function compactSectionsToTokenBudget(
+  sections: readonly ResearchContextPacketV2Section[],
+  acceptedTokenBudget: number,
+): {
+  sections: ResearchContextPacketV2Section[];
+  estimatedTokensAfterCompaction: number;
+  compaction: ResearchContextPacketV2["compaction"];
+} {
+  const estimatedTokensBeforeCompaction = totalSectionTokens(sections);
+  if (estimatedTokensBeforeCompaction <= acceptedTokenBudget) {
+    return {
+      sections: sections.map(cloneSection),
+      estimatedTokensAfterCompaction: estimatedTokensBeforeCompaction,
+      compaction: {
+        reason: "not_needed",
+        acceptedTokenBudget,
+        estimatedTokensBeforeCompaction,
+        estimatedTokensAfterCompaction: estimatedTokensBeforeCompaction,
+        removedRecordIds: [],
+        removedTokenCount: 0,
+      },
+    };
+  }
+
+  const removeIds = new Set<string>();
+  let currentTokens = estimatedTokensBeforeCompaction;
+  const removableItems = sections
+    .flatMap((section, sectionIndex) =>
+      section.items.map((item, itemIndex) => ({
+        sectionIndex,
+        itemIndex,
+        item,
+      })),
+    )
+    .sort((left, right) =>
+      left.item.score - right.item.score ||
+      (left.item.confidence ?? 0) - (right.item.confidence ?? 0) ||
+      right.item.estimatedTokens - left.item.estimatedTokens ||
+      right.item.recordId.localeCompare(left.item.recordId),
+    );
+
+  for (const removable of removableItems) {
+    if (currentTokens <= acceptedTokenBudget) break;
+    removeIds.add(removable.item.recordId);
+    currentTokens = Math.max(0, currentTokens - removable.item.estimatedTokens);
+  }
+
+  const compactedSections = sections.map((section) => {
+    const keptItems = section.items.filter((item) => !removeIds.has(item.recordId));
+    const prunedRecordIds = section.items
+      .filter((item) => removeIds.has(item.recordId))
+      .map((item) => item.recordId);
+    return {
+      ...section,
+      estimatedTokens: totalItemTokens(keptItems),
+      items: keptItems,
+      droppedRecordIds: [
+        ...section.droppedRecordIds,
+        ...prunedRecordIds,
+      ],
+    };
+  });
+  const estimatedTokensAfterCompaction = totalSectionTokens(compactedSections);
+  const removedRecordIds = [...removeIds];
+  return {
+    sections: compactedSections,
+    estimatedTokensAfterCompaction,
+    compaction: {
+      reason: "context_token_budget_exceeded",
+      acceptedTokenBudget,
+      estimatedTokensBeforeCompaction,
+      estimatedTokensAfterCompaction,
+      removedRecordIds,
+      removedTokenCount:
+        estimatedTokensBeforeCompaction - estimatedTokensAfterCompaction,
+    },
+  };
+}
+
+function cloneSection(
+  section: ResearchContextPacketV2Section,
+): ResearchContextPacketV2Section {
+  return {
+    ...section,
+    items: [...section.items],
+    droppedRecordIds: [...section.droppedRecordIds],
+  };
+}
+
+function totalSectionTokens(
+  sections: readonly ResearchContextPacketV2Section[],
+): number {
+  return sections.reduce((sum, section) => sum + section.estimatedTokens, 0);
+}
+
+function totalItemTokens(
+  items: readonly ResearchContextPacketV2Item[],
+): number {
+  return items.reduce((sum, item) => sum + item.estimatedTokens, 0);
 }
 
 function compileSection(
@@ -289,6 +411,12 @@ function truncateToTokenBudget(value: string, tokenBudget: number): string {
 
 function estimateTokens(value: string): number {
   return Math.max(1, Math.ceil(value.length / 4));
+}
+
+function positiveInteger(value: number | undefined): number | null {
+  return Number.isInteger(value) && value !== undefined && value > 0
+    ? value
+    : null;
 }
 
 function createToolPermissions(

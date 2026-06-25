@@ -44,6 +44,63 @@ test("context packet v2 respects section token budgets", () => {
   assert.ok(directEvidence.items[0]?.summary.endsWith("..."));
 });
 
+test("context packet v2 prunes lowest-ranked items when the total packet exceeds budget", () => {
+  const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
+    createEvent("tool.observed", {
+      summary: [
+        "Parser normalization source evidence confirms parser normalization behavior.",
+        "Normalization happens before expansion and is directly relevant to the active parser goal.",
+        "This high-confidence observation should survive whole-packet context pruning.",
+      ].join(" "),
+      confidence: 0.99,
+    }),
+    createEvent("tool.observed", {
+      summary: [
+        "Parser normalization side note mentions parser setup but contains less direct evidence.",
+        "It is useful only if the context packet has spare room after stronger evidence.",
+      ].join(" "),
+      confidence: 0.45,
+    }),
+    createEvent("tool.observed", {
+      summary: [
+        "Unrelated operational note with weak parser relevance and low confidence.",
+        "This should be the first selected item removed when whole-packet budget is tight.",
+      ].join(" "),
+      confidence: 0.1,
+    }),
+  ]);
+  const rankedEvidenceIds = retrieval.directEvidence.map(
+    (candidate) => candidate.record.id,
+  );
+
+  assert.ok(rankedEvidenceIds.length >= 3);
+
+  const packet = compileContextPacketV2({
+    goalFrame,
+    activeGoal: goalFrame.root,
+    activeSubGoal: subGoal,
+    retrieval,
+    tools: [],
+    contextTokenBudget: 70,
+    sectionTokenBudgets: {
+      direct_evidence: 160,
+    },
+  });
+  const selectedIds = packet.sections.flatMap((section) =>
+    section.items.map((item) => item.recordId),
+  );
+  const lowestRankedEvidenceId = rankedEvidenceIds.at(-1);
+  const highestRankedEvidenceId = rankedEvidenceIds[0];
+
+  assert.equal(packet.compaction.reason, "context_token_budget_exceeded");
+  assert.ok(packet.estimatedTokens <= packet.tokenBudget);
+  assert.ok(highestRankedEvidenceId);
+  assert.ok(lowestRankedEvidenceId);
+  assert.ok(selectedIds.includes(highestRankedEvidenceId));
+  assert.ok(!selectedIds.includes(lowestRankedEvidenceId));
+  assert.ok(packet.compaction.removedRecordIds.includes(lowestRankedEvidenceId));
+});
+
 test("context packet v2 keeps evidence and inference labels separate", () => {
   const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
     createEvent("tool.observed", {
@@ -141,6 +198,9 @@ test("flow capture exposes context packet v2 selection reasons", async () => {
 
   assert.ok(capture.contextV2);
   assert.ok(capture.contextV2.preconsciousCandidateCount > 0);
+  assert.equal(capture.contextV2.tokenBudget, packet.tokenBudget);
+  assert.equal(capture.contextV2.estimatedTokens, packet.estimatedTokens);
+  assert.equal(capture.contextV2.compaction.reason, packet.compaction.reason);
   assert.ok(
     capture.contextV2.sections.some((section) =>
       section.selectionReasons.some((selection) => selection.reasons.length > 0),

@@ -119,6 +119,9 @@ export class MemoryInspector {
     return {
       schemaVersion: contextPacket.schemaVersion,
       preconsciousCandidateCount: contextPacket.preconsciousCandidateCount,
+      tokenBudget: contextPacket.tokenBudget,
+      estimatedTokens: contextPacket.estimatedTokens,
+      compaction: contextPacket.compaction,
       sections: contextPacket.sections.map((section) => ({
         label: section.label,
         itemCount: section.items.length,
