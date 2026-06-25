@@ -45,6 +45,17 @@ export type {
   WriteResearchModelConfigOptions,
 } from "./config.js";
 export {
+  DEFAULT_RESEARCH_TOOL_CONFIG_RELATIVE_PATH,
+  getDefaultResearchToolConfigPath,
+  loadDefaultResearchToolConfig,
+  loadResearchToolConfig,
+  writeResearchToolConfig,
+} from "./tool-config.js";
+export type {
+  ResearchToolConfigPreference,
+  WriteResearchToolConfigOptions,
+} from "./tool-config.js";
+export {
   createAnalysisTool,
   createDefaultBuiltInToolFamily,
   createExperimentTool,

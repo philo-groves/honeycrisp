@@ -28,6 +28,7 @@ import {
   createStorageListTool,
   createStructuredFileReadTool,
   getDefaultResearchModelConfigPath,
+  getDefaultResearchToolConfigPath,
   createSqliteMemoryEventLog,
   createSqliteMemoryRecordStore,
   createSqliteProofStore,
@@ -40,6 +41,7 @@ import {
   loadResearchMcpClientConfig,
   loadResearchExperimentConfig,
   loadResearchModelConfig,
+  loadResearchToolConfig,
   loadResearchWorkspaceContextFile,
   loginAuthProvider,
   logoutAuthProvider,
@@ -56,6 +58,7 @@ import {
   verifyProviderAuth,
   workspaceContextFileReadHints,
   writeResearchModelConfig,
+  writeResearchToolConfig,
 } from "@honeycrisp/research-agent";
 import type {
   AuthEvent,
@@ -71,6 +74,7 @@ import type {
   ResearchMemorySnapshot,
   ResearchModelConfigPreference,
   ResearchProofMethodDescriptor,
+  ResearchToolConfigPreference,
   ResolvedResearchModelConfig,
   ResearchSkillDescriptor,
   ResearchToolDescriptor,
@@ -113,6 +117,29 @@ interface RuntimeToolConfig {
   toolMaxFiles?: number;
   toolMaxBytes?: number;
   toolMaxTokens?: number;
+  toolConfigPath?: string;
+  disableDefaultToolConfig: boolean;
+}
+
+interface ResolvedRuntimeToolConfig {
+  runtimeTools: RuntimeToolConfig;
+  capture: {
+    configPath: string;
+    exists: boolean;
+    loaded: boolean;
+    defaultDisabled: boolean;
+    preference: ResearchToolConfigPreference;
+  };
+}
+
+interface ParsedToolsConfigArgs {
+  command: string | undefined;
+  configPath: string | undefined;
+  workspaceRoot: string;
+  field: string | undefined;
+  value: string | undefined;
+  json: boolean;
+  help: boolean;
 }
 
 interface ParsedArgs {
@@ -235,6 +262,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let toolMaxFiles: number | undefined;
   let toolMaxBytes: number | undefined;
   let toolMaxTokens: number | undefined;
+  let toolConfigPath: string | undefined;
+  let disableDefaultToolConfig = false;
   const successGates: string[] = [];
   const failureOrStopGates: string[] = [];
   const scopeConstraints: string[] = [];
@@ -278,6 +307,11 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--config") {
       configPath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--tool-config") {
+      toolConfigPath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--no-default-tool-config") {
+      disableDefaultToolConfig = true;
     } else if (arg === "--provider") {
       provider = readOptionValue(argv, index, arg);
       index += 1;
@@ -442,6 +476,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       ...(toolMaxFiles ? { toolMaxFiles } : {}),
       ...(toolMaxBytes ? { toolMaxBytes } : {}),
       ...(toolMaxTokens ? { toolMaxTokens } : {}),
+      ...(toolConfigPath ? { toolConfigPath } : {}),
+      disableDefaultToolConfig,
     },
     capturePath,
     workspaceRoot,
@@ -689,6 +725,8 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   let toolMaxFiles: number | undefined;
   let toolMaxBytes: number | undefined;
   let toolMaxTokens: number | undefined;
+  let toolConfigPath: string | undefined;
+  let disableDefaultToolConfig = false;
 
   for (let index = command ? 1 : 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -696,6 +734,11 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
     if (arg === "--workspace-root") {
       workspaceRoot = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--tool-config") {
+      toolConfigPath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--no-default-tool-config") {
+      disableDefaultToolConfig = true;
     } else if (arg === "--inspect-root") {
       inspectRoots.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -798,12 +841,61 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       ...(toolMaxFiles ? { toolMaxFiles } : {}),
       ...(toolMaxBytes ? { toolMaxBytes } : {}),
       ...(toolMaxTokens ? { toolMaxTokens } : {}),
+      ...(toolConfigPath ? { toolConfigPath } : {}),
+      disableDefaultToolConfig,
     },
     workspaceRoot,
     inspectRoots,
     inspectPaths,
     inspectAction,
     inspectBytes,
+    json,
+    help,
+  };
+}
+
+function parseToolsConfigArgs(argv: readonly string[]): ParsedToolsConfigArgs {
+  const firstArg = argv[0];
+  const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
+  let configPath: string | undefined;
+  let workspaceRoot = process.cwd();
+  let json = false;
+  let help = false;
+  const positionals: string[] = [];
+
+  for (let index = command ? 1 : 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+
+    if (arg === "--tool-config") {
+      configPath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--workspace-root") {
+      workspaceRoot = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg === "-h" || arg === "--help") {
+      help = true;
+    } else if (arg?.startsWith("-")) {
+      throw new Error(`Unknown tools config option: ${arg}`);
+    } else if (arg) {
+      positionals.push(arg);
+    }
+  }
+
+  if ((command === "add" || command === "remove" || command === "set") && positionals.length > 2) {
+    throw new Error(`tools config ${command} accepts exactly one field and one value.`);
+  }
+  if (command === "clear" && positionals.length > 1) {
+    throw new Error("tools config clear accepts exactly one field.");
+  }
+
+  return {
+    command,
+    configPath,
+    workspaceRoot,
+    field: positionals[0],
+    value: positionals[1],
     json,
     help,
   };
@@ -920,6 +1012,20 @@ function readOptionValue(
   return value;
 }
 
+function uniqueRuntimeStrings(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique;
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -959,6 +1065,8 @@ function usage(): string {
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
     "  --tool-family <name>   Enable local-inspection, repository-search, file-read, analysis, synthesis, storage, or experiment",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
+    "  --tool-config <path>   Runtime tool preference config (default: .honeycrisp/tools.json)",
+    "  --no-default-tool-config Ignore .honeycrisp/tools.json unless --tool-config is provided",
     "  --repo-root <path>     Add a known repository context hint and enable repository.search unless disabled",
     "  --file-read-root <p>   Add a file.read context hint and enable file.read unless disabled",
     "  --source-path <path>   Add a materialized source context path",
@@ -1012,6 +1120,7 @@ function usage(): string {
     "",
     "Tool debug commands:",
     "  tools list                       Show configured tools, MCP allowlist, and selected skills",
+    "  tools config show                Show project runtime tool preferences",
     "  config show                      Show project model preference and authorization status",
     "  config set <field> <value>       Set provider, model, or effort preference",
   ].join("\n");
@@ -1099,8 +1208,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
         ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
-        ...(args.runtimeTools.selectedSkillIds.length > 0
-          ? { selectedSkillIds: args.runtimeTools.selectedSkillIds }
+        ...(runtimeConfig.runtimeTools.selectedSkillIds.length > 0
+          ? { selectedSkillIds: runtimeConfig.runtimeTools.selectedSkillIds }
           : {}),
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
         loopExecutor,
@@ -1422,6 +1531,11 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
 }
 
 async function handleToolsCommand(argv: readonly string[]): Promise<void> {
+  if (argv[0] === "config") {
+    await handleToolsConfigCommand(argv.slice(1));
+    return;
+  }
+
   const args = parseToolsArgs(argv);
 
   if (!args.command || args.help) {
@@ -1444,6 +1558,108 @@ async function handleToolsCommand(argv: readonly string[]): Promise<void> {
   } finally {
     await runtime.cleanup?.();
   }
+}
+
+async function handleToolsConfigCommand(argv: readonly string[]): Promise<void> {
+  const args = parseToolsConfigArgs(argv);
+
+  if (!args.command || args.help) {
+    console.log(toolsConfigUsage());
+    return;
+  }
+
+  if (args.command === "show") {
+    if (args.field || args.value) {
+      throw new Error("tools config show does not accept positional arguments.");
+    }
+    const inspection = await createToolConfigInspection(args);
+    printConfigOutput(args, inspection, renderToolConfigInspection);
+    return;
+  }
+
+  if (args.command === "add" || args.command === "remove") {
+    if (!args.field || !args.value) {
+      throw new Error(`tools config ${args.command} requires a field and value.`);
+    }
+    const configPath = resolveToolConfigPath(args);
+    const exists = await pathExists(configPath);
+    const current = exists ? await loadResearchToolConfig(configPath) : {};
+    const updated = updateToolConfigArrayPreference(
+      current,
+      args.command,
+      args.field,
+      args.value,
+    );
+    await writeResearchToolConfig({ configPath, preference: updated.preference });
+    const inspection = await createToolConfigInspection(args);
+    printConfigOutput(
+      args,
+      {
+        updated: updated.change,
+        ...inspection,
+      },
+      (value) => [
+        `Updated tool config: ${value.configPath}`,
+        renderToolConfigInspection(value),
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (args.command === "set") {
+    if (!args.field || !args.value) {
+      throw new Error("tools config set requires a field and value.");
+    }
+    const configPath = resolveToolConfigPath(args);
+    const exists = await pathExists(configPath);
+    const current = exists ? await loadResearchToolConfig(configPath) : {};
+    const updated = updateToolConfigScalarPreference(
+      current,
+      "set",
+      args.field,
+      args.value,
+    );
+    await writeResearchToolConfig({ configPath, preference: updated.preference });
+    const inspection = await createToolConfigInspection(args);
+    printConfigOutput(
+      args,
+      {
+        updated: updated.change,
+        ...inspection,
+      },
+      (value) => [
+        `Updated tool config: ${value.configPath}`,
+        renderToolConfigInspection(value),
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (args.command === "clear") {
+    if (!args.field || args.value) {
+      throw new Error("tools config clear requires exactly one field.");
+    }
+    const configPath = resolveToolConfigPath(args);
+    const exists = await pathExists(configPath);
+    const current = exists ? await loadResearchToolConfig(configPath) : {};
+    const updated = clearToolConfigPreference(current, args.field);
+    await writeResearchToolConfig({ configPath, preference: updated.preference });
+    const inspection = await createToolConfigInspection(args);
+    printConfigOutput(
+      args,
+      {
+        updated: updated.change,
+        ...inspection,
+      },
+      (value) => [
+        `Updated tool config: ${value.configPath}`,
+        renderToolConfigInspection(value),
+      ].join("\n"),
+    );
+    return;
+  }
+
+  throw new Error(`Unknown tools config command: ${args.command}`);
 }
 
 async function handleConfigCommand(argv: readonly string[]): Promise<void> {
@@ -1511,6 +1727,288 @@ function configUsage(): string {
     "  --workspace-root <path>    Project root for default .honeycrisp/config.json",
     "  --json                     Print JSON",
   ].join("\n");
+}
+
+function toolsConfigUsage(): string {
+  return [
+    "Usage: honeycrisp tools config <command> [options]",
+    "",
+    "Commands:",
+    "  show                              Show persisted runtime tool preferences",
+    "  add skill-dir <path>              Add a local skill directory",
+    "  remove skill-dir <path>           Remove a local skill directory",
+    "  add skill <id>                    Select a loaded skill id",
+    "  remove skill <id>                 Deselect a skill id",
+    "  set mcp-config <path>             Set the MCP client config path",
+    "  clear mcp-config                  Clear the MCP client config path",
+    "  add allow-mcp-server <name>       Allow an MCP server name",
+    "  remove allow-mcp-server <name>    Remove an allowed MCP server name",
+    "  set mcp-timeout-ms <n>            Set MCP request timeout in milliseconds",
+    "  clear mcp-timeout-ms              Clear MCP request timeout",
+    "",
+    "Options:",
+    "  --tool-config <path>              Runtime tool preference config path",
+    "  --workspace-root <path>           Project root for default .honeycrisp/tools.json",
+    "  --json                            Print JSON",
+  ].join("\n");
+}
+
+async function createToolConfigInspection(args: {
+  configPath: string | undefined;
+  workspaceRoot: string;
+}): Promise<{
+  configPath: string;
+  exists: boolean;
+  preference: ResearchToolConfigPreference;
+}> {
+  const configPath = resolveToolConfigPath(args);
+  const exists = await pathExists(configPath);
+  const preference = exists ? await loadResearchToolConfig(configPath) : {};
+  return {
+    configPath,
+    exists,
+    preference,
+  };
+}
+
+function resolveToolConfigPath(args: {
+  configPath: string | undefined;
+  workspaceRoot: string;
+}): string {
+  return args.configPath
+    ? resolve(args.configPath)
+    : getDefaultResearchToolConfigPath(args.workspaceRoot);
+}
+
+function renderToolConfigInspection(input: {
+  configPath: string;
+  exists: boolean;
+  preference: ResearchToolConfigPreference;
+}): string {
+  return [
+    `Tool config path: ${input.configPath}`,
+    `Tool config exists: ${input.exists ? "yes" : "no"}`,
+    `Skill directories: ${renderConfigList(input.preference.skillDirs)}`,
+    `Selected skills: ${renderConfigList(input.preference.selectedSkillIds)}`,
+    `MCP config: ${input.preference.mcpConfigPath ?? "(not set)"}`,
+    `Allowed MCP servers: ${renderConfigList(input.preference.allowedMcpServers)}`,
+    `MCP timeout: ${input.preference.mcpTimeoutMs ? `${input.preference.mcpTimeoutMs} ms` : "(default)"}`,
+  ].join("\n");
+}
+
+function renderConfigList(values: readonly string[] | undefined): string {
+  return values && values.length > 0 ? values.join(", ") : "(none)";
+}
+
+type ToolConfigArrayField =
+  | "toolFamilies"
+  | "disabledToolFamilies"
+  | "repoRoots"
+  | "fileReadRoots"
+  | "sourcePaths"
+  | "projectNotes"
+  | "allowedSideEffects"
+  | "allowedMcpServers"
+  | "selectedSkillIds"
+  | "skillDirs";
+
+type ToolConfigScalarField =
+  | "workspaceContextPath"
+  | "mcpConfigPath"
+  | "mcpTimeoutMs"
+  | "experimentConfigPath"
+  | "toolMaxCalls"
+  | "toolRuntimeMs"
+  | "toolMaxFiles"
+  | "toolMaxBytes"
+  | "toolMaxTokens";
+
+function updateToolConfigArrayPreference(
+  current: ResearchToolConfigPreference,
+  command: "add" | "remove",
+  fieldName: string,
+  value: string,
+): {
+  preference: ResearchToolConfigPreference;
+  change: Record<string, unknown>;
+} {
+  const field = parseToolConfigArrayField(fieldName);
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`tools config ${command} ${fieldName} requires a non-empty value.`);
+  }
+
+  const existing = current[field] ?? [];
+  const next =
+    command === "add"
+      ? uniqueRuntimeStrings([...existing, trimmed])
+      : existing.filter((item) => item !== trimmed);
+  return {
+    preference: {
+      ...current,
+      [field]: next,
+    },
+    change: {
+      command,
+      field,
+      value: trimmed,
+    },
+  };
+}
+
+function updateToolConfigScalarPreference(
+  current: ResearchToolConfigPreference,
+  command: "set",
+  fieldName: string,
+  value: string,
+): {
+  preference: ResearchToolConfigPreference;
+  change: Record<string, unknown>;
+} {
+  const field = parseToolConfigScalarField(fieldName);
+  const parsed = parseToolConfigScalarValue(field, value);
+  return {
+    preference: {
+      ...current,
+      [field]: parsed,
+    },
+    change: {
+      command,
+      field,
+      value: parsed,
+    },
+  };
+}
+
+function clearToolConfigPreference(
+  current: ResearchToolConfigPreference,
+  fieldName: string,
+): {
+  preference: ResearchToolConfigPreference;
+  change: Record<string, unknown>;
+} {
+  const field = parseToolConfigClearField(fieldName);
+  const preference = { ...current };
+  delete preference[field];
+  return {
+    preference,
+    change: {
+      command: "clear",
+      field,
+    },
+  };
+}
+
+function parseToolConfigClearField(
+  fieldName: string,
+): ToolConfigArrayField | ToolConfigScalarField {
+  try {
+    return parseToolConfigArrayField(fieldName);
+  } catch {
+    return parseToolConfigScalarField(fieldName);
+  }
+}
+
+function parseToolConfigArrayField(fieldName: string): ToolConfigArrayField {
+  switch (fieldName) {
+    case "tool-family":
+    case "toolFamilies":
+      return "toolFamilies";
+    case "disable-tool-family":
+    case "disabled-tool-family":
+    case "disabledToolFamilies":
+      return "disabledToolFamilies";
+    case "repo-root":
+    case "repoRoots":
+      return "repoRoots";
+    case "file-read-root":
+    case "fileReadRoots":
+      return "fileReadRoots";
+    case "source-path":
+    case "sourcePaths":
+      return "sourcePaths";
+    case "project-note":
+    case "projectNotes":
+      return "projectNotes";
+    case "allowed-side-effect":
+    case "allowedSideEffects":
+      return "allowedSideEffects";
+    case "allow-mcp-server":
+    case "allowed-mcp-server":
+    case "mcp-server":
+    case "allowedMcpServers":
+      return "allowedMcpServers";
+    case "skill":
+    case "selected-skill":
+    case "selectedSkillIds":
+      return "selectedSkillIds";
+    case "skill-dir":
+    case "skillDirs":
+      return "skillDirs";
+    default:
+      throw new Error(`Unknown tools config list field: ${fieldName}.`);
+  }
+}
+
+function parseToolConfigScalarField(fieldName: string): ToolConfigScalarField {
+  switch (fieldName) {
+    case "workspace-context":
+    case "workspaceContextPath":
+      return "workspaceContextPath";
+    case "mcp-config":
+    case "mcpConfigPath":
+      return "mcpConfigPath";
+    case "mcp-timeout-ms":
+    case "mcpTimeoutMs":
+      return "mcpTimeoutMs";
+    case "experiment-config":
+    case "experimentConfigPath":
+      return "experimentConfigPath";
+    case "tool-max-calls":
+    case "toolMaxCalls":
+      return "toolMaxCalls";
+    case "tool-runtime-ms":
+    case "toolRuntimeMs":
+      return "toolRuntimeMs";
+    case "tool-max-files":
+    case "toolMaxFiles":
+      return "toolMaxFiles";
+    case "tool-max-bytes":
+    case "toolMaxBytes":
+      return "toolMaxBytes";
+    case "tool-max-tokens":
+    case "toolMaxTokens":
+      return "toolMaxTokens";
+    default:
+      throw new Error(`Unknown tools config scalar field: ${fieldName}.`);
+  }
+}
+
+function parseToolConfigScalarValue(
+  field: ToolConfigScalarField,
+  value: string,
+): string | number {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`tools config set ${field} requires a non-empty value.`);
+  }
+
+  if (
+    field === "mcpTimeoutMs" ||
+    field === "toolMaxCalls" ||
+    field === "toolRuntimeMs" ||
+    field === "toolMaxFiles" ||
+    field === "toolMaxBytes" ||
+    field === "toolMaxTokens"
+  ) {
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`tools config set ${field} requires a positive integer.`);
+    }
+    return parsed;
+  }
+
+  return trimmed;
 }
 
 async function createConfigInspection(args: {
@@ -1639,6 +2137,8 @@ function toolsUsage(): string {
     "Options:",
     "  --tool-family <name>        Enable local-inspection, repository-search, file-read, analysis, synthesis, storage, or experiment",
     "  --disable-tool-family <n>   Disable a tool family after implicit/default enables",
+    "  --tool-config <path>        Runtime tool preference config (default: .honeycrisp/tools.json)",
+    "  --no-default-tool-config    Ignore .honeycrisp/tools.json unless --tool-config is provided",
     "  --repo-root <path>          Add a known repository context hint and enable repository.search unless disabled",
     "  --file-read-root <path>     Add a file.read context hint and enable file.read unless disabled",
     "  --source-path <path>        Add a materialized source context path",
@@ -2501,47 +3001,55 @@ async function createRuntimeConfig(args: {
   skills: ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
+  runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
   cleanup?: () => Promise<void>;
 }> {
-  const families = resolveEnabledToolFamilies(args);
+  const workspaceRoot = args.workspaceRoot ?? process.cwd();
+  const resolvedRuntimeTools = await resolveRuntimeToolConfig({
+    runtimeTools: args.runtimeTools,
+    workspaceRoot,
+  });
+  const runtimeTools = resolvedRuntimeTools.runtimeTools;
+  const runtimeArgs = { ...args, runtimeTools };
+  const families = resolveEnabledToolFamilies(runtimeArgs);
   const executableTools: ResearchExecutableTool[] = [];
   const toolDescriptors: ResearchToolDescriptor[] = [];
   const events: ResearchEvent[] = [];
-  const skills = loadCliSkills(args.runtimeTools.skillDirs);
-  const governance = createCliGovernance(args.runtimeTools);
+  const skills = loadCliSkills(runtimeTools.skillDirs);
+  const governance = createCliGovernance(runtimeTools);
   const cleanupCallbacks: (() => Promise<void>)[] = [];
   const storageLayout = createResearchStorageLayout({
-    workspaceRoot: args.workspaceRoot ?? process.cwd(),
+    workspaceRoot,
   });
   const workspaceContext = mergeResearchWorkspaceContexts({
     base: createResearchWorkspaceContext({
-      workspaceRoot: args.workspaceRoot ?? process.cwd(),
+      workspaceRoot,
       storageLayout,
-      knownRepositories: args.runtimeTools.repoRoots.map((root) => ({
+      knownRepositories: runtimeTools.repoRoots.map((root) => ({
         rootPath: root,
         role: "known_repository",
         source: "cli",
       })),
-      materializedSourcePaths: args.runtimeTools.sourcePaths,
-      projectNotes: args.runtimeTools.projectNotes,
+      materializedSourcePaths: runtimeTools.sourcePaths,
+      projectNotes: runtimeTools.projectNotes,
     }),
-    ...(args.runtimeTools.workspaceContextPath
+    ...(runtimeTools.workspaceContextPath
       ? {
           overlay: loadResearchWorkspaceContextFile(
-            args.runtimeTools.workspaceContextPath,
+            runtimeTools.workspaceContextPath,
           ),
         }
       : {}),
   });
   const mcpCapture = await configureRuntimeMcpTools({
-    runtimeTools: args.runtimeTools,
+    runtimeTools,
     executableTools,
     toolDescriptors,
     cleanupCallbacks,
   });
 
-  validateSelectedSkillIds(skills, args.runtimeTools.selectedSkillIds);
+  validateSelectedSkillIds(skills, runtimeTools.selectedSkillIds);
 
   if (families.has("local-inspection")) {
     if (args.inspectRoots.length === 0) {
@@ -2572,8 +3080,8 @@ async function createRuntimeConfig(args: {
   if (families.has("repository-search")) {
     const tool = createRepositorySearchTool({
       roots: repositorySearchRootsFromWorkspaceContext(workspaceContext),
-      ...(args.runtimeTools.toolMaxBytes
-        ? { maxFileBytes: args.runtimeTools.toolMaxBytes }
+      ...(runtimeTools.toolMaxBytes
+        ? { maxFileBytes: runtimeTools.toolMaxBytes }
         : {}),
     });
     executableTools.push(tool);
@@ -2583,8 +3091,8 @@ async function createRuntimeConfig(args: {
   if (families.has("file-read")) {
     const tool = createStructuredFileReadTool({
       contextRoots: workspaceContextFileReadHints(workspaceContext),
-      ...(args.runtimeTools.toolMaxBytes
-        ? { maxBytes: args.runtimeTools.toolMaxBytes }
+      ...(runtimeTools.toolMaxBytes
+        ? { maxBytes: runtimeTools.toolMaxBytes }
         : {}),
     });
     executableTools.push(tool);
@@ -2604,11 +3112,11 @@ async function createRuntimeConfig(args: {
   }
 
   if (families.has("experiment")) {
-    if (!args.runtimeTools.experimentConfigPath) {
+    if (!runtimeTools.experimentConfigPath) {
       throw new Error("experiment tool family requires --experiment-config.");
     }
     const tool = createConfiguredExperimentTool({
-      config: loadResearchExperimentConfig(args.runtimeTools.experimentConfigPath),
+      config: loadResearchExperimentConfig(runtimeTools.experimentConfigPath),
       storageLayout,
     });
     executableTools.push(tool);
@@ -2634,13 +3142,15 @@ async function createRuntimeConfig(args: {
     skills,
     governance,
     workspaceContext,
+    runtimeTools,
     capture: createRuntimeCapture({
       families,
-      args,
+      args: runtimeArgs,
       tools: toolDescriptors,
       skills,
       governance,
       workspaceContext,
+      toolConfigCapture: resolvedRuntimeTools.capture,
       ...(mcpCapture ? { mcpCapture } : {}),
     }),
     ...(cleanupCallbacks.length > 0
@@ -2650,6 +3160,147 @@ async function createRuntimeConfig(args: {
           },
         }
       : {}),
+  };
+}
+
+async function resolveRuntimeToolConfig(input: {
+  runtimeTools: RuntimeToolConfig;
+  workspaceRoot: string;
+}): Promise<ResolvedRuntimeToolConfig> {
+  const configPath = input.runtimeTools.toolConfigPath
+    ? resolve(input.runtimeTools.toolConfigPath)
+    : getDefaultResearchToolConfigPath(input.workspaceRoot);
+  const shouldLoad =
+    Boolean(input.runtimeTools.toolConfigPath) ||
+    !input.runtimeTools.disableDefaultToolConfig;
+  const exists = shouldLoad ? await pathExists(configPath) : false;
+  if (input.runtimeTools.toolConfigPath && !exists) {
+    throw new Error(`Research tool config file not found: ${configPath}`);
+  }
+
+  const preference = exists ? await loadResearchToolConfig(configPath) : {};
+  const persisted = runtimeToolConfigFromPreference(
+    preference,
+    input.runtimeTools,
+  );
+  return {
+    runtimeTools: mergeRuntimeToolConfig(persisted, input.runtimeTools),
+    capture: {
+      configPath,
+      exists,
+      loaded: exists,
+      defaultDisabled:
+        input.runtimeTools.disableDefaultToolConfig &&
+        !input.runtimeTools.toolConfigPath,
+      preference,
+    },
+  };
+}
+
+function runtimeToolConfigFromPreference(
+  preference: ResearchToolConfigPreference,
+  runtimeTools: RuntimeToolConfig,
+): RuntimeToolConfig {
+  return {
+    toolFamilies: (preference.toolFamilies ?? []).map(parseToolFamily),
+    disabledToolFamilies: (preference.disabledToolFamilies ?? []).map(parseToolFamily),
+    repoRoots: preference.repoRoots ?? [],
+    fileReadRoots: preference.fileReadRoots ?? [],
+    sourcePaths: preference.sourcePaths ?? [],
+    projectNotes: preference.projectNotes ?? [],
+    ...(preference.workspaceContextPath
+      ? { workspaceContextPath: preference.workspaceContextPath }
+      : {}),
+    allowedSideEffects: (preference.allowedSideEffects ?? []).map(parseToolSideEffect),
+    allowedMcpServers: preference.allowedMcpServers ?? [],
+    ...(preference.mcpConfigPath ? { mcpConfigPath: preference.mcpConfigPath } : {}),
+    ...(preference.mcpTimeoutMs ? { mcpTimeoutMs: preference.mcpTimeoutMs } : {}),
+    ...(preference.experimentConfigPath
+      ? { experimentConfigPath: preference.experimentConfigPath }
+      : {}),
+    selectedSkillIds: preference.selectedSkillIds ?? [],
+    skillDirs: preference.skillDirs ?? [],
+    ...(preference.toolMaxCalls ? { toolMaxCalls: preference.toolMaxCalls } : {}),
+    ...(preference.toolRuntimeMs ? { toolRuntimeMs: preference.toolRuntimeMs } : {}),
+    ...(preference.toolMaxFiles ? { toolMaxFiles: preference.toolMaxFiles } : {}),
+    ...(preference.toolMaxBytes ? { toolMaxBytes: preference.toolMaxBytes } : {}),
+    ...(preference.toolMaxTokens ? { toolMaxTokens: preference.toolMaxTokens } : {}),
+    ...(runtimeTools.toolConfigPath ? { toolConfigPath: runtimeTools.toolConfigPath } : {}),
+    disableDefaultToolConfig: runtimeTools.disableDefaultToolConfig,
+  };
+}
+
+function mergeRuntimeToolConfig(
+  persisted: RuntimeToolConfig,
+  cli: RuntimeToolConfig,
+): RuntimeToolConfig {
+  return {
+    toolFamilies: uniqueRuntimeStrings([
+      ...persisted.toolFamilies,
+      ...cli.toolFamilies,
+    ]) as ToolFamily[],
+    disabledToolFamilies: uniqueRuntimeStrings([
+      ...persisted.disabledToolFamilies,
+      ...cli.disabledToolFamilies,
+    ]) as ToolFamily[],
+    repoRoots: uniqueRuntimeStrings([...persisted.repoRoots, ...cli.repoRoots]),
+    fileReadRoots: uniqueRuntimeStrings([
+      ...persisted.fileReadRoots,
+      ...cli.fileReadRoots,
+    ]),
+    sourcePaths: uniqueRuntimeStrings([
+      ...persisted.sourcePaths,
+      ...cli.sourcePaths,
+    ]),
+    projectNotes: uniqueRuntimeStrings([
+      ...persisted.projectNotes,
+      ...cli.projectNotes,
+    ]),
+    ...(cli.workspaceContextPath || persisted.workspaceContextPath
+      ? { workspaceContextPath: cli.workspaceContextPath ?? persisted.workspaceContextPath }
+      : {}),
+    allowedSideEffects: uniqueRuntimeStrings([
+      ...persisted.allowedSideEffects,
+      ...cli.allowedSideEffects,
+    ]) as ResearchToolSideEffect[],
+    allowedMcpServers: uniqueRuntimeStrings([
+      ...persisted.allowedMcpServers,
+      ...cli.allowedMcpServers,
+    ]),
+    ...(cli.mcpConfigPath || persisted.mcpConfigPath
+      ? { mcpConfigPath: cli.mcpConfigPath ?? persisted.mcpConfigPath }
+      : {}),
+    ...(cli.mcpTimeoutMs || persisted.mcpTimeoutMs
+      ? { mcpTimeoutMs: cli.mcpTimeoutMs ?? persisted.mcpTimeoutMs }
+      : {}),
+    ...(cli.experimentConfigPath || persisted.experimentConfigPath
+      ? {
+          experimentConfigPath:
+            cli.experimentConfigPath ?? persisted.experimentConfigPath,
+        }
+      : {}),
+    selectedSkillIds: uniqueRuntimeStrings([
+      ...persisted.selectedSkillIds,
+      ...cli.selectedSkillIds,
+    ]),
+    skillDirs: uniqueRuntimeStrings([...persisted.skillDirs, ...cli.skillDirs]),
+    ...(cli.toolMaxCalls || persisted.toolMaxCalls
+      ? { toolMaxCalls: cli.toolMaxCalls ?? persisted.toolMaxCalls }
+      : {}),
+    ...(cli.toolRuntimeMs || persisted.toolRuntimeMs
+      ? { toolRuntimeMs: cli.toolRuntimeMs ?? persisted.toolRuntimeMs }
+      : {}),
+    ...(cli.toolMaxFiles || persisted.toolMaxFiles
+      ? { toolMaxFiles: cli.toolMaxFiles ?? persisted.toolMaxFiles }
+      : {}),
+    ...(cli.toolMaxBytes || persisted.toolMaxBytes
+      ? { toolMaxBytes: cli.toolMaxBytes ?? persisted.toolMaxBytes }
+      : {}),
+    ...(cli.toolMaxTokens || persisted.toolMaxTokens
+      ? { toolMaxTokens: cli.toolMaxTokens ?? persisted.toolMaxTokens }
+      : {}),
+    ...(cli.toolConfigPath ? { toolConfigPath: cli.toolConfigPath } : {}),
+    disableDefaultToolConfig: cli.disableDefaultToolConfig,
   };
 }
 
@@ -2813,9 +3464,11 @@ function createRuntimeCapture(input: {
   skills: readonly ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
+  toolConfigCapture: ResolvedRuntimeToolConfig["capture"];
   mcpCapture?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
+    toolConfig: input.toolConfigCapture,
     workspaceContext: input.workspaceContext,
     tools: input.tools.map((tool) => ({
       name: tool.name,

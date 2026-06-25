@@ -279,6 +279,113 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
   assert.deepEqual(payload.skills.selectedIds, ["parser-cli"]);
 });
 
+test("tools config CLI persists skill and MCP preferences used by tools list", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tools-config-"));
+  const skillRoot = await createCliSkillFixture();
+  const mcpFixture = await createCliMcpFixture();
+
+  try {
+    const addSkillDir = runTopCli([
+      "tools",
+      "config",
+      "add",
+      "skill-dir",
+      skillRoot,
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ]);
+    const addSkill = runTopCli([
+      "tools",
+      "config",
+      "add",
+      "skill",
+      "parser-cli",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ]);
+    const setMcp = runTopCli([
+      "tools",
+      "config",
+      "set",
+      "mcp-config",
+      mcpFixture.configPath,
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ]);
+    const allowMcp = runTopCli([
+      "tools",
+      "config",
+      "add",
+      "allow-mcp-server",
+      "fixture",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ]);
+    const list = runTopCli([
+      "tools",
+      "list",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ]);
+    const payload = JSON.parse(list.stdout);
+    const removeSkill = runTopCli([
+      "tools",
+      "config",
+      "remove",
+      "skill",
+      "parser-cli",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ]);
+    const clearMcp = runTopCli([
+      "tools",
+      "config",
+      "clear",
+      "mcp-config",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ]);
+    const shown = JSON.parse(
+      runTopCli([
+        "tools",
+        "config",
+        "show",
+        "--workspace-root",
+        workspaceRoot,
+        "--json",
+      ]).stdout,
+    );
+
+    assert.equal(addSkillDir.status, 0, addSkillDir.stderr);
+    assert.equal(addSkill.status, 0, addSkill.stderr);
+    assert.equal(setMcp.status, 0, setMcp.stderr);
+    assert.equal(allowMcp.status, 0, allowMcp.stderr);
+    assert.equal(list.status, 0, list.stderr);
+    assert.equal(removeSkill.status, 0, removeSkill.stderr);
+    assert.equal(clearMcp.status, 0, clearMcp.stderr);
+    assert.equal(payload.toolConfig.exists, true);
+    assert.deepEqual(payload.toolConfig.preference.skillDirs, [skillRoot]);
+    assert.deepEqual(payload.skills.selectedIds, ["parser-cli"]);
+    assert.equal(payload.mcp.status, "configured");
+    assert.deepEqual(payload.mcp.allowedServers, ["fixture"]);
+    assert.ok(
+      payload.tools.some((tool) => tool.name === "mcp.fixture.echo_search"),
+    );
+    assert.deepEqual(shown.preference.selectedSkillIds ?? [], []);
+    assert.equal(shown.preference.mcpConfigPath, undefined);
+    assert.deepEqual(shown.preference.allowedMcpServers, ["fixture"]);
+  } finally {
+    await rm(mcpFixture.root, { recursive: true, force: true });
+  }
+});
+
 test("tools CLI honors disabled tool families and treats repository roots as context hints", async () => {
   const repoRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tools-disabled-"));
   const disabled = runTopCli([

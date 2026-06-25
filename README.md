@@ -119,7 +119,7 @@ pnpm start \
   -p "Goal: Inspect the local target and summarize one evidence-backed finding"
 ```
 
-Review the capture for `runtimeConfig.modelConfig.source`, `memoryIntegration`, `contextV2`, selected tools, storage directories, storage manifest entries, and tool events. Add `--mcp-config` plus `--allow-mcp-server` for live MCP servers, and `--tool-family experiment --experiment-config <path> --allowed-side-effect process` for allowlisted local experiments.
+Review the capture for `runtimeConfig.modelConfig.source`, `runtimeConfig.toolConfig`, `memoryIntegration`, `contextV2`, selected tools, storage directories, storage manifest entries, and tool events. Runtime tool preferences may be persisted with `honeycrisp tools config ...`, which writes `.honeycrisp/tools.json` under the workspace by default. Add `--mcp-config` plus `--allow-mcp-server` for one-off live MCP server runs, or persist them with `tools config set mcp-config <path>` and `tools config add allow-mcp-server <name>`.
 
 Goal loops are runtime-controlled. Honeycrisp adds a Codex-style continuation
 contract to each loop, tracks `goal.updated` events, and keeps an incomplete goal
