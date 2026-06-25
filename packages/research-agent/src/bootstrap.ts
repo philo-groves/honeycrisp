@@ -62,6 +62,7 @@ import type {
   ResearchSelectedSkill,
   ResearchSkillDescriptor,
   ResearchStorageLayout,
+  ResearchSubGoal,
   ResearchToolDescriptor,
 } from "./types.js";
 
@@ -660,7 +661,10 @@ function createContextCompiledEvent(
     timestamp: nowIso(),
     goalId,
     payload: {
+      activeGoalId: decision.contextPacket.activeGoal.id,
+      activeGoal: createGoalNodeEventPayload(decision.contextPacket.activeGoal),
       activeSubGoalId: decision.contextPacket.activeSubGoal.id,
+      activeSubGoal: createSubGoalEventPayload(decision.contextPacket.activeSubGoal),
       evidenceRefs: decision.contextPacket.directEvidence.length,
       openQuestions: decision.contextPacket.openQuestions,
       selectedSkills: decision.contextPacket.selectedSkills.map(
@@ -671,6 +675,39 @@ function createContextCompiledEvent(
       skippedToolActions: decision.contextPacket.skippedToolActions,
       storage: storageLayout,
     },
+  };
+}
+
+function createGoalNodeEventPayload(
+  goal: ResearchGoalNode,
+): Record<string, unknown> {
+  return {
+    id: goal.id,
+    ...(goal.parentId ? { parentId: goal.parentId } : {}),
+    status: goal.status,
+    objective: goal.objective,
+    ...(goal.rationale ? { rationale: goal.rationale } : {}),
+    completionGates: goal.completionGates,
+    stopGates: goal.stopGates,
+    ...(goal.actionClass ? { actionClass: goal.actionClass } : {}),
+    expectedArtifacts: goal.expectedArtifacts,
+    ...(goal.resultSummary ? { resultSummary: goal.resultSummary } : {}),
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+  };
+}
+
+function createSubGoalEventPayload(
+  subGoal: ResearchSubGoal,
+): Record<string, unknown> {
+  return {
+    id: subGoal.id,
+    parentGoalId: subGoal.parentGoalId,
+    objective: subGoal.objective,
+    rationale: subGoal.rationale,
+    actionClass: subGoal.actionClass,
+    completionGates: subGoal.completionGates,
+    expectedArtifacts: subGoal.expectedArtifacts,
   };
 }
 

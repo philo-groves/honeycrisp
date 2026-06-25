@@ -80,6 +80,104 @@ test("memory-driven controller stops when a stop gate is supported by memory", (
   assert.equal(decision.completionGates[0]?.polarity, "stop");
 });
 
+test("memory-driven controller does not stop a new goal on prior recoverable tool blockers", () => {
+  const goalFrame = createResearchGoalFrame(
+    [
+      "Goal: Continue local source triage",
+      "Success gates: collect file-backed source evidence",
+      "Stop gates: The goal is blocked by missing scope, unavailable evidence, or unsafe assumptions.",
+      "Scope constraints: local fixture only",
+    ].join("\n"),
+  );
+  const retrieval = createRetrieval(goalFrame, [
+    createEvent(
+      "tool.observed",
+      {
+        summary: "repository.search does not support action class inspect.",
+        status: "blocked",
+        confidence: 0.95,
+      },
+      { goalId: "previous_goal" },
+    ),
+    createEvent(
+      "model.visible_note",
+      {
+        summary: "Further inspection requires a successful directory listing/search action before file reads.",
+        confidence: 0.9,
+      },
+      { goalId: "previous_goal" },
+    ),
+  ]);
+  const decision = createMemoryDrivenController().decide({
+    goalFrame,
+    retrieval,
+    tools: [
+      {
+        name: "repository.search",
+        transportName: "repository_search",
+        description: "Search local repository files.",
+        actionClasses: ["search", "inspect"],
+        sideEffects: "read",
+        requiredPermissions: ["filesystem:read"],
+        artifactLocations: [],
+        metadata: {},
+      },
+    ],
+  });
+
+  assert.equal(decision.actionClass, "inspect");
+  assert.match(decision.subGoal.objective, /^Gather direct evidence/);
+});
+
+test("memory-driven controller prefers inspect over response when retrieved gate evidence is only recoverable blockers", () => {
+  const goalFrame = createResearchGoalFrame(
+    [
+      "Goal: Continue local source triage",
+      "Success gates: collect file-backed source evidence",
+      "Scope constraints: local fixture only",
+    ].join("\n"),
+  );
+  const retrieval = createRetrieval(goalFrame, [
+    createEvent("tool.observed", {
+      summary:
+        "Collect file backed source evidence is blocked by ENOENT for /fixture/Src/init.c.",
+      status: "blocked",
+      confidence: 0.95,
+    }),
+    createEvent("tool.observed", {
+      summary:
+        "The response or artifact directly addresses the root research goal, but no direct source evidence has been collected because repository.search inspect was blocked.",
+      status: "blocked",
+      confidence: 0.95,
+    }),
+    createEvent("tool.observed", {
+      summary:
+        "Key claims are separated from assumptions and uncertainty, but source evidence remains unavailable due to path layout.",
+      status: "blocked",
+      confidence: 0.95,
+    }),
+  ]);
+  const decision = createMemoryDrivenController().decide({
+    goalFrame,
+    retrieval,
+    tools: [
+      {
+        name: "repository.search",
+        transportName: "repository_search",
+        description: "Search local repository files.",
+        actionClasses: ["search", "inspect"],
+        sideEffects: "read",
+        requiredPermissions: ["filesystem:read"],
+        artifactLocations: [],
+        metadata: {},
+      },
+    ],
+  });
+
+  assert.equal(decision.actionClass, "inspect");
+  assert.match(decision.subGoal.objective, /^Gather direct evidence/);
+});
+
 test("memory-driven controller creates a bounded function-walk subgoal from retrieved next steps", () => {
   const goalFrame = createResearchGoalFrame(
     [

@@ -175,8 +175,9 @@ export function createRepositorySearchTool(
   const descriptor = createDescriptor({
     name: "repository.search",
     transportName: "repository_search",
-    description: "Search text files under an allowed repository root.",
-    actionClasses: ["search"],
+    description:
+      "Search text files under an allowed repository root. Use during inspection to locate concrete files before reading them.",
+    actionClasses: ["search", "inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
     inputSchema: REPOSITORY_SEARCH_PARAMETERS,

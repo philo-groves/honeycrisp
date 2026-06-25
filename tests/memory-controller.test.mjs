@@ -244,6 +244,14 @@ test("bootstrap output includes memory decision and context event records", asyn
     result.goalFrame.root.id,
   );
   assert.equal(result.loopPlan.subGoal.id, result.decision.subGoal.id);
+  const contextEvent = result.events.find(
+    (event) => event.kind === "context.compiled",
+  );
+  assert.equal(contextEvent?.payload.activeGoal.id, result.goalFrame.root.id);
+  assert.equal(
+    contextEvent?.payload.activeSubGoal.objective,
+    result.decision.subGoal.objective,
+  );
   assert.equal(result.memory.eventLog.length, result.events.length);
   assert.ok(
     result.events.some((event) => event.kind === "model.visible_note"),

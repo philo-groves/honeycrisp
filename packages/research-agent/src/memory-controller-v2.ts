@@ -175,10 +175,17 @@ function scoreMemoryDrivenActions(input: {
 
   addScore(scores, "stop", stopGateTriggered(input) ? 100 : 0,
     "A stop gate is supported by retrieved memory.");
-  addScore(scores, "respond", completionGatesSatisfied(input) ? 95 : 0,
+  addScore(scores, "respond",
+    completionGatesSatisfied(input) &&
+      !(
+        needsMoreDirectEvidence(input.retrieval) &&
+        supportsAction(input.tools, "inspect", input.governance)
+      )
+      ? 95
+      : 0,
     "Retrieved memory supports all root completion gates.");
   addScore(scores, "inspect",
-    input.retrieval.directEvidence.length === 0 &&
+    needsMoreDirectEvidence(input.retrieval) &&
       supportsAction(input.tools, "inspect", input.governance)
       ? 85
       : 0,
@@ -220,7 +227,7 @@ function stopGateTriggered(input: {
 }): boolean {
   return input.activeGoal.stopGates.some((gate) =>
     input.retrieval.candidates.some((candidate) =>
-      stopCandidateMatchesGate(candidate, gate),
+      stopCandidateMatchesGate(candidate, gate, input.activeGoal),
     ),
   );
 }
@@ -259,14 +266,26 @@ function candidateMatchesGate(
 function stopCandidateMatchesGate(
   candidate: MemoryRetrievalCandidate,
   gate: ResearchCompletionGate,
+  activeGoal: ResearchGoalNode,
 ): boolean {
   const summary = candidate.record.summary.toLowerCase();
+  const sameGoal =
+    !candidate.record.goalId || candidate.record.goalId === activeGoal.id;
+  const hardBoundarySignal =
+    /\b(outside|out-of|unsafe|unauthorized|forbidden|denied|policy|scope)\b/.test(
+      summary,
+    );
   const explicitStopSignal =
-    /\bstop|stopped|halt|halted|blocked|triggered\b/.test(summary) ||
+    /\bstop|stopped|halt|halted|triggered\b/.test(summary) ||
+    (/\bblocked\b/.test(summary) && hardBoundarySignal) ||
     candidate.record.tags.includes("contradiction") ||
     candidate.record.tags.includes("uncertainty");
 
-  return explicitStopSignal && candidateMatchesGate(candidate, gate);
+  return (
+    explicitStopSignal &&
+    (sameGoal || hardBoundarySignal) &&
+    candidateMatchesGate(candidate, gate)
+  );
 }
 
 function hasWeakHypothesis(retrieval: MemoryRetrievalResult): boolean {
@@ -277,6 +296,22 @@ function hasWeakHypothesis(retrieval: MemoryRetrievalResult): boolean {
       (candidate.warnings.length > 0 ||
         candidate.record.status === "candidate" ||
         (candidate.record.confidence ?? 1) < 0.7),
+  );
+}
+
+function needsMoreDirectEvidence(retrieval: MemoryRetrievalResult): boolean {
+  return (
+    retrieval.directEvidence.length === 0 ||
+    retrieval.directEvidence.every((candidate) =>
+      isRecoverableEvidenceGap(candidate),
+    )
+  );
+}
+
+function isRecoverableEvidenceGap(candidate: MemoryRetrievalCandidate): boolean {
+  const summary = candidate.record.summary.toLowerCase();
+  return /\b(enoent|eisdir|failed|blocked|unavailable|does not support|no direct|directory|path layout)\b/.test(
+    summary,
   );
 }
 

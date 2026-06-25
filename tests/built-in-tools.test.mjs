@@ -83,6 +83,19 @@ test("repository search finds bounded local source matches", async () => {
     assert.equal(result.result.output.matches[0].line, 1);
     assert.equal(tool.descriptor.sideEffects, "read");
     assert.equal(tool.descriptor.requiredPermissions[0], "filesystem:read");
+    assert.deepEqual(tool.descriptor.actionClasses, ["search", "inspect"]);
+
+    const inspectResult = await createResearchToolRegistry([tool]).execute({
+      id: "inspect_search_1",
+      actionClass: "inspect",
+      toolName: "repository.search",
+      input: {
+        query: "parse_context_save",
+      },
+    });
+
+    assert.equal(inspectResult.result.status, "complete");
+    assert.equal(inspectResult.result.output.matches[0].path, "Src/parse.c");
   } finally {
     await rm(root, {
       recursive: true,

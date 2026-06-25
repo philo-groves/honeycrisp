@@ -132,12 +132,12 @@ export async function resolveResearchModelConfig(
   const verify = options.verifyProviderAuth ?? verifyProviderAuth;
   const status = options.getAuthStatus ?? getAuthStatus;
   const authOptions = options.authFile ? { authFile: options.authFile } : {};
-
-  if (model && !provider) {
-    throw new Error(
-      "Research model config specifies a model but no provider. Add provider or pass --provider.",
-    );
-  }
+  const source = resolveConfigSource({
+    cliPreference: Boolean(options.provider || options.model || options.effort),
+    filePreference: Boolean(
+      filePreference.provider || filePreference.model || filePreference.effort,
+    ),
+  });
 
   if (provider) {
     const verified = await verify(provider, model, authOptions);
@@ -151,7 +151,7 @@ export async function resolveResearchModelConfig(
       provider: verified.providerId,
       model: verified.modelId,
       ...(effort ? { effort } : {}),
-      source: options.provider || options.model || options.effort ? "cli" : "config",
+      source,
       ...(configPath ? { configPath } : {}),
     };
   }
@@ -160,13 +160,14 @@ export async function resolveResearchModelConfig(
     getAuthStatus: status,
     verifyProviderAuth: verify,
     authOptions,
+    ...(model ? { model } : {}),
   });
   if (authorizedDefault) {
     return {
       provider: authorizedDefault.providerId,
       model: authorizedDefault.modelId,
       ...(effort ? { effort } : {}),
-      source: "authorized-default",
+      source,
       ...(configPath ? { configPath } : {}),
     };
   }
@@ -239,6 +240,7 @@ async function findFirstAuthorizedProviderModel(input: {
   getAuthStatus: NonNullable<ResolveResearchModelConfigOptions["getAuthStatus"]>;
   verifyProviderAuth: NonNullable<ResolveResearchModelConfigOptions["verifyProviderAuth"]>;
   authOptions: FileCredentialStoreOptions;
+  model?: string;
 }): Promise<AuthVerifyResult | undefined> {
   const status = await input.getAuthStatus(undefined, input.authOptions);
   for (const provider of status.providers) {
@@ -248,7 +250,7 @@ async function findFirstAuthorizedProviderModel(input: {
 
     const verified = await input.verifyProviderAuth(
       provider.id,
-      undefined,
+      input.model,
       input.authOptions,
     );
     if (verified.configured) {
@@ -257,6 +259,19 @@ async function findFirstAuthorizedProviderModel(input: {
   }
 
   return undefined;
+}
+
+function resolveConfigSource(input: {
+  cliPreference: boolean;
+  filePreference: boolean;
+}): ResolvedResearchModelConfig["source"] {
+  if (input.cliPreference) {
+    return "cli";
+  }
+  if (input.filePreference) {
+    return "config";
+  }
+  return "authorized-default";
 }
 
 function rejectAuthLikeConfig(

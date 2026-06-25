@@ -100,6 +100,80 @@ test("research model config resolver defaults to the first authorized provider",
   });
 });
 
+test("research model config resolver applies CLI model override to the first authorized provider", async () => {
+  const calls = [];
+  const result = await resolveResearchModelConfig({
+    model: "spark-research",
+    effort: "minimal",
+    getAuthStatus: async () => ({
+      authFile: "/tmp/auth.json",
+      providers: [
+        {
+          id: "alpha",
+          name: "Alpha",
+          authMethods: ["api_key"],
+        },
+        {
+          id: "beta",
+          name: "Beta",
+          authMethods: ["oauth"],
+          storedCredentialType: "oauth",
+        },
+      ],
+    }),
+    verifyProviderAuth: async (providerId, modelId) => {
+      calls.push({ providerId, modelId });
+      return {
+        providerId,
+        providerName: providerId === "beta" ? "Beta" : "Alpha",
+        modelId: modelId ?? `${providerId}-default`,
+        configured: providerId === "beta",
+      };
+    },
+  });
+
+  assert.deepEqual(calls, [{ providerId: "beta", modelId: "spark-research" }]);
+  assert.deepEqual(result, {
+    provider: "beta",
+    model: "spark-research",
+    effort: "minimal",
+    source: "cli",
+  });
+});
+
+test("research model config resolver applies config model preference to the first authorized provider", async () => {
+  const configPath = await writeConfig({
+    model: "spark-research",
+  });
+  const result = await resolveResearchModelConfig({
+    configPath,
+    getAuthStatus: async () => ({
+      authFile: "/tmp/auth.json",
+      providers: [
+        {
+          id: "beta",
+          name: "Beta",
+          authMethods: ["oauth"],
+          storedCredentialType: "oauth",
+        },
+      ],
+    }),
+    verifyProviderAuth: async (providerId, modelId) => ({
+      providerId,
+      providerName: "Beta",
+      modelId: modelId ?? "beta-default",
+      configured: true,
+    }),
+  });
+
+  assert.deepEqual(result, {
+    provider: "beta",
+    model: "spark-research",
+    source: "config",
+    configPath: resolve(configPath),
+  });
+});
+
 test("research model config resolver loads the default project config path", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-default-config-"));
   const configPath = getDefaultResearchModelConfigPath(workspaceRoot);
