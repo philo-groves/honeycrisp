@@ -710,8 +710,23 @@ test("tool registry applies byte defaults, output schemas, runtime budgets, and 
       ok: true,
     },
   });
+  const artifactRefs = [
+    {
+      id: "artifact_test_output",
+      kind: "report",
+      uri: "file:///tmp/honeycrisp-test-output.txt",
+      summary: "test output artifact",
+    },
+  ];
+  const artifactTool = createTestTool({
+    name: "test.artifact",
+    output: {
+      ok: true,
+    },
+    artifactRefs,
+  });
   const registry = createResearchToolRegistry(
-    [badOutputTool, slowTool, hookTool],
+    [badOutputTool, slowTool, hookTool, artifactTool],
     {
       validationHooks: {
         "after-deny": ({ phase }) =>
@@ -745,6 +760,12 @@ test("tool registry applies byte defaults, output schemas, runtime budgets, and 
     toolName: "test.hooked",
     input: {},
   });
+  const artifactObserved = await registry.execute({
+    id: "artifact_call",
+    actionClass: "inspect",
+    toolName: "test.artifact",
+    input: {},
+  });
 
   assert.equal(badOutput.result.status, "blocked");
   assert.match(badOutput.result.summary, /Tool output failed schema validation/);
@@ -752,6 +773,11 @@ test("tool registry applies byte defaults, output schemas, runtime budgets, and 
   assert.match(timedOut.result.summary, /runtime budget exceeded/);
   assert.equal(hookDenied.result.status, "blocked");
   assert.equal(hookDenied.result.summary, "after hook denied result");
+  assert.deepEqual(artifactObserved.events[1]?.artifactRefs, artifactRefs);
+  assert.deepEqual(
+    artifactObserved.events[1]?.payload.generatedArtifactRefs,
+    artifactRefs,
+  );
 });
 
 test("controller records skipped candidates when governance denies tool policy", async () => {
@@ -1555,6 +1581,7 @@ function createTestTool(options) {
         output: options.output ?? {
           ok: true,
         },
+        artifactRefs: options.artifactRefs ?? [],
         followUpActions: [],
       };
     },

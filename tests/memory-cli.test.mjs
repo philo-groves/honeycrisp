@@ -202,6 +202,42 @@ test("tools CLI honors disabled tool families and reports missing required roots
   assert.match(missingRoot.stderr, /repository-search requires --repo-root/);
 });
 
+test("tools CLI requires experiment config and lists configured experiments", async () => {
+  const fixture = await createCliExperimentFixture();
+  try {
+    const missingConfig = runTopCli([
+      "tools",
+      "list",
+      "--tool-family",
+      "experiment",
+    ]);
+    const listed = runTopCli([
+      "tools",
+      "list",
+      "--tool-family",
+      "experiment",
+      "--experiment-config",
+      fixture.configPath,
+      "--workspace-root",
+      fixture.workspaceRoot,
+      "--json",
+    ]);
+    const payload = JSON.parse(listed.stdout);
+
+    assert.equal(missingConfig.status, 1);
+    assert.match(missingConfig.stderr, /requires --experiment-config/);
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.ok(payload.tools.some((tool) => tool.name === "experiment.run"));
+    assert.deepEqual(payload.toolFamilies.enabled, ["experiment"]);
+    assert.equal(
+      payload.tools.find((tool) => tool.name === "experiment.run").metadata.experiments[0].name,
+      "echo",
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("tools CLI discovers configured live MCP servers", async () => {
   const fixture = await createCliMcpFixture();
   try {
@@ -460,6 +496,37 @@ async function createCliMcpFixture() {
   );
 
   return { root, configPath };
+}
+
+async function createCliExperimentFixture() {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-cli-experiment-"));
+  const workspaceRoot = join(root, "workspace");
+  const scriptPath = join(root, "experiment.mjs");
+  const configPath = join(root, "experiments.json");
+  await mkdir(workspaceRoot, { recursive: true });
+  await writeFile(
+    scriptPath,
+    "process.stdin.resume(); process.stdin.on('end', () => console.log('ok'));",
+    "utf8",
+  );
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      experiments: {
+        echo: {
+          command: process.execPath,
+          args: [scriptPath],
+          sideEffects: "process",
+          requiredPermissions: ["fixture:run"],
+          timeoutMs: 1000,
+          maxOutputBytes: 4000,
+        },
+      },
+    }),
+    "utf8",
+  );
+
+  return { root, workspaceRoot, configPath };
 }
 
 function createFixtureMcpServerSource() {

@@ -119,19 +119,27 @@ Verification:
 
 Expose experiment capabilities only through explicit, auditable operator policy.
 
-Status: pending.
+Status: completed on 2026-06-24.
 
 Checklist:
 
-- [ ] Define an allowlisted experiment spec format for commands, scripts, probes, and tests.
-- [ ] Require explicit side-effect and permission policy for each experiment.
-- [ ] Validate working directory, environment, command, arguments, timeout, and output limits before execution.
-- [ ] Capture stdout, stderr, exit status, hashes, and artifact paths without storing oversized output inline.
-- [ ] Add CLI/config support for loading experiment specs.
-- [ ] Register configured experiments as tool registry entries.
-- [ ] Block unconfigured experiment execution with user-facing errors.
-- [ ] Add tests for allowed, denied, timeout, output-spill, and restart-safe artifact cases.
-- [ ] Run a real health check with a harmless allowlisted experiment and review events plus artifacts.
+- [x] Define an allowlisted experiment spec format for commands, scripts, probes, and tests.
+- [x] Require explicit side-effect and permission policy for each experiment.
+- [x] Validate working directory, environment, command, arguments, timeout, and output limits before execution.
+- [x] Capture stdout, stderr, exit status, hashes, and artifact paths without storing oversized output inline.
+- [x] Add CLI/config support for loading experiment specs.
+- [x] Register configured experiments as tool registry entries.
+- [x] Block unconfigured experiment execution with user-facing errors.
+- [x] Add tests for allowed, denied, timeout, output-spill, and restart-safe artifact cases.
+- [x] Run a real health check with a harmless allowlisted experiment and review events plus artifacts.
+
+Verification:
+
+- `pnpm test` passed with 119 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase4/phase4-real-provenance.json`.
+- Experiment fixture config: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase4/experiments.json`.
+- Durable SQLite workspace: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase4/workspace-provenance/.honeycrisp/memory/memory.sqlite`.
+- The real run registered configured tool `experiment.run` with process side effects and permissions `experiment:run` plus `fixture:run`; the model called `echo_probe` with `query: "parser-context"`, captured stdout `experiment-result:parser-context`, persisted stdout and stderr artifacts, and the storage manifest links both artifacts to observed event `evt_f6347db4-b2fa-4f7c-9721-08dae84d92ba`.
 
 ## Phase 5: Config File UX
 

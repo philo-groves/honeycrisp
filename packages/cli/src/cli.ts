@@ -8,6 +8,7 @@ import {
   compileContextPacketV2,
   createAnalysisTool,
   createConfiguredResearchMcpClient,
+  createConfiguredExperimentTool,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
   createDeterministicLoopExecutor,
@@ -30,6 +31,7 @@ import {
   listAuthProviders,
   loadResearchSkillsFromDirectory,
   loadResearchMcpClientConfig,
+  loadResearchExperimentConfig,
   loginAuthProvider,
   logoutAuthProvider,
   resolveResearchModelConfig,
@@ -62,7 +64,8 @@ type ToolFamily =
   | "file-read"
   | "analysis"
   | "synthesis"
-  | "storage";
+  | "storage"
+  | "experiment";
 
 type CliExecutorKind = "complete-simple" | "agent";
 type CliToolExecutionMode = "sequential" | "parallel";
@@ -76,6 +79,7 @@ interface RuntimeToolConfig {
   allowedMcpServers: readonly string[];
   mcpConfigPath?: string;
   mcpTimeoutMs?: number;
+  experimentConfigPath?: string;
   selectedSkillIds: readonly string[];
   skillDirs: readonly string[];
   toolMaxCalls?: number;
@@ -163,6 +167,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   const allowedMcpServers: string[] = [];
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
+  let experimentConfigPath: string | undefined;
   const selectedSkillIds: string[] = [];
   const skillDirs: string[] = [];
   let toolMaxCalls: number | undefined;
@@ -293,6 +298,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--mcp-timeout-ms") {
       mcpTimeoutMs = parsePositiveIntegerOption(argv, index, arg);
       index += 1;
+    } else if (arg === "--experiment-config") {
+      experimentConfigPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -354,6 +362,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       allowedMcpServers,
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
+      ...(experimentConfigPath ? { experimentConfigPath } : {}),
       selectedSkillIds,
       skillDirs,
       ...(toolMaxCalls ? { toolMaxCalls } : {}),
@@ -442,6 +451,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   const allowedMcpServers: string[] = [];
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
+  let experimentConfigPath: string | undefined;
   const selectedSkillIds: string[] = [];
   const skillDirs: string[] = [];
   let toolMaxCalls: number | undefined;
@@ -507,6 +517,9 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
     } else if (arg === "--mcp-timeout-ms") {
       mcpTimeoutMs = parsePositiveIntegerOption(argv, index, arg);
       index += 1;
+    } else if (arg === "--experiment-config") {
+      experimentConfigPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -535,6 +548,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       allowedMcpServers,
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
+      ...(experimentConfigPath ? { experimentConfigPath } : {}),
       selectedSkillIds,
       skillDirs,
       ...(toolMaxCalls ? { toolMaxCalls } : {}),
@@ -611,13 +625,14 @@ function parseToolFamily(value: string): ToolFamily {
     value === "file-read" ||
     value === "analysis" ||
     value === "synthesis" ||
-    value === "storage"
+    value === "storage" ||
+    value === "experiment"
   ) {
     return value;
   }
 
   throw new Error(
-    "--tool-family must be one of local-inspection, repository-search, file-read, analysis, synthesis, storage.",
+    "--tool-family must be one of local-inspection, repository-search, file-read, analysis, synthesis, storage, experiment.",
   );
 }
 
@@ -690,7 +705,7 @@ function usage(): string {
     "  --inspect-path <path>  Inspect a local path before the loop",
     "  --inspect-action <a>   Inspection action: read_text or list",
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
-    "  --tool-family <name>   Enable local-inspection, repository-search, file-read, analysis, synthesis, or storage",
+    "  --tool-family <name>   Enable local-inspection, repository-search, file-read, analysis, synthesis, storage, or experiment",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --repo-root <path>     Enable repository.search for this root unless disabled",
     "  --file-read-root <p>   Enable file.read for this allowed root unless disabled",
@@ -703,6 +718,7 @@ function usage(): string {
     "  --allow-mcp-server <s> Allow an MCP server name in runtime config",
     "  --mcp-config <path>    JSON MCP stdio server config",
     "  --mcp-timeout-ms <n>   MCP request timeout in milliseconds",
+    "  --experiment-config <p> JSON allowlisted experiment config",
     "  --skill-dir <path>     Load local skills from child directories containing SKILL.md",
     "  --skill <id>           Request a loaded skill by id",
     "  --capture <path>       Write a local flow-capture JSON artifact",
@@ -1059,7 +1075,7 @@ function toolsUsage(): string {
     "Usage: honeycrisp tools list [options]",
     "",
     "Options:",
-    "  --tool-family <name>        Enable local-inspection, repository-search, file-read, analysis, synthesis, or storage",
+    "  --tool-family <name>        Enable local-inspection, repository-search, file-read, analysis, synthesis, storage, or experiment",
     "  --disable-tool-family <n>   Disable a tool family after implicit/default enables",
     "  --repo-root <path>          Enable repository.search for this root unless disabled",
     "  --file-read-root <path>     Enable file.read for this allowed root unless disabled",
@@ -1073,6 +1089,7 @@ function toolsUsage(): string {
     "  --allow-mcp-server <name>   Record an allowed MCP server name",
     "  --mcp-config <path>         JSON MCP stdio server config",
     "  --mcp-timeout-ms <n>        MCP request timeout in milliseconds",
+    "  --experiment-config <path>  JSON allowlisted experiment config",
     "  --skill-dir <path>          Load local skills from child directories containing SKILL.md",
     "  --skill <id>                Request a loaded skill by id",
     "  --workspace-root <path>     Workspace root for storage.list metadata",
@@ -1430,6 +1447,20 @@ async function createRuntimeConfig(args: {
 
   if (families.has("synthesis")) {
     const tool = createSynthesisTool();
+    executableTools.push(tool);
+    toolDescriptors.push(tool.descriptor);
+  }
+
+  if (families.has("experiment")) {
+    if (!args.runtimeTools.experimentConfigPath) {
+      throw new Error("experiment tool family requires --experiment-config.");
+    }
+    const tool = createConfiguredExperimentTool({
+      config: loadResearchExperimentConfig(args.runtimeTools.experimentConfigPath),
+      storageLayout: createResearchStorageLayout({
+        workspaceRoot: args.workspaceRoot ?? process.cwd(),
+      }),
+    });
     executableTools.push(tool);
     toolDescriptors.push(tool.descriptor);
   }

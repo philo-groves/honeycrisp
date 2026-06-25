@@ -282,6 +282,7 @@ export function createToolObservedEvent(
     timestamp: nowIso(),
     ...(options.goalId ? { goalId: options.goalId } : {}),
     ...(options.subGoalId ? { subGoalId: options.subGoalId } : {}),
+    ...(result.artifactRefs?.length ? { artifactRefs: result.artifactRefs } : {}),
     payload: {
       toolActionId: result.action.id,
       toolName: result.action.toolName,

@@ -163,6 +163,15 @@ export type {
   ResearchMcpServerConfig,
 } from "./mcp-client.js";
 export {
+  createConfiguredExperimentTool,
+  loadResearchExperimentConfig,
+} from "./experiment-config.js";
+export type {
+  CreateConfiguredExperimentToolOptions,
+  ResearchConfiguredExperimentSpec,
+  ResearchExperimentConfig,
+} from "./experiment-config.js";
+export {
   createResearchSkillRegistry,
   createResearchSkillsFromMcpMetadata,
   loadResearchSkillFromDirectory,
