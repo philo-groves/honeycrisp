@@ -154,6 +154,15 @@ export type {
   ResearchMcpToolDescription,
 } from "./mcp-tools.js";
 export {
+  createConfiguredResearchMcpClient,
+  loadResearchMcpClientConfig,
+} from "./mcp-client.js";
+export type {
+  ConfiguredResearchMcpClient,
+  ResearchMcpClientConfig,
+  ResearchMcpServerConfig,
+} from "./mcp-client.js";
+export {
   createResearchSkillRegistry,
   createResearchSkillsFromMcpMetadata,
   loadResearchSkillFromDirectory,

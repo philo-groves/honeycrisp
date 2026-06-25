@@ -7,6 +7,7 @@ import {
   bootstrapResearchRun,
   compileContextPacketV2,
   createAnalysisTool,
+  createConfiguredResearchMcpClient,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
   createDeterministicLoopExecutor,
@@ -19,6 +20,7 @@ import {
   createResearchGoalFrame,
   createResearchStorageLayout,
   createResearchToolRegistry,
+  createMcpResearchTools,
   createStorageListTool,
   createStructuredFileReadTool,
   createSqliteMemoryEventLog,
@@ -27,6 +29,7 @@ import {
   getAuthStatus,
   listAuthProviders,
   loadResearchSkillsFromDirectory,
+  loadResearchMcpClientConfig,
   loginAuthProvider,
   logoutAuthProvider,
   resolveResearchModelConfig,
@@ -40,6 +43,7 @@ import type {
   LocalInspectionAction,
   ResearchModelEffort,
   ResearchEvent,
+  ResearchExecutableTool,
   ResearchGovernancePolicy,
   ResearchLoopExecutor,
   ResearchMemorySnapshot,
@@ -70,6 +74,8 @@ interface RuntimeToolConfig {
   fileReadRoots: readonly string[];
   allowedSideEffects: readonly ResearchToolSideEffect[];
   allowedMcpServers: readonly string[];
+  mcpConfigPath?: string;
+  mcpTimeoutMs?: number;
   selectedSkillIds: readonly string[];
   skillDirs: readonly string[];
   toolMaxCalls?: number;
@@ -155,6 +161,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   const fileReadRoots: string[] = [];
   const allowedSideEffects: ResearchToolSideEffect[] = [];
   const allowedMcpServers: string[] = [];
+  let mcpConfigPath: string | undefined;
+  let mcpTimeoutMs: number | undefined;
   const selectedSkillIds: string[] = [];
   const skillDirs: string[] = [];
   let toolMaxCalls: number | undefined;
@@ -279,6 +287,12 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--allow-mcp-server") {
       allowedMcpServers.push(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--mcp-config") {
+      mcpConfigPath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--mcp-timeout-ms") {
+      mcpTimeoutMs = parsePositiveIntegerOption(argv, index, arg);
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -338,6 +352,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       fileReadRoots,
       allowedSideEffects,
       allowedMcpServers,
+      ...(mcpConfigPath ? { mcpConfigPath } : {}),
+      ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
       selectedSkillIds,
       skillDirs,
       ...(toolMaxCalls ? { toolMaxCalls } : {}),
@@ -424,6 +440,8 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   const fileReadRoots: string[] = [];
   const allowedSideEffects: ResearchToolSideEffect[] = [];
   const allowedMcpServers: string[] = [];
+  let mcpConfigPath: string | undefined;
+  let mcpTimeoutMs: number | undefined;
   const selectedSkillIds: string[] = [];
   const skillDirs: string[] = [];
   let toolMaxCalls: number | undefined;
@@ -483,6 +501,12 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
     } else if (arg === "--allow-mcp-server") {
       allowedMcpServers.push(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--mcp-config") {
+      mcpConfigPath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--mcp-timeout-ms") {
+      mcpTimeoutMs = parsePositiveIntegerOption(argv, index, arg);
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -509,6 +533,8 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       fileReadRoots,
       allowedSideEffects,
       allowedMcpServers,
+      ...(mcpConfigPath ? { mcpConfigPath } : {}),
+      ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
       selectedSkillIds,
       skillDirs,
       ...(toolMaxCalls ? { toolMaxCalls } : {}),
@@ -675,6 +701,8 @@ function usage(): string {
     "  --tool-max-bytes <n>   Max bytes for file-oriented tools",
     "  --tool-max-tokens <n>  Max tool output tokens",
     "  --allow-mcp-server <s> Allow an MCP server name in runtime config",
+    "  --mcp-config <path>    JSON MCP stdio server config",
+    "  --mcp-timeout-ms <n>   MCP request timeout in milliseconds",
     "  --skill-dir <path>     Load local skills from child directories containing SKILL.md",
     "  --skill <id>           Request a loaded skill by id",
     "  --capture <path>       Write a local flow-capture JSON artifact",
@@ -745,77 +773,81 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     }
 
     const runtimeConfig = await createRuntimeConfig(args);
-    let modelConfig: ResolvedResearchModelConfig | undefined;
-    const loopExecutor = args.mock
-      ? createDeterministicLoopExecutor(
-          runtimeConfig.toolRegistry
-            ? { toolRegistry: runtimeConfig.toolRegistry }
-            : {},
-        )
-      : createRealLoopExecutor(
-          args,
-          runtimeConfig.toolRegistry,
-          (modelConfig = await resolveResearchModelConfig({
-            ...(args.configPath ? { configPath: args.configPath } : {}),
-            ...(args.provider ? { provider: args.provider } : {}),
-            ...(args.model ? { model: args.model } : {}),
-            ...(args.reasoning ? { effort: args.reasoning } : {}),
-          })),
+    try {
+      let modelConfig: ResolvedResearchModelConfig | undefined;
+      const loopExecutor = args.mock
+        ? createDeterministicLoopExecutor(
+            runtimeConfig.toolRegistry
+              ? { toolRegistry: runtimeConfig.toolRegistry }
+              : {},
+          )
+        : createRealLoopExecutor(
+            args,
+            runtimeConfig.toolRegistry,
+            (modelConfig = await resolveResearchModelConfig({
+              ...(args.configPath ? { configPath: args.configPath } : {}),
+              ...(args.provider ? { provider: args.provider } : {}),
+              ...(args.model ? { model: args.model } : {}),
+              ...(args.reasoning ? { effort: args.reasoning } : {}),
+            })),
+          );
+
+      const inspectionState =
+        runtimeConfig.events.length > 0 && runtimeConfig.memory
+          ? {
+              events: runtimeConfig.events,
+              memory: runtimeConfig.memory,
+            }
+          : {};
+
+      const result = await bootstrapResearchRun({
+        prompt: args.prompt,
+        workspaceRoot: args.workspaceRoot,
+        successGates: args.successGates,
+        failureOrStopGates: args.failureOrStopGates,
+        scopeConstraints: args.scopeConstraints,
+        evidenceRequirements: args.evidenceRequirements,
+        initialRiskFlags: args.initialRiskFlags,
+        userPreferences: args.userPreferences,
+        ...inspectionState,
+        ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
+        ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
+        ...(args.runtimeTools.selectedSkillIds.length > 0
+          ? { selectedSkillIds: args.runtimeTools.selectedSkillIds }
+          : {}),
+        ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
+        loopExecutor,
+        durableMemory: true,
+        ...(args.goalLoops !== undefined
+          ? { goalRun: { maxLoops: args.goalLoops } }
+          : {}),
+      });
+
+      if (args.capturePath) {
+        const capturePath = await writeFlowCapture(
+          args.capturePath,
+          result,
+          {
+            ...runtimeConfig.capture,
+            modelConfig: modelConfig
+              ? createModelConfigCapture(modelConfig)
+              : { mode: "mock" },
+          },
         );
-
-    const inspectionState =
-      runtimeConfig.events.length > 0 && runtimeConfig.memory
-        ? {
-            events: runtimeConfig.events,
-            memory: runtimeConfig.memory,
-          }
-        : {};
-
-    const result = await bootstrapResearchRun({
-      prompt: args.prompt,
-      workspaceRoot: args.workspaceRoot,
-      successGates: args.successGates,
-      failureOrStopGates: args.failureOrStopGates,
-      scopeConstraints: args.scopeConstraints,
-      evidenceRequirements: args.evidenceRequirements,
-      initialRiskFlags: args.initialRiskFlags,
-      userPreferences: args.userPreferences,
-      ...inspectionState,
-      ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
-      ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
-      ...(args.runtimeTools.selectedSkillIds.length > 0
-        ? { selectedSkillIds: args.runtimeTools.selectedSkillIds }
-        : {}),
-      ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
-      loopExecutor,
-      durableMemory: true,
-      ...(args.goalLoops !== undefined
-        ? { goalRun: { maxLoops: args.goalLoops } }
-        : {}),
-    });
-
-    if (args.capturePath) {
-      const capturePath = await writeFlowCapture(
-        args.capturePath,
-        result,
-        {
-          ...runtimeConfig.capture,
-          modelConfig: modelConfig
-            ? createModelConfigCapture(modelConfig)
-            : { mode: "mock" },
-        },
-      );
-      if (!args.json) {
-        console.log(`Flow capture: ${capturePath}`);
+        if (!args.json) {
+          console.log(`Flow capture: ${capturePath}`);
+        }
       }
-    }
 
-    if (args.json) {
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
 
-    console.log(result.response);
+      console.log(result.response);
+    } finally {
+      await runtimeConfig.cleanup?.();
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`honeycrisp: ${message}`);
@@ -1010,12 +1042,16 @@ async function handleToolsCommand(argv: readonly string[]): Promise<void> {
   }
 
   const runtime = await createRuntimeConfig(args);
-  if (args.json) {
-    console.log(JSON.stringify(runtime.capture, null, 2));
-    return;
-  }
+  try {
+    if (args.json) {
+      console.log(JSON.stringify(runtime.capture, null, 2));
+      return;
+    }
 
-  console.log(renderToolsList(runtime.capture));
+    console.log(renderToolsList(runtime.capture));
+  } finally {
+    await runtime.cleanup?.();
+  }
 }
 
 function toolsUsage(): string {
@@ -1035,6 +1071,8 @@ function toolsUsage(): string {
     "  --tool-max-bytes <n>        Max file bytes",
     "  --tool-max-tokens <n>       Max tool output tokens",
     "  --allow-mcp-server <name>   Record an allowed MCP server name",
+    "  --mcp-config <path>         JSON MCP stdio server config",
+    "  --mcp-timeout-ms <n>        MCP request timeout in milliseconds",
     "  --skill-dir <path>          Load local skills from child directories containing SKILL.md",
     "  --skill <id>                Request a loaded skill by id",
     "  --workspace-root <path>     Workspace root for storage.list metadata",
@@ -1301,13 +1339,21 @@ async function createRuntimeConfig(args: {
   skills: ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
   capture: Record<string, unknown>;
+  cleanup?: () => Promise<void>;
 }> {
   const families = resolveEnabledToolFamilies(args);
-  const executableTools = [];
+  const executableTools: ResearchExecutableTool[] = [];
   const toolDescriptors: ResearchToolDescriptor[] = [];
   const events: ResearchEvent[] = [];
   const skills = loadCliSkills(args.runtimeTools.skillDirs);
   const governance = createCliGovernance(args.runtimeTools);
+  const cleanupCallbacks: (() => Promise<void>)[] = [];
+  const mcpCapture = await configureRuntimeMcpTools({
+    runtimeTools: args.runtimeTools,
+    executableTools,
+    toolDescriptors,
+    cleanupCallbacks,
+  });
 
   validateSelectedSkillIds(skills, args.runtimeTools.selectedSkillIds);
 
@@ -1414,8 +1460,82 @@ async function createRuntimeConfig(args: {
       tools: toolDescriptors,
       skills,
       governance,
+      ...(mcpCapture ? { mcpCapture } : {}),
     }),
+    ...(cleanupCallbacks.length > 0
+      ? {
+          async cleanup() {
+            await Promise.all(cleanupCallbacks.map((cleanup) => cleanup()));
+          },
+        }
+      : {}),
   };
+}
+
+async function configureRuntimeMcpTools(input: {
+  runtimeTools: RuntimeToolConfig;
+  executableTools: ResearchExecutableTool[];
+  toolDescriptors: ResearchToolDescriptor[];
+  cleanupCallbacks: (() => Promise<void>)[];
+}): Promise<Record<string, unknown> | undefined> {
+  if (!input.runtimeTools.mcpConfigPath) {
+    return undefined;
+  }
+
+  const config = loadResearchMcpClientConfig(input.runtimeTools.mcpConfigPath);
+  const configuredServers = config.servers.map((server) => server.name);
+  const allowedServers =
+    input.runtimeTools.allowedMcpServers.length > 0
+      ? input.runtimeTools.allowedMcpServers
+      : config.allowedServers;
+  const missingAllowedServers = allowedServers.filter(
+    (serverName) => !configuredServers.includes(serverName),
+  );
+  if (missingAllowedServers.length > 0) {
+    throw new Error(
+      `Allowed MCP server(s) are not defined in ${input.runtimeTools.mcpConfigPath}: ${missingAllowedServers.join(", ")}`,
+    );
+  }
+
+  const timeoutMs = input.runtimeTools.mcpTimeoutMs ?? config.timeoutMs;
+  const client = createConfiguredResearchMcpClient({
+    ...config,
+    ...(timeoutMs ? { timeoutMs } : {}),
+  });
+  input.cleanupCallbacks.push(() => client.close());
+
+  try {
+    const discovery = await createMcpResearchTools({
+      client,
+      allowedServers,
+      ...(timeoutMs ? { timeoutMs } : {}),
+    });
+    input.executableTools.push(...discovery.tools);
+    input.toolDescriptors.push(...discovery.descriptors);
+
+    return {
+      status: "configured",
+      configPath: input.runtimeTools.mcpConfigPath,
+      configuredServers,
+      allowedServers,
+      timeoutMs: timeoutMs ?? null,
+      discoveredCapabilities: discovery.descriptors.map((descriptor) => ({
+        name: descriptor.name,
+        transportName: descriptor.transportName,
+        actionClasses: descriptor.actionClasses,
+        sideEffects: descriptor.sideEffects,
+        requiredPermissions: descriptor.requiredPermissions,
+        metadata: descriptor.metadata ?? {},
+      })),
+      resourceTemplates: discovery.resourceTemplates,
+      deniedCapabilities: discovery.deniedCapabilities,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `MCP discovery failed for ${input.runtimeTools.mcpConfigPath}: ${message}`,
+    );
+  }
 }
 
 function resolveEnabledToolFamilies(args: {
@@ -1500,6 +1620,7 @@ function createRuntimeCapture(input: {
   tools: readonly ResearchToolDescriptor[];
   skills: readonly ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
+  mcpCapture?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
     tools: input.tools.map((tool) => ({
@@ -1517,14 +1638,16 @@ function createRuntimeCapture(input: {
       disabled: input.args.runtimeTools.disabledToolFamilies,
     },
     governance: input.governance ?? null,
-    mcp: {
-      allowedServers: input.args.runtimeTools.allowedMcpServers,
-      discoveredCapabilities: [],
-      status:
-        input.args.runtimeTools.allowedMcpServers.length > 0
-          ? "no_mcp_client_configured"
-          : "not_configured",
-    },
+    mcp:
+      input.mcpCapture ??
+      {
+        allowedServers: input.args.runtimeTools.allowedMcpServers,
+        discoveredCapabilities: [],
+        status:
+          input.args.runtimeTools.allowedMcpServers.length > 0
+            ? "no_mcp_client_configured"
+            : "not_configured",
+      },
     skills: {
       loaded: input.skills.map((skill) => ({
         id: skill.id,

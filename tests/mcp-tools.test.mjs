@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
+  createConfiguredResearchMcpClient,
   createMcpResearchTools,
   createResearchToolRegistry,
+  loadResearchMcpClientConfig,
 } from "../packages/research-agent/dist/index.js";
 
 test("MCP discovery maps allowlisted tools and resources into executable research tools", async () => {
@@ -196,3 +201,106 @@ test("MCP discovery denylist defaults to no servers and execution reports timeou
   assert.equal(result.result.status, "error");
   assert.match(result.result.summary, /exceeded timeout/);
 });
+
+test("configured stdio MCP client discovers and executes a live fixture server", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-live-mcp-"));
+  const serverPath = join(root, "fixture-mcp.mjs");
+  const configPath = join(root, "mcp.json");
+  await writeFile(serverPath, createFixtureMcpServerSource(), "utf8");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      allowedServers: ["fixture"],
+      timeoutMs: 1000,
+      servers: {
+        fixture: {
+          command: process.execPath,
+          args: [serverPath],
+        },
+      },
+    }),
+    "utf8",
+  );
+
+  const config = loadResearchMcpClientConfig(configPath);
+  const client = createConfiguredResearchMcpClient(config);
+  try {
+    const discovery = await createMcpResearchTools({
+      client,
+      allowedServers: config.allowedServers,
+      timeoutMs: config.timeoutMs,
+    });
+    const registry = createResearchToolRegistry(discovery.tools);
+    const descriptor = discovery.descriptors.find(
+      (candidate) => candidate.name === "mcp.fixture.echo_search",
+    );
+    const result = await registry.execute({
+      id: "live_mcp_tool",
+      actionClass: "search",
+      toolName: "mcp.fixture.echo_search",
+      input: {
+        query: "parser",
+      },
+    });
+
+    assert.equal(config.servers[0].name, "fixture");
+    assert.ok(descriptor);
+    assert.equal(descriptor.metadata.untrustedOutput, true);
+    assert.equal(discovery.resourceTemplates.length, 1);
+    assert.equal(result.result.status, "complete");
+    assert.equal(result.result.output.output.content[0].text, "echo:parser");
+  } finally {
+    await client.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function createFixtureMcpServerSource() {
+  return `
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf("\\n");
+  while (index >= 0) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (line) handle(JSON.parse(line));
+    index = buffer.indexOf("\\n");
+  }
+});
+
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+
+function handle(message) {
+  if (!message.id) return;
+  if (message.method === "initialize") {
+    send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {}, resources: {} }, serverInfo: { name: "fixture", version: "0.1" } } });
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({ jsonrpc: "2.0", id: message.id, result: { tools: [{ name: "echo_search", description: "Search echo fixture", inputSchema: { type: "object", required: ["query"], properties: { query: { type: "string" } } } }] } });
+    return;
+  }
+  if (message.method === "tools/call") {
+    send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "echo:" + message.params.arguments.query }] } });
+    return;
+  }
+  if (message.method === "resources/list") {
+    send({ jsonrpc: "2.0", id: message.id, result: { resources: [{ uri: "mcp://fixture/note", name: "note", mimeType: "text/plain" }] } });
+    return;
+  }
+  if (message.method === "resources/read") {
+    send({ jsonrpc: "2.0", id: message.id, result: { contents: [{ uri: message.params.uri, text: "fixture note" }] } });
+    return;
+  }
+  if (message.method === "resources/templates/list") {
+    send({ jsonrpc: "2.0", id: message.id, result: { resourceTemplates: [{ uriTemplate: "mcp://fixture/{name}", name: "template" }] } });
+    return;
+  }
+  send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } });
+}
+`;
+}

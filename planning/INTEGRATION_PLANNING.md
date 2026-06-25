@@ -94,19 +94,26 @@ Verification:
 
 Wire MCP into normal runtime configuration while keeping the current allowlist and untrusted-output posture.
 
-Status: pending.
+Status: completed on 2026-06-24.
 
 Checklist:
 
-- [ ] Define a CLI/config shape for MCP server definitions and allowlists.
-- [ ] Add a live MCP connector loader that can discover configured servers.
-- [ ] Register allowlisted MCP tools and resources into the runtime tool registry.
-- [ ] Preserve server/tool provenance in descriptors, captures, and events.
-- [ ] Treat MCP resource and tool outputs as untrusted external content in model context.
-- [ ] Add clear errors for missing server definitions, denied servers, startup failures, and timeouts.
-- [ ] Keep fake MCP fixtures for deterministic tests.
-- [ ] Add tests for config loading, allowlist enforcement, and live-connector error handling.
-- [ ] Run a real health check with a configured local MCP fixture or available user MCP server and review discovery plus events.
+- [x] Define a CLI/config shape for MCP server definitions and allowlists.
+- [x] Add a live MCP connector loader that can discover configured servers.
+- [x] Register allowlisted MCP tools and resources into the runtime tool registry.
+- [x] Preserve server/tool provenance in descriptors, captures, and events.
+- [x] Treat MCP resource and tool outputs as untrusted external content in model context.
+- [x] Add clear errors for missing server definitions, denied servers, startup failures, and timeouts.
+- [x] Keep fake MCP fixtures for deterministic tests.
+- [x] Add tests for config loading, allowlist enforcement, and live-connector error handling.
+- [x] Run a real health check with a configured local MCP fixture or available user MCP server and review discovery plus events.
+
+Verification:
+
+- `pnpm test` passed with 114 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase3/phase3-real.json`.
+- MCP fixture config: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase3/mcp.json`.
+- The real run discovered allowlisted `mcp.fixture.echo_search`, preserved transport name `mcp_fixture_echo_search`, side effect `read`, permission `mcp:fixture:tool:echo_search`, and `untrustedOutput: true`; the model made one MCP tool call with `query: "parser context"`, the `tool.observed` event stored the untrusted fixture result, and memory derived evidence record `mem_evidence_016bf253443a143f1208d396`.
 
 ## Phase 4: Experiment Tool Operator Configuration
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -200,6 +200,37 @@ test("tools CLI honors disabled tool families and reports missing required roots
   assert.deepEqual(disabledPayload.toolFamilies.disabled, ["repository-search"]);
   assert.equal(missingRoot.status, 1);
   assert.match(missingRoot.stderr, /repository-search requires --repo-root/);
+});
+
+test("tools CLI discovers configured live MCP servers", async () => {
+  const fixture = await createCliMcpFixture();
+  try {
+    const result = runTopCli([
+      "tools",
+      "list",
+      "--mcp-config",
+      fixture.configPath,
+      "--allow-mcp-server",
+      "fixture",
+      "--json",
+    ]);
+    const payload = JSON.parse(result.stdout);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(payload.mcp.status, "configured");
+    assert.deepEqual(payload.mcp.configuredServers, ["fixture"]);
+    assert.deepEqual(payload.mcp.allowedServers, ["fixture"]);
+    assert.ok(
+      payload.tools.some((tool) => tool.name === "mcp.fixture.echo_search"),
+    );
+    assert.ok(
+      payload.mcp.discoveredCapabilities.some(
+        (tool) => tool.name === "mcp.fixture.echo_search",
+      ),
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
 });
 
 test("main CLI capture includes runtime tool and skill configuration", async () => {
@@ -406,6 +437,75 @@ async function createCliSkillFixture() {
   );
 
   return root;
+}
+
+async function createCliMcpFixture() {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-cli-mcp-"));
+  const serverPath = join(root, "fixture-mcp.mjs");
+  const configPath = join(root, "mcp.json");
+  await writeFile(serverPath, createFixtureMcpServerSource(), "utf8");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      allowedServers: ["fixture"],
+      timeoutMs: 1000,
+      servers: {
+        fixture: {
+          command: process.execPath,
+          args: [serverPath],
+        },
+      },
+    }),
+    "utf8",
+  );
+
+  return { root, configPath };
+}
+
+function createFixtureMcpServerSource() {
+  return `
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf("\\n");
+  while (index >= 0) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (line) handle(JSON.parse(line));
+    index = buffer.indexOf("\\n");
+  }
+});
+
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+
+function handle(message) {
+  if (!message.id) return;
+  if (message.method === "initialize") {
+    send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {}, resources: {} }, serverInfo: { name: "fixture", version: "0.1" } } });
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({ jsonrpc: "2.0", id: message.id, result: { tools: [{ name: "echo_search", description: "Search echo fixture", inputSchema: { type: "object", required: ["query"], properties: { query: { type: "string" } } } }] } });
+    return;
+  }
+  if (message.method === "tools/call") {
+    send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "echo:" + message.params.arguments.query }] } });
+    return;
+  }
+  if (message.method === "resources/list") {
+    send({ jsonrpc: "2.0", id: message.id, result: { resources: [] } });
+    return;
+  }
+  if (message.method === "resources/templates/list") {
+    send({ jsonrpc: "2.0", id: message.id, result: { resourceTemplates: [] } });
+    return;
+  }
+  send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } });
+}
+`;
 }
 
 function createEvent(kind, payload, options = {}) {
