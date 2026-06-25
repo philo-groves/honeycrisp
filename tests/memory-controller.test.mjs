@@ -171,6 +171,55 @@ test("first-run controller asks for scope before security-sensitive work", () =>
   assert.match(decision.subGoal.objective, /Confirm missing scope/);
 });
 
+test("first-run controller can select user-configured non-inspection tools", () => {
+  const controller = createFirstRunMemoryController();
+  const cases = [
+    {
+      actionClass: "recall",
+      objective: "Recall prior source notes before drafting a report",
+      tool: createActionToolDescriptor("user.memory", "recall"),
+    },
+    {
+      actionClass: "analyze",
+      objective: "Analyze a supplied transcript for repeated claims",
+      tool: createActionToolDescriptor("user.analysis", "analyze"),
+    },
+    {
+      actionClass: "experiment",
+      objective: "Run a configured arithmetic probe",
+      tool: createActionToolDescriptor("user.experiment", "experiment", {
+        sideEffects: "process",
+        requiredPermissions: ["experiment:run"],
+      }),
+      governance: {
+        allowedSideEffects: ["process"],
+        allowedPermissions: ["experiment:run"],
+      },
+    },
+  ];
+
+  for (const fixture of cases) {
+    const decision = controller.decide({
+      goalFrame: createResearchGoalFrame(
+        [
+          `Goal: ${fixture.objective}`,
+          "Scope constraints: use only the configured user tool surface",
+        ].join("\n"),
+      ),
+      tools: [fixture.tool],
+      ...(fixture.governance ? { governance: fixture.governance } : {}),
+    });
+
+    assert.equal(decision.actionClass, fixture.actionClass);
+    assert.equal(decision.toolBudget.maxToolCalls, 3);
+    assert.ok(
+      decision.contextPacket.toolPermissions.some(
+        (permission) => permission.toolName === fixture.tool.name,
+      ),
+    );
+  }
+});
+
 test("bootstrap output includes memory decision and context event records", async () => {
   const result = await bootstrapResearchRun({
     prompt: "Goal: Investigate a math puzzle\nScope constraints: no external search",
@@ -1489,5 +1538,15 @@ function createTestTool(options) {
         followUpActions: [],
       };
     },
+  };
+}
+
+function createActionToolDescriptor(name, actionClass, options = {}) {
+  return {
+    name,
+    description: "User-configured test tool",
+    actionClasses: [actionClass],
+    sideEffects: options.sideEffects ?? "none",
+    requiredPermissions: options.requiredPermissions ?? [],
   };
 }

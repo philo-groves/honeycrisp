@@ -111,18 +111,6 @@ export type {
   ResearchToolValidationHook,
   ResearchToolValidationHookInput,
 } from "./tool-registry.js";
-export {
-  createInvestigationSynthesisHarness,
-  createLocalVulnerabilityResearchHarness,
-  createMathematicsPuzzleHarness,
-  createToolEvaluationMcpFixture,
-  createToolEvaluationSkillFixtures,
-  runResearchToolHarness,
-} from "./tool-harnesses.js";
-export type {
-  ResearchToolEvaluationHarness,
-  ResearchToolHarnessRunResult,
-} from "./tool-harnesses.js";
 export { createMcpResearchTools } from "./mcp-tools.js";
 export type {
   CreateMcpResearchToolsOptions,

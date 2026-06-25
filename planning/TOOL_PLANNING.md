@@ -41,7 +41,7 @@ The project already has a first executable tool slice:
 - Built-in tool families can now be registered from the library layer for memory recall, repository search, structured file reads, deterministic analysis transforms, allowlisted experiments, and deterministic synthesis. Each built-in preserves a canonical dotted Honeycrisp name plus a provider-safe transport alias.
 - A Pi Agent lifecycle executor is available from the library layer. It maps Honeycrisp tools to Pi `AgentTool`s, uses Agent tool hooks for governance preflight and event capture, supports sequential or parallel tool batches, and keeps the older `completeSimple` executor as the fallback/default path.
 - The CLI can configure tool families, side-effect and budget governance, selected local skills, MCP server allowlists, and the Agent executor. `honeycrisp tools list` exposes the configured registry, MCP allowlist status, and selected skills, and flow captures include runtime tool configuration metadata.
-- Tool evaluation harnesses now cover local vulnerability research, mathematics/puzzle computation, investigation recall/synthesis, MCP discovery/execution fixtures, local skill fixtures, blocked tool paths, multi-call loops, and artifact-heavy output spill behavior.
+- Tool evaluation stays focused on generic surfaces: built-in tools, MCP adapters, skill selection, governance, Agent lifecycle execution, and durable tool events. Domain-specific research behavior is expected to come from user-provided MCP servers, local skills, and configured tool families rather than packaged Honeycrisp harnesses.
 
 Known limitations to address:
 
@@ -275,28 +275,28 @@ Verification:
 - The health check used the real CLI with `--executor agent`, `--repo-root`, `--allowed-side-effect read`, `--tool-max-calls 1`, and `--tool-max-bytes 200000`. Capture metadata recorded `repository.search`, the enabled `repository-search` family, governance, and Agent lifecycle execution.
 - The first health attempt showed that the default repository per-file cap skipped the larger `parse.c`; `--tool-max-bytes` now also configures repository-search `maxFileBytes` and file-read `maxBytes`. The rerun found `context.c:67` and `parse.c:295`.
 
-## Phase 10: Evaluation And Domain Harnesses
+## Phase 10: Evaluation Boundaries And User Tool Surfaces
 
-Create small repeatable evaluation harnesses for tool behavior across domains so tool calling remains reliable as the agent becomes more general.
+Keep tool evaluation reliable without shipping domain-specific harness APIs that users might mistake for supported research modes. Honeycrisp should verify the generic tool layer and leave domain alignment to user MCP servers, local skills, and operator-configured tools.
 
 Status: completed on 2026-06-24.
 
 Checklist:
 
-- [x] Add a local vulnerability-research tool harness.
-- [x] Add a mathematics or puzzle-solving tool harness.
-- [x] Add an investigation/evidence-synthesis tool harness.
-- [x] Add fixtures for MCP tool discovery and execution.
-- [x] Add fixtures for skill selection and instruction injection.
-- [x] Track event-log and memory consequences for each harness.
-- [x] Add regression tests for tool-call loops that require multiple tool calls.
-- [x] Add regression tests for blocked or denied tool paths.
-- [x] Add regression tests for artifact-heavy tool outputs.
+- [x] Avoid exporting packaged domain-specific tool harnesses.
+- [x] Keep domain alignment delegated to user-provided MCP servers, local skills, and configured tool families.
+- [x] Verify MCP discovery and execution through generic fixtures.
+- [x] Verify skill selection and instruction injection through generic/local skill fixtures.
+- [x] Verify controller selection for user-configured `recall`, `analyze`, and `experiment` tools.
+- [x] Track tool event-log and memory consequences through the normal bootstrap, CLI, and memory tests.
+- [x] Preserve regression tests for tool-call loops that require multiple tool calls.
+- [x] Preserve regression tests for blocked or denied tool paths.
+- [x] Preserve regression tests for artifact-heavy tool outputs.
 
 Verification:
 
-- `pnpm test` passed with 109 tests on 2026-06-24.
-- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/16-real-tool-harness.json`.
-- The health check used the real `openai-codex/gpt-5.3-codex-spark` Agent executor with the local vulnerability-research harness against `/Users/philogroves/maxtac-resources/zsh/zsh`.
-- The real run completed one `repository.search` call with no blocked tool events, produced Agent lifecycle metadata, selected `harness-vulnerability`, and routed the search observation into memory.
-- The zsh evidence included `Src/context.c:67` and `Src/parse.c:295` for `parse_context_save`, confirming the harness can inspect real outputs and preserve memory consequences.
+- `pnpm test` passed with 103 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/17-real-user-configured-tools.json`.
+- The health check used the real `openai-codex/gpt-5.3-codex-spark` Agent executor through normal CLI configuration: `--repo-root`, `--allowed-side-effect read`, `--tool-max-calls 1`, and `--tool-max-bytes 200000`.
+- The real run completed one user-configured `repository.search` call with no packaged harness API, produced Agent lifecycle metadata, and routed the search observation into memory.
+- The zsh evidence included `Src/context.c:67` and `Src/parse.c:295` for `parse_context_save`, confirming the generic user-configured tool path preserves the same health-check value without locking Honeycrisp into maintained domain harnesses.
