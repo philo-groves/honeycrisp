@@ -227,6 +227,7 @@ export {
   MemoryInspector,
 } from "./memory-inspector.js";
 export type {
+  CreateResearchAgentStateReadModelOptions,
   MemoryDebugCapture,
   MemoryDebugCaptureInput,
   MemoryEventTimelineEntry,

@@ -138,20 +138,20 @@ Checklist:
 
 Refactor Beale's memory/program-tracking views to read Honeycrisp memory records for general research state.
 
-Status: not started.
+Status: completed.
 
 Checklist:
 
-- [ ] Add a Honeycrisp memory read adapter in Beale that uses exported Honeycrisp CLI/library APIs where possible rather than duplicating SQL knowledge.
-- [ ] Replace Beale general hypothesis/evidence/finding reads with Honeycrisp memory reads in session details.
-- [ ] Preserve Beale-specific vulnerability overlays, CWE/security labels, and report/export state separately from generic Honeycrisp memory.
-- [ ] Update Beale Context view to show findings and proof state from Honeycrisp when present.
-- [ ] Update Beale Memory/Program Tracking views to show Honeycrisp evidence, hypotheses, findings, procedures, prospective checks, and proof state.
-- [ ] Keep the heatmap visual but compute its general intensity from Honeycrisp finding/proof/evidence state, with optional Beale vulnerability-specific boosts.
-- [ ] Remove or mark obsolete Beale-only graph/memory widgets that duplicate Honeycrisp memory.
-- [ ] Add renderer tests for Honeycrisp memory-backed views.
-- [ ] Add integration tests using a fixture Honeycrisp memory database with evidence, hypothesis, finding, and proof records.
-- [ ] Run a real Beale session and verify UI updates directly from Honeycrisp memory after the run.
+- [x] Add a Honeycrisp memory read adapter in Beale that uses exported Honeycrisp CLI/library APIs where possible rather than duplicating SQL knowledge.
+- [x] Replace Beale general hypothesis/evidence/finding reads with Honeycrisp memory reads in session details.
+- [x] Preserve Beale-specific vulnerability overlays, CWE/security labels, and report/export state separately from generic Honeycrisp memory.
+- [x] Update Beale Context view to show findings and proof state from Honeycrisp when present.
+- [x] Update Beale Memory/Program Tracking views to show Honeycrisp evidence, hypotheses, findings, procedures, prospective checks, and proof state.
+- [x] Keep the heatmap visual but compute its general intensity from Honeycrisp finding/proof/evidence state, with optional Beale vulnerability-specific boosts.
+- [x] Remove or mark obsolete Beale-only graph/memory widgets that duplicate Honeycrisp memory.
+- [x] Add renderer tests for Honeycrisp memory-backed views.
+- [x] Add integration tests using a fixture Honeycrisp memory database with evidence, hypothesis, finding, and proof records.
+- [x] Run a real Beale session and verify UI updates directly from Honeycrisp memory after the run.
 
 ## Phase 6: Decommission Beale Semantic Index And Project Graph Agent State
 

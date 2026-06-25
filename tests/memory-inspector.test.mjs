@@ -85,6 +85,39 @@ test("memory inspector exposes hypotheses, claim graph, and prospective checks",
   proofStore.close();
 });
 
+test("memory inspector exposes a Beale-facing agent state read model", async () => {
+  const { eventLog, recordStore, proofStore, inspector } =
+    await createInspectorFixture();
+
+  const state = inspector.showAgentState({
+    storage: {
+      rootPath: "/tmp/honeycrisp-memory",
+      databasePath: "/tmp/honeycrisp-memory/memory.sqlite",
+      directories: [],
+      artifacts: [
+        {
+          id: "artifact_state",
+          kind: "report",
+          uri: "file:///tmp/honeycrisp-memory/artifacts/report.md",
+          summary: "State report",
+        },
+      ],
+    },
+  });
+
+  assert.equal(state.memory.evidence.length, 1);
+  assert.ok(state.memory.semanticClaims.some((record) => record.kind === "semantic_claim"));
+  assert.equal(state.memory.findings[0]?.findingStatus, "supported");
+  assert.equal(state.memory.prospectiveChecks.length, 1);
+  assert.equal(state.proof.obligations.length, 1);
+  assert.equal(state.proof.attempts[0]?.result, "pass");
+  assert.equal(state.storage.artifacts[0]?.id, "artifact_state");
+
+  eventLog.close();
+  recordStore.close();
+  proofStore.close();
+});
+
 test("memory inspector exposes recall results, context selections, and controller explanations", async () => {
   const { eventLog, recordStore, proofStore, inspector } =
     await createInspectorFixture();

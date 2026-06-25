@@ -451,6 +451,17 @@ test("memory CLI prints event timelines and records as JSON", async () => {
   assert.equal(timeline.length, 6);
   assert.equal(timeline[1]?.id, eventId);
 
+  const agentState = runMemoryCliJson(
+    "agent-state",
+    "--workspace-root",
+    workspaceRoot,
+  );
+  assert.equal(agentState.memory.evidence.length, 1);
+  assert.equal(agentState.memory.findings[0]?.findingStatus, "supported");
+  assert.equal(agentState.memory.prospectiveChecks.length, 1);
+  assert.equal(agentState.proof.obligations.length, 1);
+  assert.equal(agentState.storage.databasePath.endsWith(".honeycrisp/memory/memory.sqlite"), true);
+
   const records = runMemoryCliJson(
     "records-for-event",
     eventId,

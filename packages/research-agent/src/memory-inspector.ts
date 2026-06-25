@@ -12,9 +12,11 @@ import type { MemoryRecordStore } from "./memory-record-store.js";
 import type { ProofStore } from "./proof-store.js";
 import type {
   ResearchClaimGraphEdge,
+  ResearchAgentStateReadModel,
   ResearchDerivedMemoryRecord,
   ResearchEvent,
   ResearchFindingMemoryRecord,
+  ResearchStorageReadModel,
   ResearchProofStateReadModel,
 } from "./types.js";
 
@@ -64,6 +66,10 @@ export interface MemoryInspectorOptions {
   eventLog?: MemoryEventLog;
   recordStore?: MemoryRecordStore;
   proofStore?: ProofStore;
+}
+
+export interface CreateResearchAgentStateReadModelOptions {
+  storage?: ResearchStorageReadModel;
 }
 
 export class MemoryInspector {
@@ -211,8 +217,49 @@ export class MemoryInspector {
     return this.requireRecordStore().list({ kind: "prospective_check" });
   }
 
+  showMemoryState(): ResearchAgentStateReadModel["memory"] {
+    const records = this.requireRecordStore().list();
+    return {
+      evidence: records.filter(isEvidenceRecord),
+      episodes: records.filter(isEpisodicRecord),
+      semanticClaims: records.filter(isSemanticClaimRecord),
+      hypotheses: records.filter(isHypothesisRecord),
+      findings: records.filter(isFindingRecord),
+      beliefs: records.filter(isBeliefRecord),
+      procedures: records.filter(isProcedureRecord),
+      prospectiveChecks: records.filter(isProspectiveRecord),
+      working: records.filter(isWorkingRecord),
+    };
+  }
+
   showProofState(): ResearchProofStateReadModel {
     return this.requireProofStore().readState();
+  }
+
+  showAgentState(
+    options: CreateResearchAgentStateReadModelOptions = {},
+  ): ResearchAgentStateReadModel {
+    const latestContextEvent = this.latestContextCompiledEvent();
+    const latestContext = latestContextEvent
+      ? {
+          refId: latestContextEvent.id,
+          target: "event" as const,
+          summary: summarizeEvent(latestContextEvent),
+        }
+      : undefined;
+
+    const contextUsage = latestContextEvent
+      ? createContextUsageReadModel(latestContextEvent)
+      : undefined;
+
+    return {
+      ...readGoalState(latestContextEvent),
+      ...(latestContext ? { latestContext } : {}),
+      memory: this.showMemoryState(),
+      proof: this.showProofState(),
+      storage: options.storage ?? { directories: [], artifacts: [] },
+      ...(contextUsage ? { contextUsage } : {}),
+    };
   }
 
   showProofObligations(): ResearchProofStateReadModel["obligations"] {
@@ -294,6 +341,13 @@ export class MemoryInspector {
 
     return this.proofStore;
   }
+
+  private latestContextCompiledEvent(): ResearchEvent | undefined {
+    return this.eventLog
+      ?.listAll()
+      .filter((event) => event.kind === "context.compiled")
+      .at(-1);
+  }
 }
 
 export function createMemoryInspector(
@@ -325,6 +379,116 @@ function summarizeEvent(event: ResearchEvent): string {
   }
 
   return event.kind;
+}
+
+function readGoalState(
+  event: ResearchEvent | undefined,
+): Pick<ResearchAgentStateReadModel, "goal" | "subGoals"> {
+  const payload = isRecord(event?.payload) ? event.payload : {};
+  const activeGoal = isRecord(payload.activeGoal)
+    ? payload.activeGoal
+    : undefined;
+  const activeSubGoal = isRecord(payload.activeSubGoal)
+    ? payload.activeSubGoal
+    : undefined;
+  const state: Pick<ResearchAgentStateReadModel, "goal" | "subGoals"> = {
+    subGoals: activeSubGoal
+      ? [activeSubGoal as unknown as ResearchAgentStateReadModel["subGoals"][number]]
+      : [],
+  };
+  if (activeGoal) {
+    state.goal = activeGoal as unknown as NonNullable<
+      ResearchAgentStateReadModel["goal"]
+    >;
+  }
+  return state;
+}
+
+function createContextUsageReadModel(
+  event: ResearchEvent,
+): NonNullable<ResearchAgentStateReadModel["contextUsage"]> {
+  const payload = isRecord(event.payload) ? event.payload : {};
+  const contextV2 = isRecord(payload.contextV2) ? payload.contextV2 : undefined;
+  const compaction = isRecord(contextV2?.compaction)
+    ? contextV2.compaction
+    : undefined;
+  const estimatedTokens = numberValue(contextV2?.estimatedTokens);
+  const tokenBudget = numberValue(contextV2?.tokenBudget);
+
+  const usage: NonNullable<ResearchAgentStateReadModel["contextUsage"]> = {
+    latestContextEventId: event.id,
+  };
+  if (estimatedTokens !== undefined) usage.estimatedTokens = estimatedTokens;
+  if (tokenBudget !== undefined) usage.tokenBudget = tokenBudget;
+  if (typeof compaction?.compacted === "boolean") {
+    usage.compacted = compaction.compacted;
+  }
+  if (Array.isArray(compaction?.removedRecordIds)) {
+    usage.removedRecordIds = compaction.removedRecordIds.filter(isString);
+  }
+  return usage;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isEvidenceRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["evidence"][number] {
+  return record.kind === "evidence";
+}
+
+function isEpisodicRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["episodes"][number] {
+  return record.kind === "episodic";
+}
+
+function isSemanticClaimRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["semanticClaims"][number] {
+  return record.kind === "semantic_claim";
+}
+
+function isHypothesisRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["hypotheses"][number] {
+  return record.kind === "hypothesis";
+}
+
+function isFindingRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["findings"][number] {
+  return record.kind === "finding";
+}
+
+function isBeliefRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["beliefs"][number] {
+  return record.kind === "belief";
+}
+
+function isProcedureRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["procedures"][number] {
+  return record.kind === "procedure";
+}
+
+function isProspectiveRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["prospectiveChecks"][number] {
+  return record.kind === "prospective_check";
+}
+
+function isWorkingRecord(
+  record: ResearchDerivedMemoryRecord,
+): record is ResearchAgentStateReadModel["memory"]["working"][number] {
+  return record.kind === "working";
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

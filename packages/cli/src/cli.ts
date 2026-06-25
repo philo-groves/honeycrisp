@@ -33,6 +33,7 @@ import {
   getAuthStatus,
   listAuthProviders,
   loadResearchSkillsFromDirectory,
+  loadResearchStorageManifest,
   loadResearchMcpClientConfig,
   loadResearchExperimentConfig,
   loadResearchModelConfig,
@@ -1055,6 +1056,15 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
       return;
     }
 
+    if (args.command === "agent-state") {
+      printMemoryOutput(
+        args,
+        inspector.showAgentState({ storage: createMemoryCommandStorageReadModel(args) }),
+        renderAgentState,
+      );
+      return;
+    }
+
     if (args.command === "event") {
       const eventId = requireMemoryPositional(args, "event <event-id>");
       printMemoryOutput(
@@ -1513,6 +1523,7 @@ function memoryUsage(): string {
     "",
     "Commands:",
     "  timeline                  Show accepted event timeline",
+    "  agent-state               Show Beale-facing memory/proof/storage state",
     "  event <event-id>           Show one accepted raw event",
     "  records-for-event <id>     Show derived records for an event",
     "  recall --goal <text>       Run a recall query",
@@ -1539,6 +1550,23 @@ function memoryUsage(): string {
     "  --json                  Print JSON",
     "  -h, --help              Show help",
   ].join("\n");
+}
+
+function createMemoryCommandStorageReadModel(args: ParsedMemoryArgs) {
+  const layout = createResearchStorageLayout({ workspaceRoot: args.workspaceRoot });
+  const manifest = loadResearchStorageManifest(layout);
+  return {
+    rootPath: layout.rootPath,
+    databasePath: layout.databasePath,
+    directories: layout.directories,
+    artifacts: manifest.artifacts.map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      uri: artifact.uri,
+      summary: artifact.purpose,
+      contentHash: artifact.contentHash,
+    })),
+  };
 }
 
 function requireMemoryPositional(
@@ -1648,6 +1676,22 @@ function renderRecords(
       ].join("\t"),
     )
     .join("\n");
+}
+
+function renderAgentState(
+  state: ReturnType<ReturnType<typeof createMemoryInspector>["showAgentState"]>,
+): string {
+  const memory = state.memory;
+  return [
+    `Evidence: ${memory.evidence.length}`,
+    `Hypotheses: ${memory.hypotheses.length}`,
+    `Findings: ${memory.findings.length}`,
+    `Procedures: ${memory.procedures.length}`,
+    `Prospective checks: ${memory.prospectiveChecks.length}`,
+    `Proof obligations: ${state.proof.obligations.length}`,
+    `Proof attempts: ${state.proof.attempts.length}`,
+    `Storage artifacts: ${state.storage.artifacts.length}`,
+  ].join("\n");
 }
 
 function renderPreconsciousPacket(
