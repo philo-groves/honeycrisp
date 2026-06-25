@@ -198,18 +198,18 @@ Checklist:
 
 Delete proof-of-concept benchmark infrastructure from Beale.
 
-Status: not started.
+Status: completed.
 
 Checklist:
 
-- [ ] Remove benchmark runner, benchmark isolation, benchmark proxy, benchmark suite, benchmark Docker runner, and CyberGym prompt helpers.
-- [ ] Remove CyberGym settings, reserved program handling, storage preparation, scenario listing, staging, submission, and grading code.
-- [ ] Remove benchmark IPC channels and renderer settings.
-- [ ] Remove benchmark-related schema usage from active snapshots; keep old database migrations tolerant but unused.
-- [ ] Remove benchmark npm scripts and benchmark/firecracker live test scripts from Beale package metadata.
-- [ ] Remove benchmark tests and fixtures.
-- [ ] Remove benchmark-specific dependencies or Docker/firecracker scripts if no other code needs them.
-- [ ] Run Beale typecheck/build/tests and fix any stale references.
+- [x] Remove benchmark runner, benchmark isolation, benchmark proxy, benchmark suite, benchmark Docker runner, and CyberGym prompt helpers.
+- [x] Remove CyberGym settings, reserved program handling, storage preparation, scenario listing, staging, submission, and grading code.
+- [x] Remove benchmark IPC channels and renderer settings.
+- [x] Remove benchmark-related schema usage from active snapshots; keep old database migrations tolerant but unused.
+- [x] Remove benchmark npm scripts and benchmark/firecracker live test scripts from Beale package metadata.
+- [x] Remove benchmark tests and fixtures.
+- [x] Remove benchmark-specific dependencies or Docker/firecracker scripts if no other code needs them.
+- [x] Run Beale typecheck/build/tests and fix any stale references.
 
 ## Phase 9: Retire Beale's Parallel Agent Runtime
 
