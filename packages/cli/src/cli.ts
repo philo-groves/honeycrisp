@@ -27,6 +27,7 @@ import {
   loadResearchSkillsFromDirectory,
   loginAuthProvider,
   logoutAuthProvider,
+  resolveResearchModelConfig,
   routeEventsToMemorySnapshot,
   verifyProviderAuth,
 } from "@honeycrisp/research-agent";
@@ -35,9 +36,12 @@ import type {
   AuthLoginCallbacks,
   AuthPrompt,
   LocalInspectionAction,
+  ResearchModelEffort,
   ResearchEvent,
   ResearchGovernancePolicy,
+  ResearchLoopExecutor,
   ResearchMemorySnapshot,
+  ResolvedResearchModelConfig,
   ResearchSkillDescriptor,
   ResearchToolDescriptor,
   ResearchToolSideEffect,
@@ -81,10 +85,11 @@ interface ParsedArgs {
   initialRiskFlags: string[];
   userPreferences: string[];
   mock: boolean;
-  provider: string;
-  model: string;
+  configPath: string | undefined;
+  provider: string | undefined;
+  model: string | undefined;
   maxTokens: number | undefined;
-  reasoning: "minimal" | "low" | "medium" | "high" | "xhigh" | undefined;
+  reasoning: ResearchModelEffort | undefined;
   executor: CliExecutorKind;
   toolExecution: CliToolExecutionMode | undefined;
   inspectRoots: string[];
@@ -128,8 +133,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let help = false;
   let version = false;
   let mock = false;
-  let provider = "openai-codex";
-  let model = "gpt-5.3-codex-spark";
+  let configPath: string | undefined;
+  let provider: string | undefined;
+  let model: string | undefined;
   let executor: CliExecutorKind = "complete-simple";
   let toolExecution: CliToolExecutionMode | undefined;
   let maxTokens: number | undefined;
@@ -192,6 +198,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       throw new Error(
         "--real was removed because real model calls are now the default. Pass --mock for deterministic mode.",
       );
+    } else if (arg === "--config") {
+      configPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--provider") {
       provider = readOptionValue(argv, index, arg);
       index += 1;
@@ -212,6 +221,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       maxTokens = value;
       index += 1;
     } else if (arg === "--reasoning") {
+      reasoning = parseReasoning(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--effort") {
       reasoning = parseReasoning(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "--inspect-root") {
@@ -304,6 +316,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     initialRiskFlags,
     userPreferences,
     mock,
+    configPath,
     provider,
     model,
     maxTokens,
@@ -505,7 +518,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   };
 }
 
-function parseReasoning(value: string): ParsedArgs["reasoning"] {
+function parseReasoning(value: string): ResearchModelEffort {
   if (
     value === "minimal" ||
     value === "low" ||
@@ -629,11 +642,13 @@ function usage(): string {
     "  --risk <flag>          Add an initial risk flag",
     "  --preference <pref>    Add a user preference",
     "  --mock                 Use the deterministic mock executor (default: real model calls)",
-    "  --provider <provider>  Model provider for real mode (default: openai-codex)",
-    "  --model <model>        Model id for real mode (default: gpt-5.3-codex-spark)",
+    "  --config <path>        JSON provider/model/effort preference config for real mode",
+    "  --provider <provider>  Override configured/default provider for real mode",
+    "  --model <model>        Override configured/default model for real mode",
     "  --executor <kind>      complete-simple or agent (default: complete-simple)",
     "  --max-tokens <n>       Max output tokens for real mode",
-    "  --reasoning <level>    Reasoning level for real mode",
+    "  --effort <level>       Model effort for real mode: minimal, low, medium, high, xhigh",
+    "  --reasoning <level>    Alias for --effort",
     "  --tool-execution <m>   Agent tool execution mode: sequential or parallel",
     "  --inspect-root <path>  Allow a local root for read-only inspection",
     "  --inspect-path <path>  Inspect a local path before the loop",
@@ -720,14 +735,23 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     }
 
     const runtimeConfig = await createRuntimeConfig(args);
-
+    let modelConfig: ResolvedResearchModelConfig | undefined;
     const loopExecutor = args.mock
       ? createDeterministicLoopExecutor(
           runtimeConfig.toolRegistry
             ? { toolRegistry: runtimeConfig.toolRegistry }
             : {},
         )
-      : await createRealLoopExecutor(args, runtimeConfig.toolRegistry);
+      : createRealLoopExecutor(
+          args,
+          runtimeConfig.toolRegistry,
+          (modelConfig = await resolveResearchModelConfig({
+            ...(args.configPath ? { configPath: args.configPath } : {}),
+            ...(args.provider ? { provider: args.provider } : {}),
+            ...(args.model ? { model: args.model } : {}),
+            ...(args.reasoning ? { effort: args.reasoning } : {}),
+          })),
+        );
 
     const inspectionState =
       runtimeConfig.events.length > 0 && runtimeConfig.memory
@@ -764,7 +788,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       const capturePath = await writeFlowCapture(
         args.capturePath,
         result,
-        runtimeConfig.capture,
+        {
+          ...runtimeConfig.capture,
+          modelConfig: modelConfig
+            ? createModelConfigCapture(modelConfig)
+            : { mode: "mock" },
+        },
       );
       if (!args.json) {
         console.log(`Flow capture: ${capturePath}`);
@@ -796,22 +825,16 @@ function persistTopLevelRunEvents(
   }
 }
 
-async function createRealLoopExecutor(
+function createRealLoopExecutor(
   args: ParsedArgs,
   toolRegistry: ResearchToolRegistry | undefined,
-) {
-  const auth = await verifyProviderAuth(args.provider, args.model);
-  if (!auth.configured) {
-    throw new Error(
-      `real mode requires configured credentials for ${auth.providerName} (${auth.providerId}). Run: honeycrisp auth login ${auth.providerId}, or pass --mock for deterministic mode.`,
-    );
-  }
-
+  modelConfig: ResolvedResearchModelConfig,
+): ResearchLoopExecutor {
   const executorInput = {
-    provider: args.provider,
-    model: args.model,
+    provider: modelConfig.provider,
+    model: modelConfig.model,
     ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
-    ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+    ...(modelConfig.effort ? { reasoning: modelConfig.effort } : {}),
     ...(toolRegistry ? { toolRegistry } : {}),
   };
 
@@ -821,6 +844,18 @@ async function createRealLoopExecutor(
         ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
       })
     : createPiLoopExecutor(executorInput);
+}
+
+function createModelConfigCapture(
+  modelConfig: ResolvedResearchModelConfig,
+): Record<string, unknown> {
+  return {
+    provider: modelConfig.provider,
+    model: modelConfig.model,
+    ...(modelConfig.effort ? { effort: modelConfig.effort } : {}),
+    source: modelConfig.source,
+    ...(modelConfig.configPath ? { configPath: modelConfig.configPath } : {}),
+  };
 }
 
 async function handleMemoryCommand(argv: readonly string[]): Promise<void> {

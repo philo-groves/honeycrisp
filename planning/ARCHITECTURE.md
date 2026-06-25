@@ -5,9 +5,9 @@ Honeycrisp is a general purpose research agent. The architecture is composed of 
 - **Memory Layer**: A cognitive research memory layer that drives action selection and context construction.
 - **Tool Layer**: A controlled action surface for searches, file work, analysis, experiments, and external systems.
 - **Storage Layer**: Persistent file-based storage to supplement memory.
-- **Config Layer**: Selections for the provider, model, and preferences.
+- **Config Layer**: Non-secret preferences for the provider, model, and effort.
 
-In other words: The processing layer keeps the agent oriented around a goal tree. The memory layer decides what the agent should know and do next. The tool layer executes bounded actions. The storage layer manages structured file system interactions. The config layer assigns the agent to a provider, model, and preferences.
+In other words: The processing layer keeps the agent oriented around a goal tree. The memory layer decides what the agent should know and do next. The tool layer executes bounded actions. The storage layer manages structured file system interactions. The config layer selects provider/model/effort preferences for already-authorized model calls.
 
 Honeycrisp should remain goal-based: every run has a root goal, every loop has a bounded sub-goal, and every response is judged against completion gates. The important change is that sub-goals are not planned from prompt text alone. They are proposed by the memory controller after reviewing working state, past episodes, claims, procedures, hypotheses, prospective commitments, and available tools.
 
@@ -25,6 +25,16 @@ The runtime flow is:
 8. The loop repeats until the root goal is complete, blocked, or ready for user response.
 
 The memory controller is therefore the action driver. The processing layer owns the loop shape; memory owns the next-action policy.
+
+## Config
+
+The config layer is not an auth layer. It stores and resolves model preferences only:
+
+- provider id
+- model id
+- effort level
+
+Provider credentials are managed by the CLI auth layer. A configured provider/model must already be authorized through `honeycrisp auth login`. When no config file or CLI override is provided, Honeycrisp selects the first authorized provider/model found in the auth store. If no authorized provider exists, real mode fails before model execution and asks the user to log in or provide a config preference for an already-authorized provider.
 
 ## Processing
 This section describes the general research workflow of the Honeycrisp agent. Research is never locked into a single workflow. Processing is conducted with a series of dynamic loops. The harness is built to provide the best security-relevant context to the model while processing.

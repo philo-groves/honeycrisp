@@ -28,6 +28,16 @@ export type {
   BootstrapResearchRunResult,
 } from "./bootstrap.js";
 export {
+  loadResearchModelConfig,
+  resolveResearchModelConfig,
+} from "./config.js";
+export type {
+  ResearchModelConfigPreference,
+  ResearchModelEffort,
+  ResolveResearchModelConfigOptions,
+  ResolvedResearchModelConfig,
+} from "./config.js";
+export {
   createAnalysisTool,
   createDefaultBuiltInToolFamily,
   createExperimentTool,

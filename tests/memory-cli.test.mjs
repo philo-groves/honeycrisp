@@ -22,8 +22,8 @@ test("main CLI defaults to real mode and preflights auth", async () => {
   });
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /real mode requires configured credentials/);
-  assert.match(result.stderr, /pass --mock for deterministic mode/);
+  assert.match(result.stderr, /No authorized model provider found/);
+  assert.match(result.stderr, /--config <path>/);
 });
 
 test("main CLI supports deterministic mock mode without auth", async () => {
@@ -88,6 +88,36 @@ test("main CLI rejects retired run-mode flags with migration hints", () => {
   assert.equal(realResult.status, 1);
   assert.match(realResult.stderr, /--real was removed/);
   assert.match(realResult.stderr, /Pass --mock/);
+});
+
+test("main CLI treats config as model preference, not authorization", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const configRoot = await mkdtemp(join(tmpdir(), "honeycrisp-cli-config-"));
+  const configPath = join(configRoot, "research-config.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      provider: "openai-codex",
+      model: "gpt-5.3-codex-spark",
+      effort: "minimal",
+    }),
+    "utf8",
+  );
+  const result = runTopCli(
+    [
+      "--config",
+      configPath,
+      "-p",
+      "Goal: Config should not authorize a provider",
+    ],
+    {
+      HONEYCRISP_AUTH_FILE: authFile,
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /not authorized/);
+  assert.match(result.stderr, /honeycrisp auth login openai-codex/);
 });
 
 test("tools CLI lists configured tools, MCP allowlist, governance, and selected skills", async () => {

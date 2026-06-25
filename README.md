@@ -33,17 +33,31 @@ pnpm start -p "Investigate parser behavior" \
   --json
 ```
 
-On a first run, Honeycrisp also asks the memory controller for the next bounded sub-goal, compiles a context packet, turns that decision into a loop plan, and processes the loop with an executor. Until durable memory and tools are integrated, the packet contains empty typed memory buckets, explicit open questions, user commitments from the goal frame, tool permissions, tool budget, and writeback expectations. The loop plan is the executable per-loop contract: reason, required context manifest, permitted tool classes, action budget, expected artifacts, completion gates, writeback requirements, and a model-facing loop prompt. The CLI uses Pi-backed model calls by default and records a structured loop result with execution metadata.
+On a first run, Honeycrisp also asks the memory controller for the next bounded sub-goal, compiles a context packet, turns that decision into a loop plan, and processes the loop with an executor. Until durable memory and tools are integrated, the packet contains empty typed memory buckets, explicit open questions, user commitments from the goal frame, tool permissions, tool budget, storage guidance, and writeback expectations. The loop plan is the executable per-loop contract: reason, required context manifest, permitted tool classes, action budget, expected artifacts, completion gates, writeback requirements, and a model-facing loop prompt. The CLI uses Pi-backed model calls by default and records a structured loop result with execution metadata.
 
-Run with stored auth:
+Run with stored auth. If no config is provided, Honeycrisp selects the first authorized provider/model from the CLI auth store. A config file is only a model preference file; credentials still come from `honeycrisp auth login`.
 
 ```sh
 pnpm start \
-  --provider openai-codex \
-  --model gpt-5.3-codex-spark \
   --max-tokens 1800 \
   -p "Goal: Produce a first-run research plan..."
 ```
+
+Optional model preference config:
+
+```json
+{
+  "provider": "openai-codex",
+  "model": "gpt-5.3-codex-spark",
+  "effort": "minimal"
+}
+```
+
+```sh
+pnpm start --config ./honeycrisp.config.json -p "Goal: Produce a first-run research plan..."
+```
+
+CLI flags such as `--provider`, `--model`, and `--effort` override the config file for a run. The selected provider/model must already be authorized through the auth CLI.
 
 Use `--mock` for deterministic offline practice runs that do not make model calls.
 
