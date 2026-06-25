@@ -15,6 +15,7 @@ import type {
   ResearchMemorySnapshot,
   ResearchSelectedSkill,
   ResearchSkippedToolAction,
+  ResearchStorageLayout,
   ResearchToolBudget,
   ResearchToolAction,
   ResearchToolPermission,
@@ -81,6 +82,7 @@ export interface ResearchFlowCapture {
     candidateToolActions: readonly ResearchToolAction[];
     skippedToolActions: readonly ResearchSkippedToolAction[];
   };
+  storage: ResearchStorageLayout;
   contextV2?: {
     preconsciousCandidateCount: number;
     sections: readonly {
@@ -157,6 +159,7 @@ export function createResearchFlowCapture(
     },
     loop: createLoopCapture(result.loopResult),
     context: createContextCapture(result.decision.contextPacket),
+    storage: result.storageLayout,
     ...(options.contextPacketV2
       ? { contextV2: createContextV2Capture(options.contextPacketV2) }
       : {}),

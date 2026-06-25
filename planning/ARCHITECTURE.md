@@ -283,14 +283,16 @@ A strong cognitive memory layer is not enough for an agent to perform best. Just
 
 Storage should be treated as durable substrate, not cognition. Memory stores indexes, summaries, claims, and pointers; storage preserves full artifacts, raw logs, generated files, datasets, reports, and reproducible scripts.
 
-Recommended storage layout:
+Default storage lives next to the SQLite memory database under `.honeycrisp/memory/`:
 
-- `events/`: append-only event logs and raw transcripts
-- `episodes/`: loop and session summaries linked to event ids
-- `claims/`: semantic claim graph data
-- `procedures/`: reusable runbooks, scripts, and tool recipes
-- `hypotheses/`: active and retired research hypotheses
-- `prospective/`: scheduled follow-ups and monitoring commitments
-- `artifacts/`: reports, generated files, extracted data, and experiment outputs
+- `memory.sqlite`: durable memory event and record metadata.
+- `events/`: append-only event logs, raw transcripts, and event-adjacent file payloads.
+- `episodes/`: loop and session summaries linked to event ids.
+- `claims/`: semantic claim graph data, citations, support links, and contradiction material.
+- `procedures/`: reusable runbooks, scripts, tool recipes, and known recovery patterns.
+- `hypotheses/`: active and retired research hypotheses with evidence for and against.
+- `prospective/`: scheduled follow-ups, monitoring commitments, and future checks.
+- `artifacts/`: reports, generated files, extracted data, raw tool outputs, and experiment outputs.
+- `scratch/`: miscellaneous persistent workspace files that are not yet structured elsewhere.
 
-The memory controller should store pointers to files rather than copying large artifacts into model context.
+The memory controller should store summaries, claims, decisions, procedures, commitments, and pointers to files rather than copying large artifacts into model context. Anything that should be recalled later belongs in memory, including paths or artifact references for persisted files. Storage is for full file contents, blobs, binaries, logs, generated artifacts, and other non-memory objects.

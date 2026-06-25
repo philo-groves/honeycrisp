@@ -136,6 +136,12 @@ function createRequiredContext(
       required: true,
     },
     {
+      label: "storage",
+      description: "Persistent file storage directories and memory-vs-storage rules.",
+      itemCount: 1,
+      required: true,
+    },
+    {
       label: "direct_evidence",
       description: "Evidence records selected for this loop.",
       itemCount: packet.directEvidence.length,

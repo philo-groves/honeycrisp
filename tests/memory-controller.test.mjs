@@ -334,8 +334,10 @@ test("Pi loop executor makes model calls and exposes execution metadata", async 
     },
   });
 
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-storage-context-"));
   const result = await bootstrapResearchRun({
     prompt: "Goal: Exercise a Pi-backed model executor\nScope constraints: test only",
+    workspaceRoot,
     loopExecutor: executor,
     goalRun: {
       maxLoops: 1,
@@ -348,7 +350,11 @@ test("Pi loop executor makes model calls and exposes execution metadata", async 
   assert.equal(capturedOptions.maxTokens, 321);
   assert.equal(capturedOptions.reasoning, "low");
   assert.match(capturedContext.systemPrompt, /Honeycrisp/);
+  assert.match(capturedContext.systemPrompt, /Use memory for recallable facts/);
   assert.match(capturedContext.messages[0]?.content, /Visible Research Trace/);
+  assert.match(capturedContext.messages[0]?.content, /### storage \(required\)/);
+  assert.match(capturedContext.messages[0]?.content, /"events"/);
+  assert.match(capturedContext.messages[0]?.content, /"scratch"/);
   assert.equal(
     result.loopResult.output.researchTrace?.observations[0]?.text,
     "The mocked model path executed with the compiled context.",
@@ -368,6 +374,20 @@ test("Pi loop executor makes model calls and exposes execution metadata", async 
   const capture = createResearchFlowCapture(result);
   assert.equal(capture.loop.executionMode, "model");
   assert.equal(capture.loop.raw.responseId, "resp_mock_model");
+  assert.equal(capture.storage.rootPath, join(workspaceRoot, ".honeycrisp", "memory"));
+  assert.deepEqual(
+    capture.storage.directories.map((directory) => directory.name),
+    [
+      "events",
+      "episodes",
+      "claims",
+      "procedures",
+      "hypotheses",
+      "prospective",
+      "artifacts",
+      "scratch",
+    ],
+  );
   assert.ok(
     capture.eventTimeline.some(
       (event) =>

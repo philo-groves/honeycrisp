@@ -739,6 +739,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 
     const result = await bootstrapResearchRun({
       prompt: args.prompt,
+      workspaceRoot: args.workspaceRoot,
       successGates: args.successGates,
       failureOrStopGates: args.failureOrStopGates,
       scopeConstraints: args.scopeConstraints,

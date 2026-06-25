@@ -21,6 +21,7 @@ import {
   type ResearchToolExecutionRecord,
   type ResearchToolRegistry,
 } from "./tool-registry.js";
+import { createResearchStorageLayout } from "./storage.js";
 import { runAgentLoop } from "@earendil-works/pi-agent-core";
 import type {
   AgentEvent,
@@ -42,12 +43,14 @@ import type {
   ResearchLoopModelInput,
   ResearchLoopPlan,
   ResearchLoopProcessingResult,
+  ResearchStorageLayout,
   ResearchTrace,
 } from "./types.js";
 
 export interface ProcessResearchLoopInput {
   loopPlan: ResearchLoopPlan;
   executor?: ResearchLoopExecutor;
+  storageLayout?: ResearchStorageLayout;
   signal?: AbortSignal;
 }
 
@@ -55,13 +58,17 @@ export async function processResearchLoop(
   input: ProcessResearchLoopInput,
 ): Promise<ResearchLoopProcessingResult> {
   const startedAt = nowIso();
-  const modelInput = compileLoopModelInput(input.loopPlan);
+  const storageLayout = input.storageLayout ?? createResearchStorageLayout();
+  const modelInput = compileLoopModelInput(input.loopPlan, {
+    storageLayout,
+  });
   const executor = input.executor ?? createDeterministicLoopExecutor();
 
   try {
     const output = await executor.execute({
       loopPlan: input.loopPlan,
       modelInput,
+      storageLayout,
       ...(input.signal ? { signal: input.signal } : {}),
     });
     const completedAt = nowIso();
@@ -109,12 +116,18 @@ export async function processResearchLoop(
 
 export function compileLoopModelInput(
   loopPlan: ResearchLoopPlan,
+  options: {
+    storageLayout?: ResearchStorageLayout;
+  } = {},
 ): ResearchLoopModelInput {
+  const storageLayout = options.storageLayout ?? createResearchStorageLayout();
+
   return {
     loopPrompt: loopPlan.loopPrompt,
-    contextSections: createLoopContextSections(loopPlan),
+    contextSections: createLoopContextSections(loopPlan, storageLayout),
     permittedToolClasses: loopPlan.permittedToolClasses,
     toolBudget: loopPlan.actionBudget,
+    storageLayout,
   };
 }
 
@@ -540,6 +553,7 @@ export function inferResearchLoopExecutionMode(
 
 function createLoopContextSections(
   loopPlan: ResearchLoopPlan,
+  storageLayout: ResearchStorageLayout,
 ): ResearchLoopContextSection[] {
   const packet = loopPlan.contextPacket;
   return [
@@ -552,6 +566,11 @@ function createLoopContextSections(
       label: "active_sub_goal",
       required: true,
       content: packet.activeSubGoal,
+    },
+    {
+      label: "storage",
+      required: true,
+      content: storageLayout,
     },
     {
       label: "direct_evidence",
@@ -690,6 +709,7 @@ function createPiSystemPrompt(hasTools: boolean): string {
     "You are Honeycrisp, a goal-oriented research agent built on Pi.",
     "Execute only the current bounded loop. Preserve evidence, inference, hypotheses, uncertainty, and user commitments as distinct categories.",
     "Do not claim that files were inspected unless evidence is present in the supplied context.",
+    "Use memory for recallable facts, summaries, decisions, commitments, procedures, and paths to persisted files; use storage only for durable files, blobs, artifacts, binaries, raw logs, and other non-memory objects.",
     hasTools
       ? "Use available tool calls for permitted bounded actions. Do not print tool-call JSON when native tool calls are available."
       : "If a tool action is needed but unavailable, return a concise tool action JSON object before explaining the blocker.",

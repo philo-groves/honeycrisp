@@ -601,6 +601,7 @@ export interface ResearchRequiredContextSection {
   label:
     | "goal_frame"
     | "active_sub_goal"
+    | "storage"
     | "direct_evidence"
     | "prior_observations"
     | "candidate_procedures"
@@ -615,6 +616,31 @@ export interface ResearchRequiredContextSection {
   description: string;
   itemCount: number;
   required: boolean;
+}
+
+export type ResearchStorageDirectoryName =
+  | "events"
+  | "episodes"
+  | "claims"
+  | "procedures"
+  | "hypotheses"
+  | "prospective"
+  | "artifacts"
+  | "scratch";
+
+export interface ResearchStorageDirectory {
+  name: ResearchStorageDirectoryName;
+  path: string;
+  purpose: string;
+}
+
+export interface ResearchStorageLayout {
+  schemaVersion: 1;
+  rootPath: string;
+  databasePath: string;
+  artifactDirectoryPath: string;
+  directories: readonly ResearchStorageDirectory[];
+  rules: readonly string[];
 }
 
 export interface ResearchLoopPlan {
@@ -657,11 +683,13 @@ export interface ResearchLoopModelInput {
   contextSections: readonly ResearchLoopContextSection[];
   permittedToolClasses: readonly ResearchActionClass[];
   toolBudget: ResearchToolBudget;
+  storageLayout: ResearchStorageLayout;
 }
 
 export interface ResearchLoopExecutionInput {
   loopPlan: ResearchLoopPlan;
   modelInput: ResearchLoopModelInput;
+  storageLayout: ResearchStorageLayout;
   signal?: AbortSignal;
 }
 

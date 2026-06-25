@@ -72,6 +72,13 @@ export type {
 } from "./flow-capture.js";
 export { createResearchGoalFrame } from "./goal.js";
 export {
+  createResearchStorageLayout,
+  ensureResearchStorageLayout,
+  findResearchStorageDirectory,
+  getDefaultMemoryArtifactDirectoryPath,
+  getDefaultMemoryDatabasePath,
+} from "./storage.js";
+export {
   advanceGoalRunState,
   appendGoalContinuationToLoopPlan,
   createGoalIteration,
@@ -188,8 +195,6 @@ export {
   computeMemoryEventPayloadHash,
   createMemorySnapshotFromEventLog,
   createSqliteMemoryEventLog,
-  getDefaultMemoryArtifactDirectoryPath,
-  getDefaultMemoryDatabasePath,
   SqliteMemoryEventLog,
   validateMemoryEventForAppend,
 } from "./memory-event-log.js";
@@ -321,6 +326,9 @@ export type {
   ResearchRawEventPayload,
   ResearchSemanticClaimRecord,
   ResearchSelectedSkill,
+  ResearchStorageDirectory,
+  ResearchStorageDirectoryName,
+  ResearchStorageLayout,
   ResearchLoopPlan,
   ResearchLoopContextSection,
   ResearchLoopExecutionMode,

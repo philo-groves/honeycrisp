@@ -8,6 +8,12 @@ import {
 import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 import {
+  createResearchStorageLayout,
+  ensureResearchStorageLayout,
+  getDefaultMemoryArtifactDirectoryPath as getDefaultMemoryArtifactDirectoryPathFromStorage,
+  getDefaultMemoryDatabasePath as getDefaultMemoryDatabasePathFromStorage,
+} from "./storage.js";
+import {
   isResearchEventId,
   normalizeResearchEventSequence,
 } from "./ids.js";
@@ -20,11 +26,10 @@ import type {
   ResearchEvent,
   ResearchEventSequence,
   ResearchMemorySnapshot,
+  ResearchStorageLayout,
 } from "./types.js";
 
 const CURRENT_EVENT_SCHEMA_VERSION = 1;
-const DEFAULT_DATABASE_RELATIVE_PATH = ".honeycrisp/memory/memory.sqlite";
-const DEFAULT_ARTIFACT_RELATIVE_PATH = ".honeycrisp/memory/artifacts";
 const DEFAULT_LARGE_PAYLOAD_THRESHOLD_BYTES = 16_384;
 
 const require = createRequire(import.meta.url);
@@ -81,13 +86,13 @@ export function createSqliteMemoryEventLog(
 }
 
 export function getDefaultMemoryDatabasePath(workspaceRoot: string): string {
-  return resolve(workspaceRoot, DEFAULT_DATABASE_RELATIVE_PATH);
+  return getDefaultMemoryDatabasePathFromStorage(workspaceRoot);
 }
 
 export function getDefaultMemoryArtifactDirectoryPath(
   workspaceRoot: string,
 ): string {
-  return resolve(workspaceRoot, DEFAULT_ARTIFACT_RELATIVE_PATH);
+  return getDefaultMemoryArtifactDirectoryPathFromStorage(workspaceRoot);
 }
 
 export function createMemorySnapshotFromEventLog(
@@ -147,6 +152,7 @@ export function computeMemoryEventPayloadHash(payload: unknown): string {
 export class SqliteMemoryEventLog implements MemoryEventLog {
   readonly databasePath: string;
   readonly artifactDirectoryPath: string;
+  readonly storageLayout: ResearchStorageLayout;
 
   private readonly database: DatabaseSync;
   private readonly rejectionHooks: readonly MemoryEventRejectionHook[];
@@ -159,12 +165,17 @@ export class SqliteMemoryEventLog implements MemoryEventLog {
     this.artifactDirectoryPath =
       options.artifactDirectoryPath ??
       getDefaultMemoryArtifactDirectoryPath(workspaceRoot);
+    this.storageLayout = createResearchStorageLayout({
+      workspaceRoot,
+      databasePath: this.databasePath,
+      artifactDirectoryPath: this.artifactDirectoryPath,
+    });
     this.rejectionHooks = options.rejectionHooks ?? [];
     this.largePayloadThresholdBytes =
       options.largePayloadThresholdBytes ??
       DEFAULT_LARGE_PAYLOAD_THRESHOLD_BYTES;
 
-    ensureMemoryDirectories(this.databasePath, this.artifactDirectoryPath);
+    ensureMemoryDirectories(this.storageLayout);
 
     const { DatabaseSync } = require("node:sqlite") as {
       DatabaseSync: new (path: string) => DatabaseSync;
@@ -560,14 +571,8 @@ function spillLargeToolResultPayload(
   };
 }
 
-function ensureMemoryDirectories(
-  databasePath: string,
-  artifactDirectoryPath: string,
-): void {
-  if (databasePath !== ":memory:") {
-    mkdirSync(dirname(databasePath), { recursive: true });
-  }
-  mkdirSync(artifactDirectoryPath, { recursive: true });
+function ensureMemoryDirectories(storageLayout: ResearchStorageLayout): void {
+  ensureResearchStorageLayout(storageLayout);
 }
 
 function rowToEvent(row: Record<string, unknown>): ResearchEvent {

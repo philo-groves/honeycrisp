@@ -13,6 +13,10 @@ import {
   inferResearchLoopExecutionMode,
   processResearchLoop,
 } from "./loop-processor.js";
+import {
+  createResearchStorageLayout,
+  ensureResearchStorageLayout,
+} from "./storage.js";
 import { routeEventsToMemorySnapshot } from "./memory-routing.js";
 import { createFirstRunMemoryController } from "./memory-controller.js";
 import { createResearchTraceEventsFromLoopResult } from "./research-trace.js";
@@ -32,11 +36,14 @@ import type {
   ResearchMemoryStoreKind,
   ResearchSelectedSkill,
   ResearchSkillDescriptor,
+  ResearchStorageLayout,
   ResearchToolDescriptor,
 } from "./types.js";
 
 export interface BootstrapResearchRunInput extends ResearchGoalFrameOptions {
   prompt: string;
+  workspaceRoot?: string;
+  storageLayout?: ResearchStorageLayout;
   events?: readonly ResearchEvent[];
   memory?: Partial<ResearchMemorySnapshot>;
   tools?: readonly ResearchToolDescriptor[];
@@ -56,6 +63,7 @@ export interface BootstrapResearchRunResult {
   loopResults: readonly ResearchLoopProcessingResult[];
   events: readonly ResearchEvent[];
   memory: ResearchMemorySnapshot;
+  storageLayout: ResearchStorageLayout;
   piBase: {
     agentCorePackage: "@earendil-works/pi-agent-core";
     aiPackage: "@earendil-works/pi-ai";
@@ -67,6 +75,12 @@ export interface BootstrapResearchRunResult {
 export async function bootstrapResearchRun(
   input: BootstrapResearchRunInput,
 ): Promise<BootstrapResearchRunResult> {
+  const storageLayout = ensureResearchStorageLayout(
+    input.storageLayout ??
+      createResearchStorageLayout({
+        ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+      }),
+  );
   let goalFrame = createResearchGoalFrame(input.prompt, input);
   const events: ResearchEvent[] = [
     ...(input.events ?? []),
@@ -115,11 +129,12 @@ export async function bootstrapResearchRun(
     loopResult = await processResearchLoop({
       loopPlan,
       ...(input.loopExecutor ? { executor: input.loopExecutor } : {}),
+      storageLayout,
     });
     loopResults.push(loopResult);
 
     events.push(createMemoryDecisionEvent(goalFrame.root.id, decision));
-    events.push(createContextCompiledEvent(goalFrame.root.id, decision));
+    events.push(createContextCompiledEvent(goalFrame.root.id, decision, storageLayout));
     events.push(createLoopPlannedEvent(goalFrame.root.id, loopPlan));
     events.push(...(loopResult.output.toolEvents ?? []));
     events.push(createLoopProcessedEvent(goalFrame.root.id, loopResult));
@@ -191,6 +206,7 @@ export async function bootstrapResearchRun(
     loopResults,
     events,
     memory,
+    storageLayout,
     piBase: {
       agentCorePackage: "@earendil-works/pi-agent-core",
       aiPackage: "@earendil-works/pi-ai",
@@ -225,6 +241,7 @@ function createMemoryDecisionEvent(
 function createContextCompiledEvent(
   goalId: string,
   decision: ResearchMemoryControllerDecision,
+  storageLayout: ResearchStorageLayout,
 ): ResearchEvent {
   return {
     id: createResearchEventId(),
@@ -241,6 +258,7 @@ function createContextCompiledEvent(
       toolPermissions: decision.contextPacket.toolPermissions,
       candidateToolActions: decision.contextPacket.candidateToolActions,
       skippedToolActions: decision.contextPacket.skippedToolActions,
+      storage: storageLayout,
     },
   };
 }
