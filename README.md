@@ -94,6 +94,12 @@ uncertainty, not private model thought traces.
 
 Storage lives beside durable memory under `.honeycrisp/memory/`. The runtime creates `events/`, `episodes/`, `claims/`, `procedures/`, `hypotheses/`, `prospective/`, `artifacts/`, and `scratch/`; large raw outputs and generated artifacts are recorded in `.honeycrisp/memory/artifacts/manifest.json` with hashes and event provenance. Memory should store recallable facts and pointers to files; storage should hold full files, blobs, binaries, logs, and generated artifacts.
 
+External interfaces such as Beale should treat Honeycrisp as the source of truth for general agent state: goals, subgoals, memory records, findings, proof state, storage refs, context usage, and tool traces. Interface-specific program setup, visualization, disclosure/export/report flows, and domain overlays can stay outside Honeycrisp. Legacy interface records can be migrated by exporting Honeycrisp event JSON/JSONL and importing it with:
+
+```sh
+pnpm start memory import-events legacy-events.jsonl --workspace-root /path/to/workspace --json
+```
+
 An end-to-end real health check should use the same integrated path users rely on:
 
 ```sh

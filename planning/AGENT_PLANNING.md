@@ -251,19 +251,21 @@ Checklist:
 
 Finish the migration by tightening Beale to a Honeycrisp interface and documenting remaining boundaries.
 
-Status: not started.
+Status: completed.
+
+Implementation note: Beale now treats old Beale general research records as compatibility/migration input, not as the primary research memory. New Beale workspaces no longer create benchmark-era tables; existing workspaces remain readable. A Beale compatibility export converts legacy hypotheses, evidence, findings, verifier contracts, and verifier runs into Honeycrisp JSONL events and imports them through `honeycrisp memory import-events`, preserving Honeycrisp's append-only event flow. The final real UI health check ran against `/Users/philogroves/maxtac-resources/zsh` as `run_mqtxgp9i_f60512fea153`, completed through Honeycrisp host-process transport, recorded nonzero context/token usage, updated Honeycrisp memory to 219 events/records, and verified Context, Trace, memory, findings, proof-state, heatmap/session, storage, and directory surfaces in Beale.
 
 Checklist:
 
-- [ ] Remove unused Beale schema tables from new workspace initialization where safe, while preserving old-workspace recovery.
-- [ ] Add a compatibility layer for old workspaces that have Beale hypotheses/findings/evidence but no Honeycrisp equivalents.
-- [ ] Provide a one-time migration/export path from Beale general research records into Honeycrisp memory events and records.
-- [ ] Keep Beale disclosure/export/report tables and vulnerability-specific overlays separate from Honeycrisp memory.
-- [ ] Update Beale README or docs to describe Beale as a Honeycrisp research interface.
-- [ ] Update Honeycrisp README or docs to describe Beale integration expectations.
-- [ ] Run full Honeycrisp and Beale suites.
-- [ ] Run a final real Beale/Honeycrisp session with a local repo and verify context, memory, findings, proof state, heatmap, storage, and trace display.
-- [ ] Remove obsolete planning notes or mark them superseded by this plan.
+- [x] Remove unused Beale schema tables from new workspace initialization where safe, while preserving old-workspace recovery.
+- [x] Add a compatibility layer for old workspaces that have Beale hypotheses/findings/evidence but no Honeycrisp equivalents.
+- [x] Provide a one-time migration/export path from Beale general research records into Honeycrisp memory events and records.
+- [x] Keep Beale disclosure/export/report tables and vulnerability-specific overlays separate from Honeycrisp memory.
+- [x] Update Beale README or docs to describe Beale as a Honeycrisp research interface.
+- [x] Update Honeycrisp README or docs to describe Beale integration expectations.
+- [x] Run full Honeycrisp and Beale suites.
+- [x] Run a final real Beale/Honeycrisp session with a local repo and verify context, memory, findings, proof state, heatmap, storage, and trace display.
+- [x] Remove obsolete planning notes or mark them superseded by this plan.
 
 ## Non-Goals For This Plan
 

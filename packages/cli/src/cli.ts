@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
@@ -21,6 +21,7 @@ import {
   createResearchFlowCapture,
   createResearchGoalFrame,
   createResearchStorageLayout,
+  createDeterministicMemoryWritePipeline,
   createResearchToolRegistry,
   createResearchWorkspaceContext,
   createMcpResearchTools,
@@ -35,6 +36,7 @@ import {
   listAuthProviders,
   loadResearchSkillsFromDirectory,
   loadResearchStorageManifest,
+  registerResearchStorageArtifactRef,
   loadResearchMcpClientConfig,
   loadResearchExperimentConfig,
   loadResearchModelConfig,
@@ -1198,6 +1200,17 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
   });
 
   try {
+    if (args.command === "import-events") {
+      const result = await importMemoryEvents(args, {
+        eventLog,
+        recordStore,
+        proofStore,
+        inspector,
+      });
+      printMemoryOutput(args, result, renderMemoryImportResult);
+      return;
+    }
+
     if (isMemorySteeringCommand(args.command)) {
       const result = handleMemorySteeringCommand(args, steering);
       printMemoryOutput(
@@ -1700,6 +1713,7 @@ function memoryUsage(): string {
     "  proof-obligation <id>      Show one proof obligation",
     "  proof-attempts             Show proof attempts",
     "  proof-attempt <id>         Show one proof attempt",
+    "  import-events <file>       Import validated JSON/JSONL Honeycrisp memory events",
     "  promote-hypothesis <id>    Promote a hypothesis record to a finding",
     "  review-record <id>         Review a hypothesis/finding/record status",
     "  reject-record <id>         Reject a hypothesis/finding/record",
@@ -1746,6 +1760,123 @@ function isMemorySteeringCommand(
     command === "review-proof-attempt" ||
     command === "mark-artifact"
   );
+}
+
+interface MemoryImportStores {
+  eventLog: ReturnType<typeof createSqliteMemoryEventLog>;
+  recordStore: ReturnType<typeof createSqliteMemoryRecordStore>;
+  proofStore: ReturnType<typeof createSqliteProofStore>;
+  inspector: ReturnType<typeof createMemoryInspector>;
+}
+
+interface MemoryImportResult {
+  action: "import-events";
+  importPath: string;
+  loadedEvents: number;
+  appendedEvents: number;
+  skippedExistingEvents: number;
+  recordsWritten: number;
+  proofObjectsUpdated: number;
+  events: readonly ResearchEvent[];
+  records: readonly {
+    id: string;
+    kind: string;
+    status: string;
+    summary: string;
+  }[];
+  agentState: ReturnType<ReturnType<typeof createMemoryInspector>["showAgentState"]>;
+}
+
+async function importMemoryEvents(
+  args: ParsedMemoryArgs,
+  stores: MemoryImportStores,
+): Promise<MemoryImportResult> {
+  const importPath = resolve(
+    args.workspaceRoot,
+    requireMemoryPositional(args, "import-events <json-or-jsonl-file>"),
+  );
+  const events = parseMemoryImportEvents(
+    await readFile(importPath, "utf8"),
+    importPath,
+  );
+  const newEvents = events.filter((event) => !stores.eventLog.getById(event.id));
+  const appended = stores.eventLog.appendMany(newEvents);
+  const writePipeline = createDeterministicMemoryWritePipeline();
+  const derivedRecords = writePipeline.deriveMany(appended);
+  const recordsToWrite = derivedRecords.filter(
+    (record) => !stores.recordStore.getById(record.id),
+  );
+  if (recordsToWrite.length > 0) {
+    stores.recordStore.writeMany(recordsToWrite);
+  }
+
+  let proofObjectsUpdated = 0;
+  for (const event of appended) {
+    proofObjectsUpdated += stores.proofStore.applyEvent(event).length;
+    for (const artifactRef of event.artifactRefs ?? []) {
+      registerResearchStorageArtifactRef(
+        createResearchStorageLayout({ workspaceRoot: args.workspaceRoot }),
+        artifactRef,
+        [event.id],
+      );
+    }
+  }
+
+  return {
+    action: "import-events",
+    importPath,
+    loadedEvents: events.length,
+    appendedEvents: appended.length,
+    skippedExistingEvents: events.length - appended.length,
+    recordsWritten: recordsToWrite.length,
+    proofObjectsUpdated,
+    events: appended,
+    records: recordsToWrite.map((record) => ({
+      id: record.id,
+      kind: record.kind,
+      status: record.status,
+      summary: record.summary,
+    })),
+    agentState: stores.inspector.showAgentState({
+      storage: createMemoryCommandStorageReadModel(args),
+    }),
+  };
+}
+
+function parseMemoryImportEvents(
+  text: string,
+  importPath: string,
+): ResearchEvent[] {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const parsed = trimmed.startsWith("[")
+    ? (JSON.parse(trimmed) as unknown)
+    : trimmed
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line, index) => {
+          try {
+            return JSON.parse(line) as unknown;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`${importPath}:${index + 1}: ${message}`);
+          }
+        });
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("memory import-events expects a JSON array or JSONL event stream.");
+  }
+
+  return parsed.map((item, index) => {
+    if (!isRecord(item)) {
+      throw new Error(`memory import-events item ${index + 1} is not an object.`);
+    }
+    return item as unknown as ResearchEvent;
+  });
 }
 
 function handleMemorySteeringCommand(
@@ -1986,6 +2117,24 @@ function renderMemorySteeringResult(input: {
     );
   }
   return lines.join("\n");
+}
+
+function renderMemoryImportResult(input: MemoryImportResult): string {
+  return [
+    `Action: ${input.action}`,
+    `Import: ${input.importPath}`,
+    `Events: ${input.appendedEvents} appended, ${input.skippedExistingEvents} skipped, ${input.loadedEvents} loaded`,
+    `Records written: ${input.recordsWritten}`,
+    `Proof objects updated: ${input.proofObjectsUpdated}`,
+    ...(input.records.length > 0
+      ? [
+          "Records:",
+          ...input.records.map((record) =>
+            `${record.kind}\t${record.status}\t${record.id}\t${record.summary}`,
+          ),
+        ]
+      : []),
+  ].join("\n");
 }
 
 function createMemoryCommandStorageReadModel(args: ParsedMemoryArgs) {

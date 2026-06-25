@@ -17,8 +17,8 @@ The current runtime has the integrated first slice of the architecture in place:
 
 - Real CLI runs use durable SQLite memory by default, append accepted events during each loop, consolidate derived records, retrieve before later loops, and capture context packet v2 plus memory-controller metadata.
 - General agent-state contracts are owned by Honeycrisp. Evidence, episodes, semantic claims, hypotheses, findings, beliefs, procedures, prospective checks, proof state, storage refs, goal state, and context usage should be exposed through Honeycrisp APIs/CLI rather than reimplemented by client interfaces.
-- Findings are first-class durable memory records. The event log accepts finding proposal/update/review events, the write pipeline derives finding records, lifecycle helpers promote/reject/supersede/tombstone/delete findings, retrieval ranks supported findings separately from hypotheses, and context packet v2 exposes a `current_findings` section.
-- Proof state is durable and domain-neutral. The event log accepts proof request/attempt/observation/review events, the proof store persists obligations and attempts in the memory SQLite database, proof artifacts are linked through artifact refs, and context packet v2 exposes a `proof_state` section.
+- Findings are first-class durable memory records. The event log accepts finding proposal/update/review events, the write pipeline derives finding records, lifecycle helpers and CLI commands promote/reject/supersede/tombstone/delete findings, retrieval ranks supported findings separately from hypotheses, and context packet v2 exposes a `current_findings` section.
+- Proof state is durable and domain-neutral. The event log accepts proof request/attempt/observation/review events, the proof store persists obligations and attempts in the memory SQLite database, proof artifacts are linked through artifact refs, steering commands can request/review proof state, and context packet v2 exposes a `proof_state` section.
 - Built-in tools are registered through the tool registry, governed by side-effect and budget policy, emitted as `tool.requested` and `tool.observed` events, and routed through the memory write pipeline.
 - Local MCP servers can be configured through an explicit stdio JSON-RPC config and allowlist. MCP outputs are treated as untrusted external content.
 - Local skills can be loaded from `SKILL.md` directories, selected by id, and injected as bounded runtime context without overriding governance.
@@ -28,7 +28,7 @@ The current runtime has the integrated first slice of the architecture in place:
 
 Known limitations after this slice:
 
-- Proof/verifier steering APIs for UI-driven review remain future work, but durable proof obligations and attempts are available through the proof store and memory CLI.
+- Richer proof/verifier UI workflows remain interface work, but Honeycrisp exposes durable proof obligations, proof attempts, and review commands through the proof store and memory CLI.
 - MCP support currently targets configured stdio servers; richer transport management, authentication handoff, and long-lived server health monitoring remain future work.
 - Experiment tools are allowlisted and auditable, but they are not a security sandbox. Operators must still choose safe commands and working directories.
 - Memory retrieval is sparse/structured and graph-aware enough for the current integration path; dense embedding retrieval and more advanced utility learning remain future work.
@@ -275,6 +275,8 @@ Honeycrisp should expose a durable read model for external interfaces. That read
 - storage directories and artifact refs
 
 Interfaces such as Beale should use this read model for general research state. Beale can still own program/project setup, prompt drafting, visualization, and domain-specific export or disclosure workflows. Beale should not maintain parallel general research ledgers, semantic memory, repository guard policy, VM sandbox policy, or benchmark runtimes when those concerns belong to Honeycrisp or to the operator's chosen environment.
+
+Legacy interface records should cross this boundary as Honeycrisp events, not direct SQLite writes. A client may export JSON/JSONL events and call `honeycrisp memory import-events`; Honeycrisp remains responsible for validation, append-only ordering, derived records, artifact refs, and proof-state updates.
 
 ## Tool Layer
 

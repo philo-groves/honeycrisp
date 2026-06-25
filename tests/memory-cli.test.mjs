@@ -573,6 +573,77 @@ test("memory CLI prints recall, context, decision, and debug capture data", asyn
   proofStore.close();
 });
 
+test("memory CLI imports JSONL events into records and proof state", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-import-"));
+  const importPath = join(workspaceRoot, "legacy-events.jsonl");
+  const events = [
+    createEvent("model.hypothesis", {
+      hypothesis: "Legacy parser hypothesis.",
+      confidence: 0.61,
+    }),
+    createEvent("tool.observed", {
+      summary: "Legacy parser evidence was observed.",
+      confidence: 0.95,
+      result: { source: "legacy" },
+    }),
+    createEvent("finding.updated", {
+      finding: "Legacy parser finding.",
+      findingStatus: "supported",
+      evidenceRefIds: ["legacy_evidence"],
+      confidence: 0.82,
+    }),
+    createEvent("proof.requested", {
+      obligationId: "proof_obl_import",
+      subject: {
+        kind: "external",
+        id: "legacy_finding",
+      },
+      question: "Can the legacy finding be reproduced?",
+      acceptableMethods: [{ kind: "human_review", name: "Legacy review" }],
+      requiredResult: "pass",
+    }),
+    createEvent("proof.observed", {
+      attemptId: "proof_attempt_import",
+      obligationId: "proof_obl_import",
+      status: "completed",
+      result: "pass",
+      method: { kind: "human_review", name: "Legacy review" },
+      summary: "Legacy proof passed.",
+    }),
+  ];
+  await writeFile(importPath, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+
+  const imported = runMemoryCliJson(
+    "import-events",
+    importPath,
+    "--workspace-root",
+    workspaceRoot,
+  );
+  const secondImport = runMemoryCliJson(
+    "import-events",
+    importPath,
+    "--workspace-root",
+    workspaceRoot,
+  );
+  const agentState = runMemoryCliJson(
+    "agent-state",
+    "--workspace-root",
+    workspaceRoot,
+  );
+
+  assert.equal(imported.loadedEvents, 5);
+  assert.equal(imported.appendedEvents, 5);
+  assert.ok(imported.recordsWritten >= 3);
+  assert.equal(imported.proofObjectsUpdated, 2);
+  assert.equal(secondImport.appendedEvents, 0);
+  assert.equal(secondImport.skippedExistingEvents, 5);
+  assert.equal(agentState.memory.hypotheses.length, 1);
+  assert.equal(agentState.memory.evidence.length, 1);
+  assert.equal(agentState.memory.findings[0]?.findingStatus, "supported");
+  assert.equal(agentState.proof.obligations[0]?.id, "proof_obl_import");
+  assert.equal(agentState.proof.attempts[0]?.result, "pass");
+});
+
 test("memory CLI steers hypothesis and finding lifecycle mutations", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-steer-"));
   const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
