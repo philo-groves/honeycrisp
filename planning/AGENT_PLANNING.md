@@ -178,19 +178,21 @@ Checklist:
 
 Remove the Beale VM/sandbox implementation and make execution posture explicit: users can run Beale/Honeycrisp in their own isolation environment when needed.
 
-Status: not started.
+Status: completed.
+
+Implementation note: Beale no longer creates or manages VM/Docker sandboxes. Honeycrisp launches as the user's host process, Beale records that execution posture in traces and UI copy, and operators are responsible for launching Beale/Honeycrisp inside an external VM or container when OS isolation is required. The Phase 7 UI health check launched a real Honeycrisp session through Beale on the ZSH workspace; the first attempt correctly exposed a missing-auth environment when run under a temporary `HOME`, and the authenticated rerun completed with host-process traces, visible Honeycrisp output, and nonzero context/token accounting.
 
 Checklist:
 
-- [ ] Remove VM preference settings and sandbox setup UI.
-- [ ] Remove executor manager, vmctl provider, Docker sandbox provider, executor run engine, and host/guest import/export abstractions from Beale agent execution.
-- [ ] Remove network-profile enforcement and approval gates that existed only for Beale's VM sandbox model.
-- [ ] Remove VM context lifecycle behavior from active Beale Honeycrisp sessions or reduce it to a simple host-process execution record.
-- [ ] Update Beale copy to say Honeycrisp runs with the user's chosen host privileges and should be launched inside a VM/container if isolation is desired.
-- [ ] Preserve artifact collection through Honeycrisp storage instead of Beale guest export.
-- [ ] Update tests that currently assert VM/sandbox behavior.
-- [ ] Ensure Beale still launches Honeycrisp and displays traces/context without executor dependencies.
-- [ ] Run a real Beale/Honeycrisp session after removal.
+- [x] Remove VM preference settings and sandbox setup UI.
+- [x] Remove executor manager, vmctl provider, Docker sandbox provider, executor run engine, and host/guest import/export abstractions from Beale agent execution.
+- [x] Remove network-profile enforcement and approval gates that existed only for Beale's VM sandbox model.
+- [x] Remove VM context lifecycle behavior from active Beale Honeycrisp sessions or reduce it to a simple host-process execution record.
+- [x] Update Beale copy to say Honeycrisp runs with the user's chosen host privileges and should be launched inside a VM/container if isolation is desired.
+- [x] Preserve artifact collection through Honeycrisp storage instead of Beale guest export.
+- [x] Update tests that currently assert VM/sandbox behavior.
+- [x] Ensure Beale still launches Honeycrisp and displays traces/context without executor dependencies.
+- [x] Run a real Beale/Honeycrisp session after removal.
 
 ## Phase 8: Remove Beale Benchmark And CyberGym Era Code
 
