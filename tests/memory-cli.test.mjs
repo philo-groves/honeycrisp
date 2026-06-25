@@ -68,18 +68,26 @@ test("main CLI persists top-level runtime tool events to sqlite", async () => {
     },
   );
   const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
+  const recordStore = createSqliteMemoryRecordStore({ workspaceRoot });
   const toolEvents = eventLog
     .listAll()
     .filter((event) => event.kind === "tool.requested" || event.kind === "tool.observed");
+  const toolRecords = recordStore
+    .list()
+    .filter((record) => record.sourceEventIds.includes(toolEvents[1]?.id));
 
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(toolEvents.map((event) => event.kind), [
-    "tool.requested",
-    "tool.observed",
-  ]);
-  assert.match(toolEvents[1]?.payload.summary, /cli parser evidence/);
-
-  eventLog.close();
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(toolEvents.map((event) => event.kind), [
+      "tool.requested",
+      "tool.observed",
+    ]);
+    assert.match(toolEvents[1]?.payload.summary, /cli parser evidence/);
+    assert.ok(toolRecords.some((record) => record.kind === "evidence"));
+  } finally {
+    eventLog.close();
+    recordStore.close();
+  }
 });
 
 test("main CLI rejects retired run-mode flags with migration hints", () => {

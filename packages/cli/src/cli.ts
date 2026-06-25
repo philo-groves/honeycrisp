@@ -778,11 +778,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         : {}),
       ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
       loopExecutor,
+      durableMemory: true,
       ...(args.goalLoops !== undefined
         ? { goalRun: { maxLoops: args.goalLoops } }
         : {}),
     });
-    persistTopLevelRunEvents(args.workspaceRoot, result.events);
 
     if (args.capturePath) {
       const capturePath = await writeFlowCapture(
@@ -810,18 +810,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`honeycrisp: ${message}`);
     process.exitCode = 1;
-  }
-}
-
-function persistTopLevelRunEvents(
-  workspaceRoot: string,
-  events: readonly ResearchEvent[],
-): void {
-  const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
-  try {
-    eventLog.appendMany(events);
-  } finally {
-    eventLog.close();
   }
 }
 

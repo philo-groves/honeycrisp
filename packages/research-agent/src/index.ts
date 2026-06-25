@@ -26,6 +26,8 @@ export { bootstrapResearchRun } from "./bootstrap.js";
 export type {
   BootstrapResearchRunInput,
   BootstrapResearchRunResult,
+  ResearchDurableMemoryIntegrationOptions,
+  ResearchDurableMemoryRunSummary,
 } from "./bootstrap.js";
 export {
   loadResearchModelConfig,

@@ -99,6 +99,17 @@ export interface ResearchFlowCapture {
       }[];
     }[];
   };
+  memoryIntegration?: {
+    enabled: boolean;
+    databasePath?: string;
+    eventLogCount: number;
+    recordCount: number;
+    eventsAppended: number;
+    recordsWritten: number;
+    latestRetrievalCandidateCount: number;
+    usedMemoryDrivenController: boolean;
+    usedFirstRunFallback: boolean;
+  };
   memory: {
     counts: {
       eventLog: number;
@@ -127,6 +138,9 @@ export function createResearchFlowCapture(
     contextPacketV2?: ResearchContextPacketV2;
   } = {},
 ): ResearchFlowCapture {
+  const contextPacketV2 =
+    options.contextPacketV2 ?? result.durableMemory?.latestContextPacketV2;
+
   return {
     schemaVersion: 1,
     capturedAt: options.capturedAt ?? nowIso(),
@@ -160,11 +174,32 @@ export function createResearchFlowCapture(
     loop: createLoopCapture(result.loopResult),
     context: createContextCapture(result.decision.contextPacket),
     storage: result.storageLayout,
-    ...(options.contextPacketV2
-      ? { contextV2: createContextV2Capture(options.contextPacketV2) }
+    ...(contextPacketV2
+      ? { contextV2: createContextV2Capture(contextPacketV2) }
+      : {}),
+    ...(result.durableMemory
+      ? { memoryIntegration: createMemoryIntegrationCapture(result.durableMemory) }
       : {}),
     memory: createMemoryCapture(result.memory),
     eventTimeline: result.events.map(captureEvent),
+  };
+}
+
+function createMemoryIntegrationCapture(
+  durableMemory: NonNullable<BootstrapResearchRunResult["durableMemory"]>,
+): NonNullable<ResearchFlowCapture["memoryIntegration"]> {
+  return {
+    enabled: durableMemory.enabled,
+    ...(durableMemory.databasePath
+      ? { databasePath: durableMemory.databasePath }
+      : {}),
+    eventLogCount: durableMemory.eventLogCount,
+    recordCount: durableMemory.recordCount,
+    eventsAppended: durableMemory.eventsAppended,
+    recordsWritten: durableMemory.recordsWritten,
+    latestRetrievalCandidateCount: durableMemory.latestRetrievalCandidateCount,
+    usedMemoryDrivenController: durableMemory.usedMemoryDrivenController,
+    usedFirstRunFallback: durableMemory.usedFirstRunFallback,
   };
 }
 

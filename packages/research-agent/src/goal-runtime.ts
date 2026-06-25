@@ -290,7 +290,9 @@ function createGoalUpdatedEvent(input: {
       statusBefore: input.statusBefore,
       statusAfter: input.statusAfter,
       loopsUsed: input.state.loopsUsed,
-      terminalReason: input.state.terminalReason,
+      ...(input.state.terminalReason
+        ? { terminalReason: input.state.terminalReason }
+        : {}),
       loopResultId: input.loopResultId,
       summary: `Goal ${input.statusBefore} -> ${input.statusAfter}: ${input.rationale}`,
       rationale: input.rationale,
