@@ -265,6 +265,9 @@ function scoreActionClasses(
   const hasScope = scopeConstraints.length > 0;
   const hasInspectTool = supportsAction(tools, "inspect", governance);
   const hasSearchTool = supportsAction(tools, "search", governance);
+  const hasExperimentTool = supportsAction(tools, "experiment", governance);
+  const hasRecallTool = supportsAction(tools, "recall", governance);
+  const hasAnalyzeTool = supportsAction(tools, "analyze", governance);
   const noExternalSearch = scopeConstraints.some((constraint) =>
     /no external search|do not search|no network|do not scan networks/i.test(
       constraint,
@@ -294,6 +297,27 @@ function scoreActionClasses(
         hasSearchTool && !noExternalSearch
           ? "Search is available and not excluded by scope constraints."
           : "Search is unavailable or excluded by scope constraints.",
+    },
+    {
+      actionClass: "experiment",
+      score: hasExperimentTool ? 59 : 0,
+      rationale: hasExperimentTool
+        ? "An experiment-capable tool is available for a bounded probe or computation."
+        : "No experiment-capable tool is currently available.",
+    },
+    {
+      actionClass: "recall",
+      score: hasRecallTool ? 58 : 0,
+      rationale: hasRecallTool
+        ? "A recall-capable tool is available to retrieve prior evidence before synthesis."
+        : "No recall-capable tool is currently available.",
+    },
+    {
+      actionClass: "analyze",
+      score: hasAnalyzeTool ? 57 : 0,
+      rationale: hasAnalyzeTool
+        ? "An analysis-capable tool is available for deterministic transformation."
+        : "No analysis-capable tool is currently available.",
     },
     {
       actionClass: "synthesize",
@@ -431,6 +455,15 @@ function createSubGoalObjective(
   if (actionClass === "search") {
     return `Gather first external evidence for: ${rootObjective}`;
   }
+  if (actionClass === "experiment") {
+    return `Run a bounded experiment for: ${rootObjective}`;
+  }
+  if (actionClass === "recall") {
+    return `Recall relevant prior evidence for: ${rootObjective}`;
+  }
+  if (actionClass === "analyze") {
+    return `Analyze available evidence for: ${rootObjective}`;
+  }
 
   return `Prepare an initial research plan for: ${rootObjective}`;
 }
@@ -444,6 +477,15 @@ function createSubGoalRationale(actionClass: ResearchActionClass): string {
   }
   if (actionClass === "search") {
     return "External search can reduce uncertainty when allowed by scope.";
+  }
+  if (actionClass === "experiment") {
+    return "A bounded experiment is available and can produce direct, auditable output.";
+  }
+  if (actionClass === "recall") {
+    return "Recall can surface prior evidence before the loop makes new claims.";
+  }
+  if (actionClass === "analyze") {
+    return "Deterministic analysis can transform available inputs into checkable evidence.";
   }
 
   return "With no retrieved memory and no executable evidence tools selected, synthesis produces the next bounded plan.";
@@ -474,7 +516,13 @@ function createExpectedArtifacts(
   if (actionClass === "ask_user") {
     return ["scope clarification request"];
   }
-  if (actionClass === "inspect" || actionClass === "search") {
+  if (
+    actionClass === "inspect" ||
+    actionClass === "search" ||
+    actionClass === "experiment" ||
+    actionClass === "recall" ||
+    actionClass === "analyze"
+  ) {
     return ["evidence notes", "candidate claims"];
   }
 

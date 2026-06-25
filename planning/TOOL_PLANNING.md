@@ -41,11 +41,12 @@ The project already has a first executable tool slice:
 - Built-in tool families can now be registered from the library layer for memory recall, repository search, structured file reads, deterministic analysis transforms, allowlisted experiments, and deterministic synthesis. Each built-in preserves a canonical dotted Honeycrisp name plus a provider-safe transport alias.
 - A Pi Agent lifecycle executor is available from the library layer. It maps Honeycrisp tools to Pi `AgentTool`s, uses Agent tool hooks for governance preflight and event capture, supports sequential or parallel tool batches, and keeps the older `completeSimple` executor as the fallback/default path.
 - The CLI can configure tool families, side-effect and budget governance, selected local skills, MCP server allowlists, and the Agent executor. `honeycrisp tools list` exposes the configured registry, MCP allowlist status, and selected skills, and flow captures include runtime tool configuration metadata.
+- Tool evaluation harnesses now cover local vulnerability research, mathematics/puzzle computation, investigation recall/synthesis, MCP discovery/execution fixtures, local skill fixtures, blocked tool paths, multi-call loops, and artifact-heavy output spill behavior.
 
 Known limitations to address:
 
 - The CLI supports local inspection, repository search, file read, analysis, and synthesis families; allowlisted experiment functions still need a safer operator configuration shape.
-- MCP server allowlists are visible in CLI config and capture output, but live MCP client discovery still requires a configured client integration.
+- MCP server allowlists are visible in CLI config and capture output, and evaluation fixtures exercise MCP discovery/execution, but live MCP client discovery still requires a configured client integration.
 
 ## Phase 1: Core Tool Contract And Local Inspection Bridge
 
@@ -278,14 +279,24 @@ Verification:
 
 Create small repeatable evaluation harnesses for tool behavior across domains so tool calling remains reliable as the agent becomes more general.
 
+Status: completed on 2026-06-24.
+
 Checklist:
 
-- [ ] Add a local vulnerability-research tool harness.
-- [ ] Add a mathematics or puzzle-solving tool harness.
-- [ ] Add an investigation/evidence-synthesis tool harness.
-- [ ] Add fixtures for MCP tool discovery and execution.
-- [ ] Add fixtures for skill selection and instruction injection.
-- [ ] Track event-log and memory consequences for each harness.
-- [ ] Add regression tests for tool-call loops that require multiple tool calls.
-- [ ] Add regression tests for blocked or denied tool paths.
-- [ ] Add regression tests for artifact-heavy tool outputs.
+- [x] Add a local vulnerability-research tool harness.
+- [x] Add a mathematics or puzzle-solving tool harness.
+- [x] Add an investigation/evidence-synthesis tool harness.
+- [x] Add fixtures for MCP tool discovery and execution.
+- [x] Add fixtures for skill selection and instruction injection.
+- [x] Track event-log and memory consequences for each harness.
+- [x] Add regression tests for tool-call loops that require multiple tool calls.
+- [x] Add regression tests for blocked or denied tool paths.
+- [x] Add regression tests for artifact-heavy tool outputs.
+
+Verification:
+
+- `pnpm test` passed with 109 tests on 2026-06-24.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/zsh-honeycrisp-runs/16-real-tool-harness.json`.
+- The health check used the real `openai-codex/gpt-5.3-codex-spark` Agent executor with the local vulnerability-research harness against `/Users/philogroves/maxtac-resources/zsh/zsh`.
+- The real run completed one `repository.search` call with no blocked tool events, produced Agent lifecycle metadata, selected `harness-vulnerability`, and routed the search observation into memory.
+- The zsh evidence included `Src/context.c:67` and `Src/parse.c:295` for `parse_context_save`, confirming the harness can inspect real outputs and preserve memory consequences.
