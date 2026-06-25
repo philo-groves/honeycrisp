@@ -264,7 +264,7 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(
     payload.tools.map((tool) => tool.name).sort(),
-    ["analysis.transform", "repository.search", "storage.list"],
+    ["analysis.transform", "file.read", "repository.search", "storage.list"],
   );
   assert.deepEqual(payload.governance.allowedSideEffects, ["read"]);
   assert.equal(payload.governance.maxToolCalls, 2);
@@ -279,7 +279,7 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
   assert.deepEqual(payload.skills.selectedIds, ["parser-cli"]);
 });
 
-test("tools CLI honors disabled tool families and reports missing required roots", async () => {
+test("tools CLI honors disabled tool families and treats repository roots as context hints", async () => {
   const repoRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tools-disabled-"));
   const disabled = runTopCli([
     "tools",
@@ -288,21 +288,37 @@ test("tools CLI honors disabled tool families and reports missing required roots
     repoRoot,
     "--disable-tool-family",
     "repository-search",
+    "--disable-tool-family",
+    "file-read",
     "--json",
   ]);
   const disabledPayload = JSON.parse(disabled.stdout);
-  const missingRoot = runTopCli([
+  const workspaceDefault = runTopCli([
     "tools",
     "list",
     "--tool-family",
     "repository-search",
+    "--workspace-root",
+    repoRoot,
+    "--json",
   ]);
+  const workspaceDefaultPayload = JSON.parse(workspaceDefault.stdout);
 
   assert.equal(disabled.status, 0, disabled.stderr);
   assert.deepEqual(disabledPayload.tools, []);
-  assert.deepEqual(disabledPayload.toolFamilies.disabled, ["repository-search"]);
-  assert.equal(missingRoot.status, 1);
-  assert.match(missingRoot.stderr, /repository-search requires --repo-root/);
+  assert.deepEqual(disabledPayload.toolFamilies.disabled, [
+    "repository-search",
+    "file-read",
+  ]);
+  assert.equal(workspaceDefault.status, 0, workspaceDefault.stderr);
+  assert.deepEqual(
+    workspaceDefaultPayload.tools.map((tool) => tool.name),
+    ["repository.search"],
+  );
+  assert.equal(
+    workspaceDefaultPayload.workspaceContext.workspaceRoot,
+    repoRoot,
+  );
 });
 
 test("tools CLI requires experiment config and lists configured experiments", async () => {

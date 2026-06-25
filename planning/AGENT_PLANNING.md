@@ -121,18 +121,18 @@ Checklist:
 
 Replace restrictive Beale repository guards with explicit workspace/repository context that guides the agent without locking it into a narrow path model.
 
-Status: not started.
+Status: completed.
 
 Checklist:
 
-- [ ] Define a Honeycrisp workspace context packet containing workspace root, memory/storage paths, known repositories, materialized source paths, and user-provided project notes.
-- [ ] Treat repository paths as discoverability hints and persistence locations, not as authorization fences.
-- [ ] Adjust Beale's Honeycrisp invocation to pass known repo/source locations in prompt/capture metadata or a structured config file instead of relying on restrictive file-read roots.
-- [ ] Keep Honeycrisp storage instructions clear: memory stores recallable facts and file pointers; storage preserves files, blobs, reports, logs, generated outputs, and scratch material.
-- [ ] Ensure repository search and file-read tools can operate from operator-provided workspace context while still preserving audit events.
-- [ ] Remove Beale UI language that implies the repo list is a hard permission boundary.
-- [ ] Add tests that a Beale-launched Honeycrisp run receives repository/storage context and can recover from nested source layouts.
-- [ ] Run a real ZSH health check verifying Honeycrisp finds nested files from context without Beale-specific repository guard logic.
+- [x] Define a Honeycrisp workspace context packet containing workspace root, memory/storage paths, known repositories, materialized source paths, and user-provided project notes.
+- [x] Treat repository paths as discoverability hints and persistence locations, not as authorization fences.
+- [x] Adjust Beale's Honeycrisp invocation to pass known repo/source locations in prompt/capture metadata or a structured config file instead of relying on restrictive file-read roots.
+- [x] Keep Honeycrisp storage instructions clear: memory stores recallable facts and file pointers; storage preserves files, blobs, reports, logs, generated outputs, and scratch material.
+- [x] Ensure repository search and file-read tools can operate from operator-provided workspace context while still preserving audit events.
+- [x] Remove Beale UI language that implies the repo list is a hard permission boundary.
+- [x] Add tests that a Beale-launched Honeycrisp run receives repository/storage context and can recover from nested source layouts.
+- [x] Run a real ZSH health check verifying Honeycrisp finds nested files from context without Beale-specific repository guard logic.
 
 ## Phase 5: Beale Reads Honeycrisp Memory As Source Of Truth
 

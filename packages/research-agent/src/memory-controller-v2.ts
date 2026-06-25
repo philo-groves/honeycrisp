@@ -19,6 +19,7 @@ import type {
   ResearchSubGoal,
   ResearchToolBudget,
   ResearchToolDescriptor,
+  ResearchWorkspaceContext,
 } from "./types.js";
 import type { ResearchContextPacketV2 } from "./context-packet-v2.js";
 
@@ -27,6 +28,7 @@ const DEFAULT_WRITEBACK = ["event", "working", "episodic"] as const;
 export interface MemoryDrivenControllerInput {
   goalFrame: ResearchGoalFrame;
   activeGoal?: ResearchGoalNode;
+  workspaceContext?: ResearchWorkspaceContext;
   retrieval?: MemoryRetrievalResult;
   memory?: Partial<ResearchMemorySnapshot>;
   events?: readonly ResearchEvent[];
@@ -81,6 +83,9 @@ export class MemoryDrivenController {
       goalFrame: input.goalFrame,
       activeGoal,
       activeSubGoal: subGoal,
+      ...(input.workspaceContext
+        ? { workspaceContext: input.workspaceContext }
+        : {}),
       retrieval,
       tools,
       ...(input.governance ? { governance: input.governance } : {}),
@@ -117,6 +122,9 @@ export class MemoryDrivenController {
     const fallback = createFirstRunMemoryController().decide({
       goalFrame: input.goalFrame,
       activeGoal,
+      ...(input.workspaceContext
+        ? { workspaceContext: input.workspaceContext }
+        : {}),
       ...(input.memory ? { memory: input.memory } : {}),
       ...(tools.length > 0 ? { tools } : {}),
       ...(input.governance ? { governance: input.governance } : {}),
@@ -125,6 +133,9 @@ export class MemoryDrivenController {
       goalFrame: input.goalFrame,
       activeGoal,
       activeSubGoal: fallback.subGoal,
+      ...(input.workspaceContext
+        ? { workspaceContext: input.workspaceContext }
+        : {}),
       retrieval,
       tools,
       ...(input.governance ? { governance: input.governance } : {}),

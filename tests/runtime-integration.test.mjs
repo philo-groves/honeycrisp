@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,10 +8,14 @@ import {
   bootstrapResearchRun,
   createDeterministicLoopExecutor,
   createLocalInspectionTool,
+  createRepositorySearchTool,
   createResearchFlowCapture,
+  createResearchStorageLayout,
   createResearchToolRegistry,
+  createResearchWorkspaceContext,
   createSqliteMemoryEventLog,
   createSqliteMemoryRecordStore,
+  createStructuredFileReadTool,
 } from "../packages/research-agent/dist/index.js";
 
 test("durable bootstrap writes records and retrieves them between loops", async () => {
@@ -88,4 +92,93 @@ test("durable bootstrap writes records and retrieves them between loops", async 
     eventLog.close();
     recordStore.close();
   }
+});
+
+test("bootstrap run exposes workspace context with repository and source hints", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runtime-workspace-context-"));
+  const sourceRoot = join(workspaceRoot, "sources", "zsh");
+  await mkdir(join(sourceRoot, "Src"), { recursive: true });
+  await writeFile(
+    join(sourceRoot, "Src", "placeholder.txt"),
+    "placeholder\n",
+  );
+  const storageLayout = createResearchStorageLayout({ workspaceRoot });
+  const workspaceContext = createResearchWorkspaceContext({
+    workspaceRoot,
+    storageLayout,
+    knownRepositories: [
+      {
+        rootPath: sourceRoot,
+        role: "known_repository",
+        source: "cli",
+        label: "ZSH fixture",
+      },
+    ],
+    materializedSourcePaths: [sourceRoot],
+    projectNotes: ["Apple Security Bounty test project"],
+  });
+  const repositorySearch = createRepositorySearchTool({ roots: [sourceRoot] });
+  const fileRead = createStructuredFileReadTool({ contextRoots: [sourceRoot] });
+
+  const result = await bootstrapResearchRun({
+    prompt: "Goal: Inspect nested ZSH source context",
+    workspaceRoot,
+    storageLayout,
+    workspaceContext,
+    durableMemory: true,
+    tools: [repositorySearch.descriptor, fileRead.descriptor],
+    goalRun: {
+      maxLoops: 1,
+    },
+  });
+  const capture = createResearchFlowCapture(result);
+  const compiledContextEvent = result.events.find(
+    (event) => event.kind === "context.compiled",
+  );
+
+  assert.equal(result.workspaceContext.workspaceRoot, workspaceRoot);
+  assert.equal(capture.workspaceContext.knownRepositories[0]?.rootPath, sourceRoot);
+  assert.equal(capture.context.workspaceContext?.materializedSourcePaths[0], sourceRoot);
+  assert.ok(
+    capture.contextV2?.sections.some(
+      (section) =>
+        section.label === "workspace_context" && section.itemCount === 1,
+    ),
+  );
+  assert.equal(
+    compiledContextEvent?.payload.workspaceContext.knownRepositories[0].rootPath,
+    sourceRoot,
+  );
+});
+
+test("durable bootstrap omits absent optional loop trace payload fields", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runtime-no-trace-"));
+  const executor = {
+    name: "no-trace-fixture",
+    async execute() {
+      return {
+        text: "Completed without visible trace JSON.",
+        artifacts: [],
+        evidenceRefs: [],
+        claimRefs: [],
+        followUpActions: [],
+      };
+    },
+  };
+
+  const result = await bootstrapResearchRun({
+    prompt: "Goal: Complete without model-visible trace",
+    workspaceRoot,
+    durableMemory: true,
+    loopExecutor: executor,
+    goalRun: {
+      maxLoops: 1,
+    },
+  });
+  const loopProcessed = result.events.find(
+    (event) => event.kind === "loop.processed",
+  );
+
+  assert.equal(loopProcessed?.payload.summary, "Completed without visible trace JSON.");
+  assert.equal(Object.hasOwn(loopProcessed?.payload ?? {}, "researchTrace"), false);
 });

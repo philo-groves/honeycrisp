@@ -89,6 +89,18 @@ export type {
   ResearchFlowCapture,
   ResearchFlowEventCapture,
 } from "./flow-capture.js";
+export {
+  createResearchWorkspaceContext,
+  loadResearchWorkspaceContextFile,
+  mergeResearchWorkspaceContexts,
+  workspaceContextFileReadHints,
+} from "./workspace-context.js";
+export type {
+  CreateResearchWorkspaceContextInput,
+  MergeResearchWorkspaceContextInput,
+  ResearchWorkspaceContextOverlay,
+  WorkspaceRepositoryInput,
+} from "./workspace-context.js";
 export { createResearchGoalFrame } from "./goal.js";
 export {
   createResearchStorageLayout,
@@ -426,6 +438,10 @@ export type {
   ResearchStorageDirectoryName,
   ResearchStorageLayout,
   ResearchStorageReadModel,
+  ResearchWorkspaceContext,
+  ResearchWorkspaceRepositoryContext,
+  ResearchWorkspaceRepositoryRole,
+  ResearchWorkspaceStorageContext,
   ResearchContextUsageReadModel,
   ResearchLoopPlan,
   ResearchLoopContextSection,

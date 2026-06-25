@@ -21,6 +21,7 @@ import {
   createResearchGoalFrame,
   createResearchStorageLayout,
   createResearchToolRegistry,
+  createResearchWorkspaceContext,
   createMcpResearchTools,
   createStorageListTool,
   createStructuredFileReadTool,
@@ -35,11 +36,14 @@ import {
   loadResearchMcpClientConfig,
   loadResearchExperimentConfig,
   loadResearchModelConfig,
+  loadResearchWorkspaceContextFile,
   loginAuthProvider,
   logoutAuthProvider,
+  mergeResearchWorkspaceContexts,
   resolveResearchModelConfig,
   routeEventsToMemorySnapshot,
   verifyProviderAuth,
+  workspaceContextFileReadHints,
   writeResearchModelConfig,
 } from "@honeycrisp/research-agent";
 import type {
@@ -59,6 +63,7 @@ import type {
   ResearchToolDescriptor,
   ResearchToolSideEffect,
   ResearchToolRegistry,
+  ResearchWorkspaceContext,
 } from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
@@ -80,6 +85,9 @@ interface RuntimeToolConfig {
   disabledToolFamilies: readonly ToolFamily[];
   repoRoots: readonly string[];
   fileReadRoots: readonly string[];
+  sourcePaths: readonly string[];
+  projectNotes: readonly string[];
+  workspaceContextPath?: string;
   allowedSideEffects: readonly ResearchToolSideEffect[];
   allowedMcpServers: readonly string[];
   mcpConfigPath?: string;
@@ -178,6 +186,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   const disabledToolFamilies: ToolFamily[] = [];
   const repoRoots: string[] = [];
   const fileReadRoots: string[] = [];
+  const sourcePaths: string[] = [];
+  const projectNotes: string[] = [];
+  let workspaceContextPath: string | undefined;
   const allowedSideEffects: ResearchToolSideEffect[] = [];
   const allowedMcpServers: string[] = [];
   let mcpConfigPath: string | undefined;
@@ -286,6 +297,15 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--file-read-root") {
       fileReadRoots.push(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--source-path") {
+      sourcePaths.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--project-note") {
+      projectNotes.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--workspace-context") {
+      workspaceContextPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--allowed-side-effect") {
       allowedSideEffects.push(parseToolSideEffect(readOptionValue(argv, index, arg)));
       index += 1;
@@ -373,6 +393,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       disabledToolFamilies,
       repoRoots,
       fileReadRoots,
+      sourcePaths,
+      projectNotes,
+      ...(workspaceContextPath ? { workspaceContextPath } : {}),
       allowedSideEffects,
       allowedMcpServers,
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
@@ -506,6 +529,9 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   const disabledToolFamilies: ToolFamily[] = [];
   const repoRoots: string[] = [];
   const fileReadRoots: string[] = [];
+  const sourcePaths: string[] = [];
+  const projectNotes: string[] = [];
+  let workspaceContextPath: string | undefined;
   const allowedSideEffects: ResearchToolSideEffect[] = [];
   const allowedMcpServers: string[] = [];
   let mcpConfigPath: string | undefined;
@@ -548,6 +574,15 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       index += 1;
     } else if (arg === "--file-read-root") {
       fileReadRoots.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--source-path") {
+      sourcePaths.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--project-note") {
+      projectNotes.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--workspace-context") {
+      workspaceContextPath = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--allowed-side-effect") {
       allowedSideEffects.push(parseToolSideEffect(readOptionValue(argv, index, arg)));
@@ -603,6 +638,9 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       disabledToolFamilies,
       repoRoots,
       fileReadRoots,
+      sourcePaths,
+      projectNotes,
+      ...(workspaceContextPath ? { workspaceContextPath } : {}),
       allowedSideEffects,
       allowedMcpServers,
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
@@ -776,8 +814,11 @@ function usage(): string {
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
     "  --tool-family <name>   Enable local-inspection, repository-search, file-read, analysis, synthesis, storage, or experiment",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
-    "  --repo-root <path>     Enable repository.search for this root unless disabled",
-    "  --file-read-root <p>   Enable file.read for this allowed root unless disabled",
+    "  --repo-root <path>     Add a known repository context hint and enable repository.search unless disabled",
+    "  --file-read-root <p>   Add a file.read context hint and enable file.read unless disabled",
+    "  --source-path <path>   Add a materialized source context path",
+    "  --project-note <text>  Add a project/workspace note to the context packet",
+    "  --workspace-context <p> JSON workspace context file to merge with CLI hints",
     "  --allowed-side-effect <s> Allow tool side effect: none, read, write, network, process",
     "  --tool-max-calls <n>   Max tool calls for governance",
     "  --tool-runtime-ms <n>  Max runtime per tool call in milliseconds",
@@ -909,6 +950,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         evidenceRequirements: args.evidenceRequirements,
         initialRiskFlags: args.initialRiskFlags,
         userPreferences: args.userPreferences,
+        workspaceContext: runtimeConfig.workspaceContext,
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
         ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
@@ -1412,8 +1454,11 @@ function toolsUsage(): string {
     "Options:",
     "  --tool-family <name>        Enable local-inspection, repository-search, file-read, analysis, synthesis, storage, or experiment",
     "  --disable-tool-family <n>   Disable a tool family after implicit/default enables",
-    "  --repo-root <path>          Enable repository.search for this root unless disabled",
-    "  --file-read-root <path>     Enable file.read for this allowed root unless disabled",
+    "  --repo-root <path>          Add a known repository context hint and enable repository.search unless disabled",
+    "  --file-read-root <path>     Add a file.read context hint and enable file.read unless disabled",
+    "  --source-path <path>        Add a materialized source context path",
+    "  --project-note <text>       Add a project/workspace note to the context packet",
+    "  --workspace-context <path>  JSON workspace context file to merge with CLI hints",
     "  --inspect-root <path>       Enable local.inspection for this root unless disabled",
     "  --allowed-side-effect <s>   Allow side effect: none, read, write, network, process",
     "  --tool-max-calls <n>        Max tool calls",
@@ -1826,6 +1871,7 @@ async function createRuntimeConfig(args: {
   toolRegistry: ResearchToolRegistry | undefined;
   skills: ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
+  workspaceContext: ResearchWorkspaceContext;
   capture: Record<string, unknown>;
   cleanup?: () => Promise<void>;
 }> {
@@ -1836,6 +1882,29 @@ async function createRuntimeConfig(args: {
   const skills = loadCliSkills(args.runtimeTools.skillDirs);
   const governance = createCliGovernance(args.runtimeTools);
   const cleanupCallbacks: (() => Promise<void>)[] = [];
+  const storageLayout = createResearchStorageLayout({
+    workspaceRoot: args.workspaceRoot ?? process.cwd(),
+  });
+  const workspaceContext = mergeResearchWorkspaceContexts({
+    base: createResearchWorkspaceContext({
+      workspaceRoot: args.workspaceRoot ?? process.cwd(),
+      storageLayout,
+      knownRepositories: args.runtimeTools.repoRoots.map((root) => ({
+        rootPath: root,
+        role: "known_repository",
+        source: "cli",
+      })),
+      materializedSourcePaths: args.runtimeTools.sourcePaths,
+      projectNotes: args.runtimeTools.projectNotes,
+    }),
+    ...(args.runtimeTools.workspaceContextPath
+      ? {
+          overlay: loadResearchWorkspaceContextFile(
+            args.runtimeTools.workspaceContextPath,
+          ),
+        }
+      : {}),
+  });
   const mcpCapture = await configureRuntimeMcpTools({
     runtimeTools: args.runtimeTools,
     executableTools,
@@ -1872,21 +1941,8 @@ async function createRuntimeConfig(args: {
   }
 
   if (families.has("repository-search")) {
-    if (args.runtimeTools.repoRoots.length === 0) {
-      throw new Error("repository-search requires --repo-root.");
-    }
-
-    if (args.runtimeTools.repoRoots.length > 1) {
-      throw new Error("repository-search currently accepts one --repo-root.");
-    }
-
-    const root = args.runtimeTools.repoRoots[0];
-    if (!root) {
-      throw new Error("repository-search requires --repo-root.");
-    }
-
     const tool = createRepositorySearchTool({
-      root,
+      roots: repositorySearchRootsFromWorkspaceContext(workspaceContext),
       ...(args.runtimeTools.toolMaxBytes
         ? { maxFileBytes: args.runtimeTools.toolMaxBytes }
         : {}),
@@ -1896,12 +1952,8 @@ async function createRuntimeConfig(args: {
   }
 
   if (families.has("file-read")) {
-    if (args.runtimeTools.fileReadRoots.length === 0) {
-      throw new Error("file-read requires at least one --file-read-root.");
-    }
-
     const tool = createStructuredFileReadTool({
-      allowedRoots: args.runtimeTools.fileReadRoots,
+      contextRoots: workspaceContextFileReadHints(workspaceContext),
       ...(args.runtimeTools.toolMaxBytes
         ? { maxBytes: args.runtimeTools.toolMaxBytes }
         : {}),
@@ -1928,9 +1980,7 @@ async function createRuntimeConfig(args: {
     }
     const tool = createConfiguredExperimentTool({
       config: loadResearchExperimentConfig(args.runtimeTools.experimentConfigPath),
-      storageLayout: createResearchStorageLayout({
-        workspaceRoot: args.workspaceRoot ?? process.cwd(),
-      }),
+      storageLayout,
     });
     executableTools.push(tool);
     toolDescriptors.push(tool.descriptor);
@@ -1938,9 +1988,7 @@ async function createRuntimeConfig(args: {
 
   if (families.has("storage")) {
     const tool = createStorageListTool({
-      storageLayout: createResearchStorageLayout({
-        workspaceRoot: args.workspaceRoot ?? process.cwd(),
-      }),
+      storageLayout,
     });
     executableTools.push(tool);
     toolDescriptors.push(tool.descriptor);
@@ -1956,12 +2004,14 @@ async function createRuntimeConfig(args: {
         : undefined,
     skills,
     governance,
+    workspaceContext,
     capture: createRuntimeCapture({
       families,
       args,
       tools: toolDescriptors,
       skills,
       governance,
+      workspaceContext,
       ...(mcpCapture ? { mcpCapture } : {}),
     }),
     ...(cleanupCallbacks.length > 0
@@ -2053,7 +2103,18 @@ function resolveEnabledToolFamilies(args: {
   if (args.runtimeTools.repoRoots.length > 0) {
     families.add("repository-search");
   }
-  if (args.runtimeTools.fileReadRoots.length > 0) {
+  if (
+    args.runtimeTools.sourcePaths.length > 0 ||
+    args.runtimeTools.workspaceContextPath
+  ) {
+    families.add("repository-search");
+  }
+  if (
+    args.runtimeTools.fileReadRoots.length > 0 ||
+    args.runtimeTools.repoRoots.length > 0 ||
+    args.runtimeTools.sourcePaths.length > 0 ||
+    args.runtimeTools.workspaceContextPath
+  ) {
     families.add("file-read");
   }
 
@@ -2122,9 +2183,11 @@ function createRuntimeCapture(input: {
   tools: readonly ResearchToolDescriptor[];
   skills: readonly ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
+  workspaceContext: ResearchWorkspaceContext;
   mcpCapture?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
+    workspaceContext: input.workspaceContext,
     tools: input.tools.map((tool) => ({
       name: tool.name,
       transportName: tool.transportName,
@@ -2161,6 +2224,16 @@ function createRuntimeCapture(input: {
       selectedIds: input.args.runtimeTools.selectedSkillIds,
     },
   };
+}
+
+function repositorySearchRootsFromWorkspaceContext(
+  workspaceContext: ResearchWorkspaceContext,
+): string[] {
+  const roots = [
+    ...workspaceContext.knownRepositories.map((repository) => repository.rootPath),
+    ...workspaceContext.materializedSourcePaths,
+  ];
+  return roots.length > 0 ? [...new Set(roots)] : [workspaceContext.workspaceRoot];
 }
 
 async function writeFlowCapture(

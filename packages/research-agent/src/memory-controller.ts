@@ -70,6 +70,9 @@ export class FirstRunMemoryController {
       goalFrame: input.goalFrame,
       activeGoal,
       activeSubGoal: subGoal,
+      ...(input.workspaceContext
+        ? { workspaceContext: input.workspaceContext }
+        : {}),
       memory,
       tools,
       selectedSkills,

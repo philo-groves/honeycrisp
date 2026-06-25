@@ -18,6 +18,7 @@ import {
   ensureResearchStorageLayout,
   registerResearchStorageArtifactRef,
 } from "./storage.js";
+import { createResearchWorkspaceContext } from "./workspace-context.js";
 import type { ResearchContextPacketV2 } from "./context-packet-v2.js";
 import {
   createDeterministicMemoryRetriever,
@@ -68,6 +69,7 @@ import type {
   ResearchStorageLayout,
   ResearchSubGoal,
   ResearchToolDescriptor,
+  ResearchWorkspaceContext,
 } from "./types.js";
 
 export interface ResearchDurableMemoryIntegrationOptions {
@@ -98,6 +100,7 @@ export interface BootstrapResearchRunInput extends ResearchGoalFrameOptions {
   prompt: string;
   workspaceRoot?: string;
   storageLayout?: ResearchStorageLayout;
+  workspaceContext?: ResearchWorkspaceContext;
   durableMemory?: boolean | ResearchDurableMemoryIntegrationOptions;
   events?: readonly ResearchEvent[];
   memory?: Partial<ResearchMemorySnapshot>;
@@ -119,6 +122,7 @@ export interface BootstrapResearchRunResult {
   events: readonly ResearchEvent[];
   memory: ResearchMemorySnapshot;
   storageLayout: ResearchStorageLayout;
+  workspaceContext: ResearchWorkspaceContext;
   durableMemory?: ResearchDurableMemoryRunSummary;
   piBase: {
     agentCorePackage: "@earendil-works/pi-agent-core";
@@ -137,6 +141,12 @@ export async function bootstrapResearchRun(
         ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
     }),
   );
+  const workspaceContext =
+    input.workspaceContext ??
+    createResearchWorkspaceContext({
+      workspaceRoot: input.workspaceRoot ?? process.cwd(),
+      storageLayout,
+    });
   const durableMemory = createDurableMemoryRuntime({
     option: input.durableMemory,
     storageLayout,
@@ -192,6 +202,7 @@ export async function bootstrapResearchRun(
       goalFrame,
       events,
       memory,
+      workspaceContext,
       ...(input.tools ? { tools: input.tools } : {}),
       ...(input.skills ? { skills: input.skills } : {}),
       ...(input.selectedSkillIds
@@ -220,7 +231,9 @@ export async function bootstrapResearchRun(
 
     const iterationEvents: ResearchEvent[] = [];
     iterationEvents.push(createMemoryDecisionEvent(goalFrame.root.id, decision));
-    iterationEvents.push(createContextCompiledEvent(goalFrame.root.id, decision, storageLayout));
+    iterationEvents.push(
+      createContextCompiledEvent(goalFrame.root.id, decision, storageLayout, workspaceContext),
+    );
     iterationEvents.push(createLoopPlannedEvent(goalFrame.root.id, loopPlan));
     iterationEvents.push(...(loopResult.output.toolEvents ?? []));
     iterationEvents.push(createLoopProcessedEvent(goalFrame.root.id, loopResult));
@@ -306,6 +319,7 @@ export async function bootstrapResearchRun(
     events,
     memory,
     storageLayout,
+    workspaceContext,
     ...(durableMemory
       ? { durableMemory: finalizeDurableMemorySummary(durableMemory, durableStats) }
       : {}),
@@ -496,6 +510,9 @@ function decideWithRuntimeMemory(input: {
     goalFrame: input.controllerInput.goalFrame,
     activeGoal: input.controllerInput.activeGoal ?? input.controllerInput.goalFrame.root,
     retrieval,
+    ...(input.controllerInput.workspaceContext
+      ? { workspaceContext: input.controllerInput.workspaceContext }
+      : {}),
     ...(input.controllerInput.memory
       ? { memory: input.controllerInput.memory }
       : {}),
@@ -679,6 +696,7 @@ function createContextCompiledEvent(
   goalId: string,
   decision: ResearchMemoryControllerDecision,
   storageLayout: ResearchStorageLayout,
+  workspaceContext: ResearchWorkspaceContext,
 ): ResearchEvent {
   return {
     id: createResearchEventId(),
@@ -699,6 +717,7 @@ function createContextCompiledEvent(
       candidateToolActions: decision.contextPacket.candidateToolActions,
       skippedToolActions: decision.contextPacket.skippedToolActions,
       storage: storageLayout,
+      workspaceContext,
     },
   };
 }
@@ -794,8 +813,10 @@ function createLoopProcessedEvent(
       artifacts: loopResult.output.artifacts,
       evidenceRefs: loopResult.output.evidenceRefs,
       claimRefs: loopResult.output.claimRefs,
-      researchTrace: loopResult.output.researchTrace,
-      raw: loopResult.output.raw,
+      ...(loopResult.output.researchTrace
+        ? { researchTrace: loopResult.output.researchTrace }
+        : {}),
+      ...(loopResult.output.raw !== undefined ? { raw: loopResult.output.raw } : {}),
       followUpRecommendation: loopResult.followUpRecommendation,
     },
   };

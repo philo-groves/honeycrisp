@@ -104,7 +104,7 @@ test("repository search finds bounded local source matches", async () => {
   }
 });
 
-test("structured file read supports ranges and blocks paths outside roots", async () => {
+test("structured file read supports ranges and annotates paths outside context roots", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-file-read-"));
   const outsideRoot = await mkdtemp(join(tmpdir(), "honeycrisp-file-outside-"));
   const file = join(root, "notes.txt");
@@ -135,6 +135,7 @@ test("structured file read supports ranges and blocks paths outside roots", asyn
     assert.equal(readResult.result.output.truncated, true);
     assert.equal(readResult.result.output.encoding, "utf8");
     assert.equal(readResult.result.output.containsNulByte, false);
+    assert.equal(readResult.result.output.withinContextRoot, true);
 
     const outsideResult = await registry.execute({
       id: "read_2",
@@ -144,8 +145,11 @@ test("structured file read supports ranges and blocks paths outside roots", asyn
         path: outsideFile,
       },
     });
-    assert.equal(outsideResult.result.status, "error");
-    assert.match(outsideResult.result.summary, /outside allowed roots/);
+    assert.equal(outsideResult.result.status, "complete");
+    assert.equal(outsideResult.result.output.text, "outs");
+    assert.equal(outsideResult.result.output.withinContextRoot, false);
+    assert.equal(outsideResult.result.output.root, null);
+    assert.match(outsideResult.result.summary, /outside workspace context hints/);
   } finally {
     await rm(root, {
       recursive: true,

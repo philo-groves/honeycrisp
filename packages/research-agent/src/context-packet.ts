@@ -13,12 +13,14 @@ import type {
   ResearchToolAction,
   ResearchToolDescriptor,
   ResearchToolPermission,
+  ResearchWorkspaceContext,
 } from "./types.js";
 
 export interface CompileContextPacketInput {
   goalFrame: ResearchGoalFrame;
   activeGoal: ResearchGoalNode;
   activeSubGoal: ResearchSubGoal;
+  workspaceContext?: ResearchWorkspaceContext;
   memory: ResearchMemorySnapshot;
   tools: readonly ResearchToolDescriptor[];
   governance?: ResearchGovernancePolicy;
@@ -37,6 +39,9 @@ export function compileContextPacket(
     goalFrame: input.goalFrame,
     activeGoal: input.activeGoal,
     activeSubGoal: input.activeSubGoal,
+    ...(input.workspaceContext
+      ? { workspaceContext: input.workspaceContext }
+      : {}),
     directEvidence: input.memory.directEvidence,
     priorObservations: input.memory.priorEpisodes,
     candidateProcedures: [

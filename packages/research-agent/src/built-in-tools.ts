@@ -96,13 +96,15 @@ export interface BuiltInMemoryRecallToolOptions {
 }
 
 export interface BuiltInRepositorySearchToolOptions {
-  root: string;
+  root?: string;
+  roots?: readonly string[];
   maxResults?: number;
   maxFileBytes?: number;
 }
 
 export interface BuiltInStructuredFileReadToolOptions {
-  allowedRoots: readonly string[];
+  allowedRoots?: readonly string[];
+  contextRoots?: readonly string[];
   maxBytes?: number;
 }
 
@@ -172,19 +174,23 @@ export function createMemoryRecallTool(
 export function createRepositorySearchTool(
   options: BuiltInRepositorySearchToolOptions,
 ): ResearchExecutableTool {
+  const rootHints = uniqueResolvedPaths([
+    ...(options.root ? [options.root] : []),
+    ...(options.roots ?? []),
+  ]);
   const descriptor = createDescriptor({
     name: "repository.search",
     transportName: "repository_search",
     description:
-      "Search text files under an allowed repository root. Use during inspection to locate concrete files before reading them.",
+      "Search text files under repository and source context paths. Use during inspection to locate concrete files before reading them.",
     actionClasses: ["search", "inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
     inputSchema: REPOSITORY_SEARCH_PARAMETERS,
-    artifactLocations: [options.root],
+    artifactLocations: rootHints,
     metadata: {
       provider: "honeycrisp.built_in",
-      safetyProfile: "bounded-filesystem-read",
+      safetyProfile: "workspace-context-filesystem-read",
       defaultBudget: {
         maxToolCalls: 1,
         maxFiles: DEFAULT_MAX_RESULTS,
@@ -204,20 +210,39 @@ export function createRepositorySearchTool(
           action.input.maxResults,
           options.maxResults ?? DEFAULT_MAX_RESULTS,
         );
-        const root = await realpath(resolve(options.root));
-        const matches = await searchRepository(root, query, {
-          maxResults,
-          maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
-        });
+        const roots = await resolveExistingRoots(rootHints);
+        if (roots.length === 0) {
+          throw new Error(
+            "repository.search has no readable repository or source context paths.",
+          );
+        }
+        const matches: {
+          root: string;
+          path: string;
+          line: number;
+          preview: string;
+        }[] = [];
+        for (const root of roots) {
+          if (matches.length >= maxResults) {
+            break;
+          }
+          const rootMatches = await searchRepository(root, query, {
+            maxResults: maxResults - matches.length,
+            maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
+          });
+          matches.push(...rootMatches.map((match) => ({ ...match, root })));
+        }
 
         return completeResult(action, startedAt, {
-          summary: `Repository search found ${matches.length} match(es) for: ${query}`,
+          summary: `Repository search found ${matches.length} match(es) across ${roots.length} context root(s) for: ${query}`,
           output: {
-            root,
+            roots,
             query,
             matches,
           },
-          evidence: matches.map((match) => `${match.path}:${match.line}: ${match.preview}`),
+          evidence: matches.map(
+            (match) => `${match.root}:${match.path}:${match.line}: ${match.preview}`,
+          ),
         });
       });
     },
@@ -227,18 +252,23 @@ export function createRepositorySearchTool(
 export function createStructuredFileReadTool(
   options: BuiltInStructuredFileReadToolOptions,
 ): ResearchExecutableTool {
+  const contextRootHints = uniqueResolvedPaths([
+    ...(options.contextRoots ?? []),
+    ...(options.allowedRoots ?? []),
+  ]);
   const descriptor = createDescriptor({
     name: "file.read",
     transportName: "file_read",
-    description: "Read a bounded byte range from an allowed local file.",
+    description:
+      "Read a bounded byte range from a local file. Workspace context roots are audit hints, not access fences.",
     actionClasses: ["inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
     inputSchema: STRUCTURED_FILE_READ_PARAMETERS,
-    artifactLocations: options.allowedRoots,
+    artifactLocations: contextRootHints,
     metadata: {
       provider: "honeycrisp.built_in",
-      safetyProfile: "bounded-filesystem-read",
+      safetyProfile: "workspace-context-filesystem-read",
       defaultBudget: {
         maxToolCalls: 1,
         maxFiles: 1,
@@ -253,10 +283,8 @@ export function createStructuredFileReadTool(
     async execute(action) {
       const startedAt = nowIso();
       return completeOrError(action, startedAt, async () => {
-        const roots = await Promise.all(
-          options.allowedRoots.map((root) => realpath(resolve(root))),
-        );
-        const target = await resolveAllowedPath(
+        const roots = await resolveExistingRoots(contextRootHints);
+        const target = await resolvePathWithContextRoot(
           readRequiredString(action.input, "path"),
           roots,
         );
@@ -271,11 +299,13 @@ export function createStructuredFileReadTool(
         const truncated = offset + maxBytes < file.length;
 
         return completeResult(action, startedAt, {
-          summary: `Read ${slice.length} byte(s) from ${target.path}${truncated ? " with truncation" : ""}.`,
+          summary: `Read ${slice.length} byte(s) from ${target.path}${truncated ? " with truncation" : ""}${target.root ? "" : " outside workspace context hints"}.`,
           output: {
             requestedPath: action.input.path,
             resolvedPath: target.path,
-            root: target.root,
+            root: target.root ?? null,
+            contextRoots: roots,
+            withinContextRoot: Boolean(target.root),
             offset,
             bytesRead: slice.length,
             totalBytes: file.length,
@@ -645,20 +675,52 @@ async function searchRepository(
   return matches;
 }
 
-async function resolveAllowedPath(
+function uniqueResolvedPaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const path of paths) {
+    const trimmed = path.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const absolute = resolve(trimmed);
+    const key = absolute.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    resolved.push(absolute);
+  }
+  return resolved;
+}
+
+async function resolveExistingRoots(
+  roots: readonly string[],
+): Promise<string[]> {
+  const resolved: string[] = [];
+  for (const root of roots) {
+    const rootPath = await realpath(resolve(root)).catch(() => undefined);
+    if (rootPath) {
+      resolved.push(rootPath);
+    }
+  }
+  return uniqueResolvedPaths(resolved);
+}
+
+async function resolvePathWithContextRoot(
   requestedPath: string,
   roots: readonly string[],
-): Promise<{ path: string; root: string }> {
+): Promise<{ path: string; root?: string }> {
   const target = await realpath(resolve(requestedPath));
   const root = roots.find((candidate) => {
     const relativePath = relative(candidate, target);
     return relativePath === "" || (!relativePath.startsWith("..") && relativePath !== "..");
   });
-  if (!root) {
-    throw new Error(`Path is outside allowed roots: ${requestedPath}`);
-  }
 
-  return { path: target, root };
+  return {
+    path: target,
+    ...(root ? { root } : {}),
+  };
 }
 
 function createTextMetrics(text: string) {

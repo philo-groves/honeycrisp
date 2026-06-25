@@ -136,6 +136,12 @@ function createRequiredContext(
       required: true,
     },
     {
+      label: "workspace_context",
+      description: "Workspace root, storage and memory paths, repository hints, source paths, and project notes.",
+      itemCount: packet.workspaceContext ? 1 : 0,
+      required: true,
+    },
+    {
       label: "storage",
       description: "Persistent file storage directories and memory-vs-storage rules.",
       itemCount: 1,

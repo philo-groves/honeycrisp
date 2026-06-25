@@ -16,9 +16,11 @@ import type {
   ResearchToolBudget,
   ResearchToolDescriptor,
   ResearchToolPermission,
+  ResearchWorkspaceContext,
 } from "./types.js";
 
 export type ResearchContextPacketV2SectionLabel =
+  | "workspace_context"
   | "direct_evidence"
   | "prior_episodes"
   | "candidate_procedures"
@@ -29,6 +31,7 @@ export type ResearchContextPacketV2SectionLabel =
   | "prospective_commitments";
 
 export type ResearchContextPacketV2ItemLabel =
+  | "workspace_context"
   | "direct_evidence"
   | "episode"
   | "procedure"
@@ -43,7 +46,11 @@ export type ResearchContextPacketV2ItemLabel =
 
 export interface ResearchContextPacketV2Item {
   recordId: string;
-  recordKind: ResearchDerivedMemoryRecord["kind"] | "proof_obligation" | "proof_attempt";
+  recordKind:
+    | ResearchDerivedMemoryRecord["kind"]
+    | "proof_obligation"
+    | "proof_attempt"
+    | "workspace_context";
   status:
     | ResearchDerivedMemoryRecord["status"]
     | ResearchProofObligation["status"]
@@ -71,6 +78,7 @@ export interface ResearchContextPacketV2 {
   goalFrame: ResearchGoalFrame;
   activeGoal: ResearchGoalNode;
   activeSubGoal: ResearchSubGoal;
+  workspaceContext?: ResearchWorkspaceContext;
   actionClass?: ResearchActionClass;
   preconsciousCandidateCount: number;
   tokenBudget: number;
@@ -95,6 +103,7 @@ export interface CompileContextPacketV2Input {
   goalFrame: ResearchGoalFrame;
   activeGoal: ResearchGoalNode;
   activeSubGoal: ResearchSubGoal;
+  workspaceContext?: ResearchWorkspaceContext;
   retrieval: MemoryRetrievalResult;
   proofState?: ResearchProofStateReadModel;
   tools: readonly ResearchToolDescriptor[];
@@ -111,6 +120,7 @@ const DEFAULT_SECTION_TOKEN_BUDGETS: Record<
   ResearchContextPacketV2SectionLabel,
   number
 > = {
+  workspace_context: 160,
   direct_evidence: 220,
   prior_episodes: 180,
   candidate_procedures: 160,
@@ -120,7 +130,7 @@ const DEFAULT_SECTION_TOKEN_BUDGETS: Record<
   contradictions_uncertainty: 160,
   prospective_commitments: 120,
 };
-const DEFAULT_CONTEXT_TOKEN_BUDGET = 800;
+const DEFAULT_CONTEXT_TOKEN_BUDGET = 960;
 
 export function compileContextPacketV2(
   input: CompileContextPacketV2Input,
@@ -130,6 +140,10 @@ export function compileContextPacketV2(
     ...(input.sectionTokenBudgets ?? {}),
   };
   const compiledSections: ResearchContextPacketV2Section[] = [
+    compileWorkspaceSection(
+      input.workspaceContext,
+      sectionBudgets.workspace_context,
+    ),
     compileSection(
       "direct_evidence",
       input.retrieval.directEvidence,
@@ -187,6 +201,9 @@ export function compileContextPacketV2(
     goalFrame: input.goalFrame,
     activeGoal: input.activeGoal,
     activeSubGoal: input.activeSubGoal,
+    ...(input.workspaceContext
+      ? { workspaceContext: input.workspaceContext }
+      : {}),
     ...(input.actionClass ? { actionClass: input.actionClass } : {}),
     preconsciousCandidateCount: input.retrieval.candidates.length,
     tokenBudget: acceptedTokenBudget,
@@ -206,6 +223,70 @@ export function compileContextPacketV2(
       "working",
       "episodic",
     ],
+  };
+}
+
+function compileWorkspaceSection(
+  workspaceContext: ResearchWorkspaceContext | undefined,
+  tokenBudget: number,
+): ResearchContextPacketV2Section {
+  if (!workspaceContext) {
+    return {
+      label: "workspace_context",
+      tokenBudget,
+      estimatedTokens: 0,
+      items: [],
+      droppedRecordIds: [],
+    };
+  }
+
+  const summary = truncateToTokenBudget(
+    [
+      `workspace=${workspaceContext.workspaceRoot}`,
+      `memory_db=${workspaceContext.memory.databasePath}`,
+      `storage_root=${workspaceContext.memory.rootPath}`,
+      `artifact_dir=${workspaceContext.memory.artifactDirectoryPath}`,
+      workspaceContext.knownRepositories.length > 0
+        ? `repositories=${workspaceContext.knownRepositories
+            .map((repository) => repository.rootPath)
+            .join(",")}`
+        : "",
+      workspaceContext.materializedSourcePaths.length > 0
+        ? `source_paths=${workspaceContext.materializedSourcePaths.join(",")}`
+        : "",
+      workspaceContext.projectNotes.length > 0
+        ? `notes=${workspaceContext.projectNotes.join(" | ")}`
+        : "",
+      workspaceContext.memory.rules.length > 0
+        ? `storage_rules=${workspaceContext.memory.rules.join(" ")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    tokenBudget,
+  );
+  const item: ResearchContextPacketV2Item = {
+    recordId: `workspace:${workspaceContext.workspaceRoot}`,
+    recordKind: "workspace_context",
+    status: "active",
+    label: "workspace_context",
+    summary,
+    score: 95,
+    sourceEventIds: [],
+    selectionReasons: [
+      "Workspace context is operator-provided run context, not semantic memory.",
+      "Repository and source paths are discoverability hints and persistence locations.",
+    ],
+    warnings: [],
+    estimatedTokens: estimateTokens(summary),
+  };
+
+  return {
+    label: "workspace_context",
+    tokenBudget,
+    estimatedTokens: item.estimatedTokens,
+    items: [item],
+    droppedRecordIds: [],
   };
 }
 

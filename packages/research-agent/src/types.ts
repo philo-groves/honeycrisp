@@ -439,6 +439,37 @@ export interface ResearchStorageReadModel {
   artifacts: readonly ResearchArtifactRef[];
 }
 
+export type ResearchWorkspaceRepositoryRole =
+  | "known_repository"
+  | "materialized_source"
+  | "workspace";
+
+export interface ResearchWorkspaceRepositoryContext {
+  rootPath: string;
+  label?: string;
+  role: ResearchWorkspaceRepositoryRole;
+  source?: "cli" | "config" | "beale" | "inferred";
+  repositoryUrl?: string;
+  notes?: readonly string[];
+}
+
+export interface ResearchWorkspaceStorageContext {
+  rootPath: string;
+  databasePath: string;
+  artifactDirectoryPath: string;
+  directories: readonly ResearchStorageDirectory[];
+  rules: readonly string[];
+}
+
+export interface ResearchWorkspaceContext {
+  schemaVersion: 1;
+  workspaceRoot: string;
+  memory: ResearchWorkspaceStorageContext;
+  knownRepositories: readonly ResearchWorkspaceRepositoryContext[];
+  materializedSourcePaths: readonly string[];
+  projectNotes: readonly string[];
+}
+
 export interface ResearchContextUsageReadModel {
   latestContextEventId?: string;
   estimatedTokens?: number;
@@ -725,6 +756,7 @@ export interface ResearchContextPacket {
   goalFrame: ResearchGoalFrame;
   activeGoal: ResearchGoalNode;
   activeSubGoal: ResearchSubGoal;
+  workspaceContext?: ResearchWorkspaceContext;
   directEvidence: readonly ResearchMemoryRef[];
   priorObservations: readonly ResearchMemoryRef[];
   candidateProcedures: readonly ResearchMemoryRef[];
@@ -745,6 +777,7 @@ export interface ResearchContextPacket {
 export interface ResearchMemoryControllerInput {
   goalFrame: ResearchGoalFrame;
   activeGoal?: ResearchGoalNode;
+  workspaceContext?: ResearchWorkspaceContext;
   memory?: Partial<ResearchMemorySnapshot>;
   tools?: readonly ResearchToolDescriptor[];
   skills?: readonly ResearchSkillDescriptor[];
@@ -771,6 +804,7 @@ export interface ResearchRequiredContextSection {
   label:
     | "goal_frame"
     | "active_sub_goal"
+    | "workspace_context"
     | "storage"
     | "direct_evidence"
     | "prior_observations"

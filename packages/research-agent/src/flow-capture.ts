@@ -25,6 +25,7 @@ import type {
   ResearchToolAction,
   ResearchToolPermission,
   ResearchTrace,
+  ResearchWorkspaceContext,
 } from "./types.js";
 
 export interface ResearchFlowEventCapture {
@@ -87,7 +88,9 @@ export interface ResearchFlowCapture {
     selectedSkills: readonly ResearchSelectedSkill[];
     candidateToolActions: readonly ResearchToolAction[];
     skippedToolActions: readonly ResearchSkippedToolAction[];
+    workspaceContext?: ResearchWorkspaceContext;
   };
+  workspaceContext: ResearchWorkspaceContext;
   storage: ResearchStorageLayout;
   contextV2?: {
     preconsciousCandidateCount: number;
@@ -207,6 +210,7 @@ export function createResearchFlowCapture(
     },
     loop: createLoopCapture(result.loopResult),
     context: createContextCapture(result.decision.contextPacket),
+    workspaceContext: result.workspaceContext,
     storage: result.storageLayout,
     ...(contextPacketV2
       ? { contextV2: createContextV2Capture(contextPacketV2) }
@@ -297,6 +301,9 @@ function createContextCapture(
     selectedSkills: contextPacket.selectedSkills,
     candidateToolActions: contextPacket.candidateToolActions,
     skippedToolActions: contextPacket.skippedToolActions,
+    ...(contextPacket.workspaceContext
+      ? { workspaceContext: contextPacket.workspaceContext }
+      : {}),
   };
 }
 

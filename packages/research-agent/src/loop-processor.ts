@@ -568,6 +568,11 @@ function createLoopContextSections(
       content: packet.activeSubGoal,
     },
     {
+      label: "workspace_context",
+      required: true,
+      content: packet.workspaceContext ?? null,
+    },
+    {
       label: "storage",
       required: true,
       content: storageLayout,
