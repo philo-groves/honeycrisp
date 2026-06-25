@@ -157,20 +157,22 @@ Checklist:
 
 Remove Beale's semantic/project graph machinery from the agent path while keeping room for future optional skills/MCP.
 
-Status: not started.
+Status: completed.
+
+Implementation note: Beale's built-in semantic index and project graph are no longer agent state. Future code intelligence should be supplied as optional Honeycrisp skills or MCP servers, such as Tree-sitter indexing, structural source search, or semantic retrieval providers, with Honeycrisp storing only recallable findings, evidence, procedures, proof state, and artifact pointers.
 
 Checklist:
 
-- [ ] Remove Beale semantic indexing controls from settings and program understanding views.
-- [ ] Remove project semantic index executor, worker, worker protocol, and related IPC handlers.
-- [ ] Remove project semantic tables from active code paths, leaving migrations tolerant of old databases.
-- [ ] Remove project inventory/search/structure/graph refreshes that only exist to feed Beale's old agent tools.
-- [ ] Remove graph search and semantic retrieval from Beale's old OpenAI tool stack as that stack is retired.
-- [ ] Keep or redesign heatmap visuals so they do not depend on project graph state.
-- [ ] Document future code-intelligence direction as optional Tree-sitter or semantic retrieval skills/MCP, not Honeycrisp core.
-- [ ] Add migration/recovery tests proving existing workspaces with old semantic tables still open.
-- [ ] Remove semantic-index renderer tests or rewrite them around the new memory-backed UI.
-- [ ] Run Beale build and workbench tests after removal.
+- [x] Remove Beale semantic indexing controls from settings and program understanding views.
+- [x] Remove project semantic index executor, worker, worker protocol, and related IPC handlers.
+- [x] Remove project semantic tables from active code paths, leaving migrations tolerant of old databases.
+- [x] Remove project inventory/search/structure/graph refreshes that only exist to feed Beale's old agent tools.
+- [x] Remove graph search and semantic retrieval from Beale's old OpenAI tool stack as that stack is retired.
+- [x] Keep or redesign heatmap visuals so they do not depend on project graph state.
+- [x] Document future code-intelligence direction as optional Tree-sitter or semantic retrieval skills/MCP, not Honeycrisp core.
+- [x] Add migration/recovery tests proving existing workspaces with old semantic tables still open.
+- [x] Remove semantic-index renderer tests or rewrite them around the new memory-backed UI.
+- [x] Run Beale build and workbench tests after removal.
 
 ## Phase 7: Remove Beale VM And Sandbox Runtime
 
