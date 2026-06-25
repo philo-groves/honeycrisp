@@ -63,20 +63,20 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 Define the general agent-state surface Honeycrisp will expose to Beale before changing Beale storage.
 
-Status: not started.
+Status: completed.
 
 Checklist:
 
-- [ ] Add a design note to `planning/ARCHITECTURE.md` clarifying that Honeycrisp owns general agent state and Beale owns interface/program setup.
-- [ ] Confirm Honeycrisp memory record kinds that remain general: evidence, episodic, semantic claim, hypothesis, belief, procedure, prospective check, working.
-- [ ] Add or design a first-class `finding` memory record kind with general semantics: a promoted, evidence-backed research conclusion that may still be domain-labeled.
-- [ ] Define finding statuses without vulnerability-specific terms: `candidate`, `needs_evidence`, `supported`, `verified`, `superseded`, `rejected`, `out_of_scope`, `tombstoned`.
-- [ ] Define finding provenance as links to evidence records, hypotheses, claims, artifact refs, and proof attempts.
-- [ ] Define a generic proof/verifier contract model: proof obligation, proof method, proof attempt, proof result, proof artifact refs, and domain metadata.
-- [ ] Ensure proof contracts can represent mathematical proof, empirical reproduction, static analysis, dynamic exploit proof, patch validation, and investigation corroboration without hard-coding one domain.
-- [ ] Decide whether proof records are memory record kinds, artifact-backed records, or a separate table indexed by memory refs.
-- [ ] Define Beale-facing read models for goal, subgoal, latest context, evidence, hypotheses, findings, proof state, artifacts, storage, and session token/context usage.
-- [ ] Add deterministic contract tests for serialization, record validation, and backward compatibility with existing memory databases.
+- [x] Add a design note to `planning/ARCHITECTURE.md` clarifying that Honeycrisp owns general agent state and Beale owns interface/program setup.
+- [x] Confirm Honeycrisp memory record kinds that remain general: evidence, episodic, semantic claim, hypothesis, belief, procedure, prospective check, working.
+- [x] Add or design a first-class `finding` memory record kind with general semantics: a promoted, evidence-backed research conclusion that may still be domain-labeled.
+- [x] Define finding statuses without vulnerability-specific terms: `candidate`, `needs_evidence`, `supported`, `verified`, `superseded`, `rejected`, `out_of_scope`, `tombstoned`.
+- [x] Define finding provenance as links to evidence records, hypotheses, claims, artifact refs, and proof attempts.
+- [x] Define a generic proof/verifier contract model: proof obligation, proof method, proof attempt, proof result, proof artifact refs, and domain metadata.
+- [x] Ensure proof contracts can represent mathematical proof, empirical reproduction, static analysis, dynamic exploit proof, patch validation, and investigation corroboration without hard-coding one domain.
+- [x] Decide whether proof records are memory record kinds, artifact-backed records, or a separate table indexed by memory refs.
+- [x] Define Beale-facing read models for goal, subgoal, latest context, evidence, hypotheses, findings, proof state, artifacts, storage, and session token/context usage.
+- [x] Add deterministic contract tests for serialization, record validation, and backward compatibility with existing memory databases.
 
 ## Phase 2: Findings In Honeycrisp Memory
 

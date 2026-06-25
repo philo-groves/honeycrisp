@@ -16,6 +16,7 @@ Honeycrisp should remain goal-based: every run has a root goal, every loop has a
 The current runtime has the integrated first slice of the architecture in place:
 
 - Real CLI runs use durable SQLite memory by default, append accepted events during each loop, consolidate derived records, retrieve before later loops, and capture context packet v2 plus memory-controller metadata.
+- General agent-state contracts are owned by Honeycrisp. Evidence, episodes, semantic claims, hypotheses, findings, beliefs, procedures, prospective checks, proof state, storage refs, goal state, and context usage should be exposed through Honeycrisp APIs/CLI rather than reimplemented by client interfaces.
 - Built-in tools are registered through the tool registry, governed by side-effect and budget policy, emitted as `tool.requested` and `tool.observed` events, and routed through the memory write pipeline.
 - Local MCP servers can be configured through an explicit stdio JSON-RPC config and allowlist. MCP outputs are treated as untrusted external content.
 - Local skills can be loaded from `SKILL.md` directories, selected by id, and injected as bounded runtime context without overriding governance.
@@ -25,6 +26,7 @@ The current runtime has the integrated first slice of the architecture in place:
 
 Known limitations after this slice:
 
+- Findings and proof/verifier contracts are defined as general interfaces, but their lifecycle write pipeline, inspector commands, and Beale-facing steering APIs remain future work.
 - MCP support currently targets configured stdio servers; richer transport management, authentication handoff, and long-lived server health monitoring remain future work.
 - Experiment tools are allowlisted and auditable, but they are not a security sandbox. Operators must still choose safe commands and working directories.
 - Memory retrieval is sparse/structured and graph-aware enough for the current integration path; dense embedding retrieval and more advanced utility learning remain future work.
@@ -41,7 +43,7 @@ The runtime flow is:
 4. The memory controller retrieves relevant memory, selects an action class, and proposes one or more tool actions.
 5. The model executes the sub-goal with the supplied context packet and action budget.
 6. Tool results, observations, decisions, and artifacts are appended to the immutable event log.
-7. The memory write pipeline updates working, episodic, semantic, procedural, hypothesis, and prospective memory.
+7. The memory write pipeline updates working, episodic, semantic, procedural, hypothesis, and prospective memory. Later phases add first-class finding and proof lifecycle writes.
 8. The loop repeats until the root goal is complete, blocked, or ready for user response.
 
 The memory controller is therefore the action driver. The processing layer owns the loop shape; memory owns the next-action policy.
@@ -162,6 +164,8 @@ The memory controller is the decision layer between goals and tools. It is respo
 - preserving evidence, inference, and belief as separate categories
 - scheduling future checks through prospective memory
 - marking stale, contradicted, or superseded memories
+- promoting evidence-backed conclusions into general findings
+- tracking proof obligations and proof attempts without assuming a specific research domain
 
 The controller should produce an explicit next-action decision:
 
@@ -172,7 +176,7 @@ The controller should produce an explicit next-action decision:
   "context_packet": "typed context assembled from memory",
   "tool_budget": "limits for calls, time, files, or tokens",
   "completion_gates": ["observable condition"],
-  "writeback": ["event", "episode", "claim", "procedure", "hypothesis", "prospective"]
+  "writeback": ["event", "episode", "claim", "procedure", "hypothesis", "finding", "prospective", "proof_state"]
 }
 ```
 
@@ -216,8 +220,18 @@ Procedural memory helps to recall muscle memory and lessons learned from previou
 #### Hypothesis Memory
 Hypothesis memory tracks research hypotheses and their current states. Includes candidate theories, evidence for/against, uncertainty, unresolved objections, falsification criteria.
 
+#### Finding Memory
+Finding memory tracks promoted, evidence-backed research conclusions. Findings are domain-neutral: they may carry domain labels or metadata, but core status terms remain general: `candidate`, `needs_evidence`, `supported`, `verified`, `superseded`, `rejected`, `out_of_scope`, and `tombstoned`.
+
+Findings are distinct from hypotheses and semantic claims. A hypothesis is a theory that still needs testing. A semantic claim is an atomic inferred statement. A finding is a reviewed conclusion with provenance links to evidence records, hypotheses, claims, artifact refs, and proof attempts.
+
 #### Prospective Memory
 Prospective memory aligns the agent with scenario information. Includes reminders, follow-up checks, monitoring tasks, "verify after release," "rerun when dataset updates," and commitments to the user.
+
+#### Proof And Verifier State
+Proof state tracks proof obligations and proof attempts. It is separate from derived memory records and indexed back to memory record ids, goals, sub-goals, evidence refs, and artifact refs. This avoids forcing every proof attempt to become a recalled memory while still allowing findings and hypotheses to cite proof outcomes.
+
+Proof methods must remain general and extensible. The core contract covers mathematical proof, empirical reproduction, static analysis, dynamic execution, artifact validation, investigation corroboration, human review, domain skills, and MCP providers. Domains can add proof expectations through skills, MCP servers, or interface metadata without adding vulnerability-specific, mathematics-specific, or investigation-specific fields to Honeycrisp core.
 
 ### Memory Layers
 
@@ -240,11 +254,25 @@ The context packet is the only memory that reaches the model during a loop. It s
 - relevant prior episodes
 - candidate procedures
 - current hypotheses
+- supported findings
+- proof obligations and proof attempts
 - contradictions and uncertainty
 - tool permissions and budget
 - writeback expectations
 
 This prevents long-context dumping and keeps the model aware of whether it is seeing a source, a summary, an inference, or a belief.
+
+### Client Interface Boundary
+
+Honeycrisp should expose a durable read model for external interfaces. That read model should include:
+
+- current goal and sub-goals
+- latest compiled context and context usage
+- evidence, episodes, semantic claims, hypotheses, findings, beliefs, procedures, prospective checks, and working memory
+- proof obligations and proof attempts
+- storage directories and artifact refs
+
+Interfaces such as Beale should use this read model for general research state. Beale can still own program/project setup, prompt drafting, visualization, and domain-specific export or disclosure workflows. Beale should not maintain parallel general research ledgers, semantic memory, repository guard policy, VM sandbox policy, or benchmark runtimes when those concerns belong to Honeycrisp or to the operator's chosen environment.
 
 ## Tool Layer
 

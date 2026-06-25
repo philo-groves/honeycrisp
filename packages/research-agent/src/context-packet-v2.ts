@@ -29,6 +29,7 @@ export type ResearchContextPacketV2ItemLabel =
   | "procedure"
   | "inference"
   | "hypothesis"
+  | "finding"
   | "belief"
   | "uncertainty"
   | "prospective_check";
@@ -377,6 +378,8 @@ function labelRecord(
       return "inference";
     case "hypothesis":
       return "hypothesis";
+    case "finding":
+      return "finding";
     case "belief":
       return "belief";
     case "prospective_check":
@@ -396,6 +399,7 @@ function isCurrentHypothesisCandidate(
   return (
     candidate.record.kind === "semantic_claim" ||
     candidate.record.kind === "hypothesis" ||
+    candidate.record.kind === "finding" ||
     candidate.record.kind === "belief"
   );
 }
