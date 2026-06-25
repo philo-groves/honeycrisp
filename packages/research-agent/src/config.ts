@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import {
   getAuthStatus,
   verifyProviderAuth,
@@ -29,9 +29,12 @@ export interface ResolvedResearchModelConfig {
   configPath?: string;
 }
 
+export const DEFAULT_RESEARCH_MODEL_CONFIG_RELATIVE_PATH = ".honeycrisp/config.json";
+
 export interface ResolveResearchModelConfigOptions
   extends FileCredentialStoreOptions {
   configPath?: string;
+  workspaceRoot?: string;
   provider?: string;
   model?: string;
   effort?: ResearchModelEffort;
@@ -44,6 +47,18 @@ export interface ResolveResearchModelConfigOptions
     modelId?: string,
     options?: FileCredentialStoreOptions,
   ) => Promise<AuthVerifyResult>;
+}
+
+export interface WriteResearchModelConfigOptions {
+  configPath?: string;
+  workspaceRoot?: string;
+  preference: ResearchModelConfigPreference;
+}
+
+export function getDefaultResearchModelConfigPath(
+  workspaceRoot: string = process.cwd(),
+): string {
+  return resolve(workspaceRoot, DEFAULT_RESEARCH_MODEL_CONFIG_RELATIVE_PATH);
 }
 
 export async function loadResearchModelConfig(
@@ -59,10 +74,55 @@ export async function loadResearchModelConfig(
   return normalizeResearchModelConfigPreference(value, absolutePath);
 }
 
+export async function loadDefaultResearchModelConfig(
+  workspaceRoot: string = process.cwd(),
+): Promise<ResearchModelConfigPreference | undefined> {
+  const configPath = getDefaultResearchModelConfigPath(workspaceRoot);
+  if (!(await pathExists(configPath))) {
+    return undefined;
+  }
+
+  return loadResearchModelConfig(configPath);
+}
+
+export async function writeResearchModelConfig(
+  options: WriteResearchModelConfigOptions,
+): Promise<{
+  configPath: string;
+  preference: ResearchModelConfigPreference;
+}> {
+  const configPath = options.configPath
+    ? resolve(options.configPath)
+    : getDefaultResearchModelConfigPath(options.workspaceRoot);
+  const preference = normalizeResearchModelConfigPreference(
+    options.preference as Record<string, unknown>,
+    configPath,
+  );
+
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(
+    configPath,
+    `${JSON.stringify(preference, null, 2)}\n`,
+    "utf8",
+  );
+
+  return { configPath, preference };
+}
+
 export async function resolveResearchModelConfig(
   options: ResolveResearchModelConfigOptions = {},
 ): Promise<ResolvedResearchModelConfig> {
-  const configPath = options.configPath ? resolve(options.configPath) : undefined;
+  const explicitConfigPath = options.configPath
+    ? resolve(options.configPath)
+    : undefined;
+  const defaultConfigPath = explicitConfigPath
+    ? undefined
+    : getDefaultResearchModelConfigPath(options.workspaceRoot);
+  const configPath =
+    explicitConfigPath ??
+    (defaultConfigPath && await pathExists(defaultConfigPath)
+      ? defaultConfigPath
+      : undefined);
   const filePreference = configPath
     ? await loadResearchModelConfig(configPath)
     : {};
@@ -234,6 +294,15 @@ function readOptionalString(
   }
 
   return value.trim();
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

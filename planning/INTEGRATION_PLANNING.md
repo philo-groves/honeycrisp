@@ -145,19 +145,28 @@ Verification:
 
 Make model preference configuration discoverable without turning it into auth.
 
-Status: pending.
+Status: completed on 2026-06-24.
 
 Checklist:
 
-- [ ] Choose and document a default project config path.
-- [ ] Load default project config when `--config` is not supplied.
-- [ ] Add `honeycrisp config show`.
-- [ ] Add `honeycrisp config set provider/model/effort`.
-- [ ] Preserve CLI overrides as higher precedence than config files.
-- [ ] Reject auth-like secret fields in default config files.
-- [ ] Surface whether the selected provider is authorized without printing credentials.
-- [ ] Add tests for default config loading, show/set commands, precedence, and secret rejection.
-- [ ] Run a real health check that uses default config without provider/model flags and review capture metadata.
+- [x] Choose and document a default project config path.
+- [x] Load default project config when `--config` is not supplied.
+- [x] Add `honeycrisp config show`.
+- [x] Add `honeycrisp config set provider/model/effort`.
+- [x] Preserve CLI overrides as higher precedence than config files.
+- [x] Reject auth-like secret fields in default config files.
+- [x] Surface whether the selected provider is authorized without printing credentials.
+- [x] Add tests for default config loading, show/set commands, precedence, and secret rejection.
+- [x] Run a real health check that uses default config without provider/model flags and review capture metadata.
+
+Verification:
+
+- `pnpm test` passed with 124 tests on 2026-06-24.
+- Default project config path: `.honeycrisp/config.json` under `--workspace-root`.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase5/phase5-real-final.json`.
+- Config show output: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase5/config-show-final.json`.
+- Durable SQLite workspace: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase5/workspace/.honeycrisp/memory/memory.sqlite`.
+- The real run omitted `--config`, `--provider`, and `--model`; capture metadata resolved provider `openai-codex`, model `gpt-5.3-codex-spark`, effort `minimal`, source `config`, and config path `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase5/workspace/.honeycrisp/config.json`.
 
 ## Phase 6: End-To-End Integration Health And Roadmap Cleanup
 

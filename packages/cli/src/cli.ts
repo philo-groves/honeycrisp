@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
@@ -24,6 +24,7 @@ import {
   createMcpResearchTools,
   createStorageListTool,
   createStructuredFileReadTool,
+  getDefaultResearchModelConfigPath,
   createSqliteMemoryEventLog,
   createSqliteMemoryRecordStore,
   createSynthesisTool,
@@ -32,11 +33,13 @@ import {
   loadResearchSkillsFromDirectory,
   loadResearchMcpClientConfig,
   loadResearchExperimentConfig,
+  loadResearchModelConfig,
   loginAuthProvider,
   logoutAuthProvider,
   resolveResearchModelConfig,
   routeEventsToMemorySnapshot,
   verifyProviderAuth,
+  writeResearchModelConfig,
 } from "@honeycrisp/research-agent";
 import type {
   AuthEvent,
@@ -49,6 +52,7 @@ import type {
   ResearchGovernancePolicy,
   ResearchLoopExecutor,
   ResearchMemorySnapshot,
+  ResearchModelConfigPreference,
   ResolvedResearchModelConfig,
   ResearchSkillDescriptor,
   ResearchToolDescriptor,
@@ -137,6 +141,16 @@ interface ParsedMemoryArgs {
   goal: string | undefined;
   questions: string[];
   limit: number | undefined;
+  json: boolean;
+  help: boolean;
+}
+
+interface ParsedConfigArgs {
+  command: string | undefined;
+  configPath: string | undefined;
+  workspaceRoot: string;
+  field: string | undefined;
+  value: string | undefined;
   json: boolean;
   help: boolean;
 }
@@ -433,6 +447,50 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
   };
 }
 
+function parseConfigArgs(argv: readonly string[]): ParsedConfigArgs {
+  const firstArg = argv[0];
+  const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
+  let configPath: string | undefined;
+  let workspaceRoot = process.cwd();
+  let json = false;
+  let help = false;
+  const positionals: string[] = [];
+
+  for (let index = command ? 1 : 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+
+    if (arg === "--config") {
+      configPath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--workspace-root") {
+      workspaceRoot = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg === "-h" || arg === "--help") {
+      help = true;
+    } else if (arg?.startsWith("-")) {
+      throw new Error(`Unknown config option: ${arg}`);
+    } else if (arg) {
+      positionals.push(arg);
+    }
+  }
+
+  if (command === "set" && positionals.length > 2) {
+    throw new Error("config set accepts exactly one field and one value.");
+  }
+
+  return {
+    command,
+    configPath,
+    workspaceRoot,
+    field: positionals[0],
+    value: positionals[1],
+    json,
+    help,
+  };
+}
+
 function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   const firstArg = argv[0];
   const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
@@ -678,6 +736,15 @@ function readOptionValue(
   return value;
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function usage(): string {
   return [
     "Usage: honeycrisp -p <prompt> [--json]",
@@ -694,6 +761,7 @@ function usage(): string {
     "  --preference <pref>    Add a user preference",
     "  --mock                 Use the deterministic mock executor (default: real model calls)",
     "  --config <path>        JSON provider/model/effort preference config for real mode",
+    "                         Defaults to .honeycrisp/config.json under --workspace-root when present",
     "  --provider <provider>  Override configured/default provider for real mode",
     "  --model <model>        Override configured/default model for real mode",
     "  --executor <kind>      complete-simple or agent (default: complete-simple)",
@@ -750,6 +818,8 @@ function usage(): string {
     "",
     "Tool debug commands:",
     "  tools list                       Show configured tools, MCP allowlist, and selected skills",
+    "  config show                      Show project model preference and authorization status",
+    "  config set <field> <value>       Set provider, model, or effort preference",
   ].join("\n");
 }
 
@@ -767,6 +837,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 
     if (argv[0] === "tools") {
       await handleToolsCommand(argv.slice(1));
+      return;
+    }
+
+    if (argv[0] === "config") {
+      await handleConfigCommand(argv.slice(1));
       return;
     }
 
@@ -801,6 +876,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
             args,
             runtimeConfig.toolRegistry,
             (modelConfig = await resolveResearchModelConfig({
+              workspaceRoot: args.workspaceRoot,
               ...(args.configPath ? { configPath: args.configPath } : {}),
               ...(args.provider ? { provider: args.provider } : {}),
               ...(args.model ? { model: args.model } : {}),
@@ -1068,6 +1144,192 @@ async function handleToolsCommand(argv: readonly string[]): Promise<void> {
   } finally {
     await runtime.cleanup?.();
   }
+}
+
+async function handleConfigCommand(argv: readonly string[]): Promise<void> {
+  const args = parseConfigArgs(argv);
+
+  if (!args.command || args.help) {
+    console.log(configUsage());
+    return;
+  }
+
+  if (args.command === "show") {
+    if (args.field || args.value) {
+      throw new Error("config show does not accept positional arguments.");
+    }
+    const inspection = await createConfigInspection(args);
+    printConfigOutput(args, inspection, renderConfigInspection);
+    return;
+  }
+
+  if (args.command === "set") {
+    if (!args.field || !args.value) {
+      throw new Error("config set requires: provider <id>, model <id>, or effort <level>.");
+    }
+    const update = parseConfigSetUpdate(args.field, args.value);
+    const configPath = resolveConfigPath(args);
+    const exists = await pathExists(configPath);
+    const current = exists ? await loadResearchModelConfig(configPath) : {};
+    await writeResearchModelConfig({
+      configPath,
+      preference: {
+        ...current,
+        ...update,
+      },
+    });
+    const inspection = await createConfigInspection(args);
+    printConfigOutput(
+      args,
+      {
+        updated: update,
+        ...inspection,
+      },
+      (value) => [
+        `Updated config: ${value.configPath}`,
+        renderConfigInspection(value),
+      ].join("\n"),
+    );
+    return;
+  }
+
+  throw new Error(`Unknown config command: ${args.command}`);
+}
+
+function configUsage(): string {
+  return [
+    "Usage: honeycrisp config <command> [options]",
+    "",
+    "Commands:",
+    "  show                       Show model preference and authorization status",
+    "  set provider <id>          Set preferred provider",
+    "  set model <id>             Set preferred model",
+    "  set effort <level>         Set effort: minimal, low, medium, high, or xhigh",
+    "",
+    "Options:",
+    "  --config <path>            Preference config path",
+    "  --workspace-root <path>    Project root for default .honeycrisp/config.json",
+    "  --json                     Print JSON",
+  ].join("\n");
+}
+
+async function createConfigInspection(args: {
+  configPath: string | undefined;
+  workspaceRoot: string;
+}): Promise<{
+  configPath: string;
+  exists: boolean;
+  preference: ResearchModelConfigPreference;
+  resolved: ResolvedResearchModelConfig | null;
+  authorization: {
+    authorized: boolean;
+    message?: string;
+  };
+}> {
+  const configPath = resolveConfigPath(args);
+  const exists = await pathExists(configPath);
+  const preference = exists ? await loadResearchModelConfig(configPath) : {};
+  try {
+    const resolved = await resolveResearchModelConfig({
+      workspaceRoot: args.workspaceRoot,
+      ...(args.configPath || exists ? { configPath } : {}),
+    });
+    return {
+      configPath,
+      exists,
+      preference,
+      resolved,
+      authorization: {
+        authorized: true,
+      },
+    };
+  } catch (error) {
+    return {
+      configPath,
+      exists,
+      preference,
+      resolved: null,
+      authorization: {
+        authorized: false,
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
+
+function parseConfigSetUpdate(
+  field: string,
+  value: string,
+): ResearchModelConfigPreference {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`config set ${field} requires a non-empty value.`);
+  }
+
+  if (field === "provider") {
+    return { provider: trimmed };
+  }
+  if (field === "model") {
+    return { model: trimmed };
+  }
+  if (field === "effort" || field === "reasoning") {
+    return { effort: parseReasoning(trimmed) };
+  }
+
+  throw new Error("config set field must be provider, model, or effort.");
+}
+
+function resolveConfigPath(args: {
+  configPath: string | undefined;
+  workspaceRoot: string;
+}): string {
+  return args.configPath
+    ? resolve(args.configPath)
+    : getDefaultResearchModelConfigPath(args.workspaceRoot);
+}
+
+function printConfigOutput<T>(
+  args: { json: boolean },
+  value: T,
+  render: (value: T) => string,
+): void {
+  if (args.json) {
+    console.log(JSON.stringify(value, null, 2));
+    return;
+  }
+
+  console.log(render(value));
+}
+
+function renderConfigInspection(input: {
+  configPath: string;
+  exists: boolean;
+  preference: ResearchModelConfigPreference;
+  resolved: ResolvedResearchModelConfig | null;
+  authorization: {
+    authorized: boolean;
+    message?: string;
+  };
+}): string {
+  return [
+    `Config path: ${input.configPath}`,
+    `Config exists: ${input.exists ? "yes" : "no"}`,
+    `Provider preference: ${input.preference.provider ?? "(not set)"}`,
+    `Model preference: ${input.preference.model ?? "(not set)"}`,
+    `Effort preference: ${input.preference.effort ?? "(not set)"}`,
+    input.resolved
+      ? `Resolved provider: ${input.resolved.provider}`
+      : "Resolved provider: (none)",
+    input.resolved
+      ? `Resolved model: ${input.resolved.model}`
+      : "Resolved model: (none)",
+    input.resolved
+      ? `Resolved source: ${input.resolved.source}`
+      : "Resolved source: (none)",
+    input.authorization.authorized
+      ? "Authorization: authorized"
+      : `Authorization: not authorized${input.authorization.message ? ` - ${input.authorization.message}` : ""}`,
+  ].join("\n");
 }
 
 function toolsUsage(): string {

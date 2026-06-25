@@ -30,14 +30,19 @@ export type {
   ResearchDurableMemoryRunSummary,
 } from "./bootstrap.js";
 export {
+  DEFAULT_RESEARCH_MODEL_CONFIG_RELATIVE_PATH,
+  getDefaultResearchModelConfigPath,
+  loadDefaultResearchModelConfig,
   loadResearchModelConfig,
   resolveResearchModelConfig,
+  writeResearchModelConfig,
 } from "./config.js";
 export type {
   ResearchModelConfigPreference,
   ResearchModelEffort,
   ResolveResearchModelConfigOptions,
   ResolvedResearchModelConfig,
+  WriteResearchModelConfigOptions,
 } from "./config.js";
 export {
   createAnalysisTool,

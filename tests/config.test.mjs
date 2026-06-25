@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
+  getDefaultResearchModelConfigPath,
   loadResearchModelConfig,
   resolveResearchModelConfig,
+  writeResearchModelConfig,
 } from "../packages/research-agent/dist/index.js";
 
 test("research model config loads provider, model, and effort preferences only", async () => {
@@ -98,6 +100,59 @@ test("research model config resolver defaults to the first authorized provider",
   });
 });
 
+test("research model config resolver loads the default project config path", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-default-config-"));
+  const configPath = getDefaultResearchModelConfigPath(workspaceRoot);
+  await mkdir(resolve(configPath, ".."), { recursive: true });
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      provider: "alpha",
+      model: "alpha-research",
+      effort: "minimal",
+    }),
+    "utf8",
+  );
+
+  const result = await resolveResearchModelConfig({
+    workspaceRoot,
+    verifyProviderAuth: async (providerId, modelId) => ({
+      providerId,
+      providerName: "Alpha",
+      modelId: modelId ?? "alpha-default",
+      configured: true,
+    }),
+  });
+
+  assert.deepEqual(result, {
+    provider: "alpha",
+    model: "alpha-research",
+    effort: "minimal",
+    source: "config",
+    configPath,
+  });
+});
+
+test("research model config writer creates preference-only project config files", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-write-config-"));
+  const written = await writeResearchModelConfig({
+    workspaceRoot,
+    preference: {
+      provider: "alpha",
+      model: "alpha-research",
+      effort: "low",
+    },
+  });
+  const loaded = await loadResearchModelConfig(written.configPath);
+
+  assert.equal(written.configPath, getDefaultResearchModelConfigPath(workspaceRoot));
+  assert.deepEqual(loaded, {
+    provider: "alpha",
+    model: "alpha-research",
+    effort: "low",
+  });
+});
+
 test("research model config resolver reports missing authorization clearly", async () => {
   await assert.rejects(
     () =>
@@ -126,6 +181,32 @@ test("research model config resolver reports missing authorization clearly", asy
         }),
       }),
     /not authorized.*auth login alpha/,
+  );
+});
+
+test("research model default config rejects auth-like secret fields", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-secret-config-"));
+  const configPath = getDefaultResearchModelConfigPath(workspaceRoot);
+  await mkdir(resolve(configPath, ".."), { recursive: true });
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      provider: "alpha",
+      model: "alpha-research",
+      token: "not-allowed",
+    }),
+    "utf8",
+  );
+
+  await assert.rejects(
+    () =>
+      resolveResearchModelConfig({
+        workspaceRoot,
+        verifyProviderAuth: async () => {
+          throw new Error("should not verify secret-bearing config");
+        },
+      }),
+    /preferences only.*auth login/,
   );
 });
 

@@ -128,6 +128,108 @@ test("main CLI treats config as model preference, not authorization", async () =
   assert.match(result.stderr, /honeycrisp auth login openai-codex/);
 });
 
+test("main CLI loads default project config when --config is omitted", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-cli-default-config-"));
+  const configPath = join(workspaceRoot, ".honeycrisp", "config.json");
+  await mkdir(join(workspaceRoot, ".honeycrisp"), { recursive: true });
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      provider: "openai-codex",
+      model: "gpt-5.3-codex-spark",
+      effort: "minimal",
+    }),
+    "utf8",
+  );
+  const result = runTopCli(
+    [
+      "--workspace-root",
+      workspaceRoot,
+      "-p",
+      "Goal: Default config should be discovered",
+    ],
+    {
+      HONEYCRISP_AUTH_FILE: authFile,
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /selected .*openai-codex.*not authorized/);
+});
+
+test("config CLI shows and sets project model preferences", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-cli-config-set-"));
+  const baseEnv = {
+    HONEYCRISP_AUTH_FILE: authFile,
+  };
+  const setProvider = runTopCli(
+    [
+      "config",
+      "set",
+      "provider",
+      "openai-codex",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ],
+    baseEnv,
+  );
+  const setModel = runTopCli(
+    [
+      "config",
+      "set",
+      "model",
+      "gpt-5.3-codex-spark",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ],
+    baseEnv,
+  );
+  const setEffort = runTopCli(
+    [
+      "config",
+      "set",
+      "effort",
+      "minimal",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ],
+    baseEnv,
+  );
+  const show = runTopCli(
+    [
+      "config",
+      "show",
+      "--workspace-root",
+      workspaceRoot,
+      "--json",
+    ],
+    baseEnv,
+  );
+  const shown = JSON.parse(show.stdout);
+  const written = JSON.parse(
+    await readFile(join(workspaceRoot, ".honeycrisp", "config.json"), "utf8"),
+  );
+
+  assert.equal(setProvider.status, 0, setProvider.stderr);
+  assert.equal(setModel.status, 0, setModel.stderr);
+  assert.equal(setEffort.status, 0, setEffort.stderr);
+  assert.equal(show.status, 0, show.stderr);
+  assert.deepEqual(written, {
+    provider: "openai-codex",
+    model: "gpt-5.3-codex-spark",
+    effort: "minimal",
+  });
+  assert.equal(shown.exists, true);
+  assert.deepEqual(shown.preference, written);
+  assert.equal(shown.authorization.authorized, false);
+  assert.match(shown.authorization.message, /not authorized/);
+});
+
 test("tools CLI lists configured tools, MCP allowlist, governance, and selected skills", async () => {
   const repoRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tools-repo-"));
   const skillRoot = await createCliSkillFixture();
