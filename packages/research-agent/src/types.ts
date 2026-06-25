@@ -896,6 +896,7 @@ export interface ResearchLoopExecutionInput {
   loopPlan: ResearchLoopPlan;
   modelInput: ResearchLoopModelInput;
   storageLayout: ResearchStorageLayout;
+  eventSink?: ResearchLiveEventSink;
   signal?: AbortSignal;
 }
 
@@ -916,6 +917,24 @@ export interface ResearchLoopExecutor {
     input: ResearchLoopExecutionInput,
   ): Promise<ResearchLoopExecutionOutput>;
 }
+
+export type ResearchLiveEventKind =
+  | "agent.event"
+  | "model.output"
+  | "model.thought"
+  | "research.event"
+  | "tool.progress";
+
+export interface ResearchLiveEvent {
+  schemaVersion: 1;
+  kind: ResearchLiveEventKind;
+  timestamp: string;
+  payload: Record<string, unknown>;
+}
+
+export type ResearchLiveEventSink = (
+  event: ResearchLiveEvent,
+) => void | Promise<void>;
 
 export interface ResearchCompletionGateResult {
   gateId: string;

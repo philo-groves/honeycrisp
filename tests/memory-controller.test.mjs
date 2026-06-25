@@ -1350,6 +1350,38 @@ test("first-run controller proposes local inspection when a prompt path is obvio
   assert.ok(loopPlan.loopPrompt.includes(fixtureFile));
 });
 
+test("loop planner keeps available tool classes permitted for response checkpoints", () => {
+  const inspectionTool = createLocalInspectionTool({
+    allowedRoots: [process.cwd()],
+    maxBytes: 128,
+  });
+  const goalFrame = createResearchGoalFrame(
+    "Prepare a checkpoint while keeping local repository inspection available.",
+  );
+  const decision = createFirstRunMemoryController().decide({
+    goalFrame,
+    tools: [inspectionTool.descriptor],
+  });
+  const checkpointDecision = {
+    ...decision,
+    actionClass: "respond",
+    subGoal: {
+      ...decision.subGoal,
+      actionClass: "respond",
+    },
+    candidateToolActions: [],
+    contextPacket: {
+      ...decision.contextPacket,
+      candidateToolActions: [],
+    },
+  };
+  const loopPlan = planResearchLoop({ decision: checkpointDecision });
+
+  assert.ok(loopPlan.permittedToolClasses.includes("inspect"));
+  assert.equal(loopPlan.candidateToolActions.length, 0);
+  assert.ok(loopPlan.loopPrompt.includes("Permitted tool classes: inspect"));
+});
+
 test("Pi loop executor executes controller-planned local inspection before the first model call", async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "honeycrisp-planned-pi-"));
   const fixtureFile = join(fixtureRoot, "parse.c");

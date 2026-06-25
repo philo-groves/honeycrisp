@@ -153,6 +153,30 @@ test("Pi Agent beforeToolCall preflight preserves blocked tool events", async ()
   assert.deepEqual(contexts[1].toolNames, []);
 });
 
+test("Pi Agent executor streams live thought events", async () => {
+  const goalFrame = createResearchGoalFrame("Prepare a concise parser inspection plan.");
+  const decision = createFirstRunMemoryController().decide({ goalFrame });
+  const loopPlan = planResearchLoop({ decision });
+  const liveEvents = [];
+  const result = await processResearchLoop({
+    loopPlan,
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentLoopExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createThoughtStreamingModels(),
+    }),
+  });
+  const thoughtEvents = liveEvents.filter((event) => event.kind === "model.thought");
+
+  assert.equal(result.status, "complete");
+  assert.ok(thoughtEvents.length >= 2);
+  assert.equal(thoughtEvents.at(-1).payload.phase, "completed");
+  assert.equal(thoughtEvents.at(-1).payload.text, "Inspect parser entrypoints first.");
+});
+
 test("Pi Agent executor supports parallel same-turn tool execution", async () => {
   const calls = [];
   const tool = createFixtureInspectTool(calls);
@@ -234,6 +258,72 @@ function createFixtureInspectTool(calls) {
         claims: [],
         artifactRefs: [],
         followUpActions: [],
+      };
+    },
+  };
+}
+
+function createThoughtStreamingModels() {
+  return {
+    getModel() {
+      return FAUX_MODEL;
+    },
+    streamSimple() {
+      const started = assistant([], "stop");
+      const thinking = {
+        ...started,
+        content: [
+          {
+            type: "thinking",
+            thinking: "Inspect parser entrypoints first.",
+          },
+        ],
+        responseId: "thought-response",
+      };
+      const finalMessage = {
+        ...thinking,
+        content: [
+          ...thinking.content,
+          {
+            type: "text",
+            text: "## Result\nPrepared parser inspection plan.",
+          },
+        ],
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "start", partial: started };
+          yield {
+            type: "thinking_start",
+            contentIndex: 0,
+            partial: {
+              ...thinking,
+              content: [{ type: "thinking", thinking: "" }],
+            },
+          };
+          yield {
+            type: "thinking_delta",
+            contentIndex: 0,
+            delta: "Inspect parser entrypoints first.",
+            partial: thinking,
+          };
+          yield {
+            type: "thinking_end",
+            contentIndex: 0,
+            content: "Inspect parser entrypoints first.",
+            partial: thinking,
+          };
+          yield {
+            type: "text_end",
+            contentIndex: 1,
+            content: "## Result\nPrepared parser inspection plan.",
+            partial: finalMessage,
+          };
+          yield { type: "done", reason: "stop", message: finalMessage };
+        },
+        async result() {
+          return finalMessage;
+        },
       };
     },
   };

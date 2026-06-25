@@ -39,6 +39,7 @@ import type {
   ResearchLoopExecutionInput,
   ResearchLoopExecutionOutput,
   ResearchLoopExecutor,
+  ResearchLiveEventSink,
   ResearchLoopFollowUpRecommendation,
   ResearchLoopModelInput,
   ResearchLoopPlan,
@@ -51,6 +52,7 @@ export interface ProcessResearchLoopInput {
   loopPlan: ResearchLoopPlan;
   executor?: ResearchLoopExecutor;
   storageLayout?: ResearchStorageLayout;
+  eventSink?: ResearchLiveEventSink;
   signal?: AbortSignal;
 }
 
@@ -69,6 +71,7 @@ export async function processResearchLoop(
       loopPlan: input.loopPlan,
       modelInput,
       storageLayout,
+      ...(input.eventSink ? { eventSink: input.eventSink } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
     });
     const completedAt = nowIso();
@@ -213,6 +216,7 @@ export function createPiLoopExecutor(
       const plannedExecutions = await executeControllerPlannedToolActions({
         loopPlan: input.loopPlan,
         ...(options.toolRegistry ? { toolRegistry: options.toolRegistry } : {}),
+        ...(input.eventSink ? { eventSink: input.eventSink } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
       });
       toolCallCount += plannedExecutions.length;
@@ -272,6 +276,7 @@ export function createPiLoopExecutor(
           });
           toolCallCount += 1;
           toolEvents.push(...execution.events);
+          emitLiveResearchEvents(input.eventSink, execution.events);
           context.messages.push(createToolResultContextMessage(toolCall, execution.result));
         }
 
@@ -353,6 +358,7 @@ export function createPiAgentLoopExecutor(
       const plannedExecutions = await executeControllerPlannedToolActions({
         loopPlan: input.loopPlan,
         ...(options.toolRegistry ? { toolRegistry: options.toolRegistry } : {}),
+        ...(input.eventSink ? { eventSink: input.eventSink } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
       });
       toolCallCount += plannedExecutions.length;
@@ -430,6 +436,7 @@ export function createPiAgentLoopExecutor(
               toolExecutionRecords.set(toolCall.id, preflight);
               capturedToolCallIds.add(toolCall.id);
               toolEvents.push(...preflight.events);
+              emitLiveResearchEvents(input.eventSink, preflight.events);
               return {
                 block: true,
                 reason: preflight.result.summary,
@@ -445,6 +452,7 @@ export function createPiAgentLoopExecutor(
             if (record && !capturedToolCallIds.has(hookContext.toolCall.id)) {
               capturedToolCallIds.add(hookContext.toolCall.id);
               toolEvents.push(...record.events);
+              emitLiveResearchEvents(input.eventSink, record.events);
             }
 
             const result = record?.result;
@@ -475,8 +483,9 @@ export function createPiAgentLoopExecutor(
           getSteeringMessages: async () => [],
           getFollowUpMessages: async () => [],
         },
-        (event) => {
+        async (event) => {
           agentEvents.push(captureAgentEvent(event));
+          await emitAgentLiveEvent(input.eventSink, event);
         },
         input.signal,
         models.streamSimple.bind(models),
@@ -671,6 +680,7 @@ function createFreeFormToolRegistry(
 async function executeControllerPlannedToolActions(input: {
   loopPlan: ResearchLoopPlan;
   toolRegistry?: ResearchToolRegistry;
+  eventSink?: ResearchLiveEventSink;
   signal?: AbortSignal;
 }): Promise<ResearchToolExecutionRecord[]> {
   if (!input.toolRegistry || input.loopPlan.candidateToolActions.length === 0) {
@@ -683,8 +693,7 @@ async function executeControllerPlannedToolActions(input: {
       break;
     }
 
-    records.push(
-      await input.toolRegistry.execute(action, {
+    const record = await input.toolRegistry.execute(action, {
         goalId: input.loopPlan.rootGoalId,
         subGoalId: input.loopPlan.subGoal.id,
         permittedActionClasses: input.loopPlan.permittedToolClasses,
@@ -694,8 +703,9 @@ async function executeControllerPlannedToolActions(input: {
           ? { governance: input.loopPlan.governancePolicy }
           : {}),
         ...(input.signal ? { signal: input.signal } : {}),
-      }),
-    );
+      });
+    records.push(record);
+    emitLiveResearchEvents(input.eventSink, record.events);
   }
 
   return records;
@@ -941,6 +951,204 @@ function captureAgentEvent(event: AgentEvent): Record<string, unknown> {
   return {
     type: "unknown",
   };
+}
+
+function emitLiveResearchEvents(
+  sink: ResearchLiveEventSink | undefined,
+  events: readonly ResearchEvent[],
+): void {
+  if (!sink || events.length === 0) {
+    return;
+  }
+
+  for (const event of events) {
+    emitLiveEvent(sink, {
+      schemaVersion: 1,
+      kind: "research.event",
+      timestamp: nowIso(),
+      payload: {
+        event,
+      },
+    });
+  }
+}
+
+async function emitAgentLiveEvent(
+  sink: ResearchLiveEventSink | undefined,
+  event: AgentEvent,
+): Promise<void> {
+  if (!sink) {
+    return;
+  }
+
+  const liveEvent = createAgentLiveEvent(event);
+  if (!liveEvent) {
+    return;
+  }
+
+  await emitLiveEvent(sink, liveEvent);
+}
+
+function createAgentLiveEvent(
+  event: AgentEvent,
+): Parameters<ResearchLiveEventSink>[0] | undefined {
+  if (event.type === "message_update") {
+    const update = event.assistantMessageEvent;
+    if (
+      update.type === "thinking_start" ||
+      update.type === "thinking_delta" ||
+      update.type === "thinking_end"
+    ) {
+      const text =
+        update.type === "thinking_end"
+          ? update.content
+          : thinkingTextAtIndex(update.partial, update.contentIndex);
+      const thinking = thinkingContentAtIndex(update.partial, update.contentIndex);
+      return {
+        schemaVersion: 1,
+        kind: "model.thought",
+        timestamp: nowIso(),
+        payload: {
+          eventType: update.type,
+          phase:
+            update.type === "thinking_start"
+              ? "started"
+              : update.type === "thinking_end"
+                ? "completed"
+                : "delta",
+          contentIndex: update.contentIndex,
+          itemId: `thinking:${update.contentIndex}`,
+          responseId: update.partial.responseId ?? null,
+          provider: update.partial.provider,
+          model: update.partial.model,
+          api: update.partial.api,
+          text,
+          ...(update.type === "thinking_delta" ? { delta: update.delta } : {}),
+          ...(thinking?.redacted ? { redacted: true } : {}),
+        },
+      };
+    }
+
+    if (
+      update.type === "text_start" ||
+      update.type === "text_delta" ||
+      update.type === "text_end"
+    ) {
+      const text =
+        update.type === "text_end"
+          ? update.content
+          : textAtIndex(update.partial, update.contentIndex);
+      return {
+        schemaVersion: 1,
+        kind: "model.output",
+        timestamp: nowIso(),
+        payload: {
+          eventType: update.type,
+          phase:
+            update.type === "text_start"
+              ? "started"
+              : update.type === "text_end"
+                ? "completed"
+                : "delta",
+          contentIndex: update.contentIndex,
+          itemId: `text:${update.contentIndex}`,
+          responseId: update.partial.responseId ?? null,
+          provider: update.partial.provider,
+          model: update.partial.model,
+          api: update.partial.api,
+          text,
+          ...(update.type === "text_delta" ? { delta: update.delta } : {}),
+        },
+      };
+    }
+  }
+
+  if (
+    event.type === "tool_execution_start" ||
+    event.type === "tool_execution_update" ||
+    event.type === "tool_execution_end"
+  ) {
+    return {
+      schemaVersion: 1,
+      kind: "tool.progress",
+      timestamp: nowIso(),
+      payload: {
+        eventType: event.type,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        ...(event.type === "tool_execution_start" ||
+        event.type === "tool_execution_update"
+          ? { args: event.args }
+          : {}),
+        ...(event.type === "tool_execution_update"
+          ? { partialResult: event.partialResult }
+          : {}),
+        ...(event.type === "tool_execution_end"
+          ? { result: event.result, isError: event.isError }
+          : {}),
+      },
+    };
+  }
+
+  if (
+    event.type === "agent_start" ||
+    event.type === "agent_end" ||
+    event.type === "turn_start" ||
+    event.type === "turn_end" ||
+    event.type === "message_start" ||
+    event.type === "message_end"
+  ) {
+    return {
+      schemaVersion: 1,
+      kind: "agent.event",
+      timestamp: nowIso(),
+      payload: captureAgentEvent(event),
+    };
+  }
+
+  return undefined;
+}
+
+async function emitLiveEvent(
+  sink: ResearchLiveEventSink,
+  event: Parameters<ResearchLiveEventSink>[0],
+): Promise<void> {
+  try {
+    await sink(event);
+  } catch {
+    // Live UI streaming must never affect the research loop outcome.
+  }
+}
+
+function thinkingContentAtIndex(
+  message: AgentMessage,
+  contentIndex: number,
+): Extract<
+  Extract<AgentMessage, { role: "assistant" }>["content"][number],
+  { type: "thinking" }
+> | undefined {
+  if (!isAssistantMessage(message)) {
+    return undefined;
+  }
+
+  const item = message.content[contentIndex];
+  return item?.type === "thinking" ? item : undefined;
+}
+
+function thinkingTextAtIndex(
+  message: AgentMessage,
+  contentIndex: number,
+): string {
+  return thinkingContentAtIndex(message, contentIndex)?.thinking ?? "";
+}
+
+function textAtIndex(message: AgentMessage, contentIndex: number): string {
+  if (!isAssistantMessage(message)) {
+    return "";
+  }
+
+  const item = message.content[contentIndex];
+  return item?.type === "text" ? item.text : "";
 }
 
 function createPiStreamOptions(

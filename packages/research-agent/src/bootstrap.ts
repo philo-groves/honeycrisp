@@ -60,6 +60,7 @@ import type {
   ResearchLoopExecutor,
   ResearchLoopPlan,
   ResearchLoopProcessingResult,
+  ResearchLiveEventSink,
   ResearchMemoryControllerDecision,
   ResearchMemoryControllerInput,
   ResearchMemorySnapshot,
@@ -109,6 +110,7 @@ export interface BootstrapResearchRunInput extends ResearchGoalFrameOptions {
   selectedSkillIds?: readonly string[];
   governance?: ResearchGovernancePolicy;
   loopExecutor?: ResearchLoopExecutor;
+  eventSink?: ResearchLiveEventSink;
   goalRun?: ResearchGoalRunOptions;
 }
 
@@ -222,26 +224,31 @@ export async function bootstrapResearchRun(
       goalFrame,
       goalState,
     );
+    const preLoopEvents = [
+      createMemoryDecisionEvent(goalFrame.root.id, decision),
+      createContextCompiledEvent(goalFrame.root.id, decision, storageLayout, workspaceContext),
+      createLoopPlannedEvent(goalFrame.root.id, loopPlan),
+    ];
+    emitLiveResearchEvents(input.eventSink, preLoopEvents);
     loopResult = await processResearchLoop({
       loopPlan,
       ...(input.loopExecutor ? { executor: input.loopExecutor } : {}),
       storageLayout,
+      ...(input.eventSink ? { eventSink: input.eventSink } : {}),
     });
     loopResults.push(loopResult);
 
     const iterationEvents: ResearchEvent[] = [];
-    iterationEvents.push(createMemoryDecisionEvent(goalFrame.root.id, decision));
-    iterationEvents.push(
-      createContextCompiledEvent(goalFrame.root.id, decision, storageLayout, workspaceContext),
-    );
-    iterationEvents.push(createLoopPlannedEvent(goalFrame.root.id, loopPlan));
+    iterationEvents.push(...preLoopEvents);
     iterationEvents.push(...(loopResult.output.toolEvents ?? []));
-    iterationEvents.push(createLoopProcessedEvent(goalFrame.root.id, loopResult));
-    iterationEvents.push(
+    const postLoopEvents = [
+      createLoopProcessedEvent(goalFrame.root.id, loopResult),
       ...createResearchTraceEventsFromLoopResult(loopResult, {
         goalId: goalFrame.root.id,
       }),
-    );
+    ];
+    iterationEvents.push(...postLoopEvents);
+    emitLiveResearchEvents(input.eventSink, postLoopEvents);
 
     const transition = advanceGoalRunState({
       state: goalState,
@@ -820,6 +827,40 @@ function createLoopProcessedEvent(
       followUpRecommendation: loopResult.followUpRecommendation,
     },
   };
+}
+
+function emitLiveResearchEvents(
+  sink: ResearchLiveEventSink | undefined,
+  events: readonly ResearchEvent[],
+): void {
+  if (!sink || events.length === 0) {
+    return;
+  }
+
+  for (const event of events) {
+    try {
+      const maybePromise = sink({
+        schemaVersion: 1,
+        kind: "research.event",
+        timestamp: nowIso(),
+        payload: { event },
+      });
+      if (isPromiseLike(maybePromise)) {
+        void maybePromise.catch(() => undefined);
+      }
+    } catch {
+      // Live UI streaming must not affect durable memory or loop execution.
+    }
+  }
+}
+
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
 }
 
 function createCompletedSubGoalNode(input: {

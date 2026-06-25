@@ -70,6 +70,7 @@ import type {
   ResearchEvent,
   ResearchExecutableTool,
   ResearchGovernancePolicy,
+  ResearchLiveEventSink,
   ResearchLoopExecutor,
   ResearchMemorySnapshot,
   ResearchModelConfigPreference,
@@ -84,6 +85,7 @@ import type {
 } from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
+const LIVE_EVENT_PREFIX = "HONEYCRISP_EVENT ";
 
 type ToolFamily =
   | "local-inspection"
@@ -164,6 +166,7 @@ interface ParsedArgs {
   inspectBytes: number | undefined;
   runtimeTools: RuntimeToolConfig;
   capturePath: string | undefined;
+  eventStream: boolean;
   workspaceRoot: string;
   goalLoops: number | null | undefined;
   json: boolean;
@@ -241,6 +244,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let inspectAction: LocalInspectionAction = "read_text";
   let inspectBytes: number | undefined;
   let capturePath: string | undefined;
+  let eventStream = false;
   let workspaceRoot = process.cwd();
   let goalLoops: number | null | undefined;
   const toolFamilies: ToolFamily[] = [];
@@ -413,6 +417,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--capture") {
       capturePath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--event-stream") {
+      eventStream = true;
     } else if (arg === "--workspace-root") {
       workspaceRoot = readOptionValue(argv, index, arg);
       index += 1;
@@ -480,6 +486,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       disableDefaultToolConfig,
     },
     capturePath,
+    eventStream,
     workspaceRoot,
     goalLoops,
     json,
@@ -1085,6 +1092,7 @@ function usage(): string {
     "  --skill-dir <path>     Load local skills from child directories containing SKILL.md",
     "  --skill <id>           Request a loaded skill by id",
     "  --capture <path>       Write a local flow-capture JSON artifact",
+    "  --event-stream         Write prefixed live JSON events to stdout",
     "  --workspace-root <p>   Workspace root for durable runtime memory",
     "  --goal-loops <n|none>  Max loops, or none for no configured loop limit",
     "  --json                 Print the initialized run as JSON",
@@ -1213,6 +1221,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           : {}),
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
         loopExecutor,
+        ...(args.eventStream ? { eventSink: createCliLiveEventSink() } : {}),
         durableMemory: true,
         ...(args.goalLoops !== undefined
           ? { goalRun: { maxLoops: args.goalLoops } }
@@ -1281,6 +1290,12 @@ function createModelConfigCapture(
     ...(modelConfig.effort ? { effort: modelConfig.effort } : {}),
     source: modelConfig.source,
     ...(modelConfig.configPath ? { configPath: modelConfig.configPath } : {}),
+  };
+}
+
+function createCliLiveEventSink(): ResearchLiveEventSink {
+  return (event) => {
+    output.write(`${LIVE_EVENT_PREFIX}${JSON.stringify(event)}\n`);
   };
 }
 

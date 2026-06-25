@@ -110,9 +110,7 @@ function getPermittedToolClasses(
 
   for (const permission of packet.toolPermissions) {
     for (const actionClass of permission.actionClasses) {
-      if (actionClass === selectedAction) {
-        classes.add(actionClass);
-      }
+      classes.add(actionClass);
     }
   }
 
