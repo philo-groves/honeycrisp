@@ -27,6 +27,7 @@ import {
   getDefaultResearchModelConfigPath,
   createSqliteMemoryEventLog,
   createSqliteMemoryRecordStore,
+  createSqliteProofStore,
   createSynthesisTool,
   getAuthStatus,
   listAuthProviders,
@@ -807,6 +808,11 @@ function usage(): string {
     "  memory hypotheses                 Show hypotheses and semantic claims",
     "  memory findings                   Show finding records",
     "  memory finding <record-id>        Show one finding with evidence/proof links",
+    "  memory proof-state                Show proof obligations and attempts",
+    "  memory proof-obligations          Show proof obligations",
+    "  memory proof-obligation <id>      Show one proof obligation",
+    "  memory proof-attempts             Show proof attempts",
+    "  memory proof-attempt <id>         Show one proof attempt",
     "  memory claim-graph                Show claim graph edges",
     "  memory prospective-checks         Show prospective checks",
     "  memory debug-capture              Show read-only memory debug capture",
@@ -996,7 +1002,10 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
   const recordStore = createSqliteMemoryRecordStore({
     workspaceRoot: args.workspaceRoot,
   });
-  const inspector = createMemoryInspector({ eventLog, recordStore });
+  const proofStore = createSqliteProofStore({
+    workspaceRoot: args.workspaceRoot,
+  });
+  const inspector = createMemoryInspector({ eventLog, recordStore, proofStore });
 
   try {
     if (args.command === "timeline") {
@@ -1097,6 +1106,52 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
       return;
     }
 
+    if (args.command === "proof-state") {
+      printMemoryOutput(args, inspector.showProofState(), renderProofState);
+      return;
+    }
+
+    if (args.command === "proof-obligations") {
+      printMemoryOutput(
+        args,
+        inspector.showProofObligations(),
+        renderProofObligations,
+      );
+      return;
+    }
+
+    if (args.command === "proof-obligation") {
+      const obligationId = requireMemoryPositional(
+        args,
+        "proof-obligation <obligation-id>",
+      );
+      printMemoryOutput(
+        args,
+        inspector.showProofObligationById(obligationId) ?? null,
+        renderProofObligation,
+      );
+      return;
+    }
+
+    if (args.command === "proof-attempts") {
+      printMemoryOutput(
+        args,
+        inspector.showProofAttempts(),
+        renderProofAttempts,
+      );
+      return;
+    }
+
+    if (args.command === "proof-attempt") {
+      const attemptId = requireMemoryPositional(args, "proof-attempt <attempt-id>");
+      printMemoryOutput(
+        args,
+        inspector.showProofAttemptById(attemptId) ?? null,
+        renderProofAttempt,
+      );
+      return;
+    }
+
     if (args.command === "debug-capture") {
       const captureInput = args.goal
         ? createDecisionInspection(args, inspector)
@@ -1135,6 +1190,7 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
   } finally {
     eventLog.close();
     recordStore.close();
+    proofStore.close();
   }
 }
 
@@ -1421,6 +1477,11 @@ function memoryUsage(): string {
     "  hypotheses                 Show hypotheses and semantic claims",
     "  findings                   Show finding records",
     "  finding <record-id>        Show one finding with evidence/proof links",
+    "  proof-state                Show proof obligations and attempts",
+    "  proof-obligations          Show proof obligations",
+    "  proof-obligation <id>      Show one proof obligation",
+    "  proof-attempts             Show proof attempts",
+    "  proof-attempt <id>         Show one proof attempt",
     "  claim-graph                Show claim graph edges",
     "  prospective-checks         Show prospective checks",
     "  debug-capture              Show read-only memory debug capture",
@@ -1472,15 +1533,17 @@ function createDecisionInspection(
     goalFrame,
     retrieval,
   });
+  const proofState = inspector.showProofState();
   const contextPacket = compileContextPacketV2({
     goalFrame,
     activeGoal: goalFrame.root,
     activeSubGoal: decision.subGoal,
     retrieval,
+    proofState,
     tools: [],
   });
 
-  return { goalFrame, retrieval, decision, contextPacket };
+  return { goalFrame, retrieval, decision, contextPacket, proofState };
 }
 
 function printMemoryOutput<T>(
@@ -1625,6 +1688,98 @@ function renderFindingDetails(
     `Claims: ${detail.linkedClaimRecordIds.join(", ") || "-"}`,
     `Proof attempts: ${detail.proofAttemptIds.join(", ") || "-"}`,
     `Artifacts: ${detail.artifactRefs.map((ref) => ref.id).join(", ") || "-"}`,
+  ].join("\n");
+}
+
+function renderProofState(
+  state: ReturnType<ReturnType<typeof createMemoryInspector>["showProofState"]>,
+): string {
+  return [
+    `Proof obligations: ${state.obligations.length}`,
+    `Proof attempts: ${state.attempts.length}`,
+  ].join("\n");
+}
+
+function renderProofObligations(
+  obligations: ReturnType<
+    ReturnType<typeof createMemoryInspector>["showProofObligations"]
+  >,
+): string {
+  if (obligations.length === 0) {
+    return "No proof obligations found.";
+  }
+
+  return obligations
+    .map((obligation) =>
+      [
+        obligation.status,
+        obligation.id,
+        obligation.subject.kind,
+        obligation.subject.id,
+        obligation.question,
+      ].join("\t"),
+    )
+    .join("\n");
+}
+
+function renderProofObligation(
+  obligation: ReturnType<
+    ReturnType<typeof createMemoryInspector>["showProofObligationById"]
+  > | null,
+): string {
+  if (!obligation) {
+    return "No proof obligation found.";
+  }
+
+  return [
+    `${obligation.status}\t${obligation.id}`,
+    `Subject: ${obligation.subject.kind}:${obligation.subject.id}`,
+    `Question: ${obligation.question}`,
+    `Findings: ${obligation.findingRecordIds.join(", ") || "-"}`,
+    `Evidence: ${obligation.evidenceRefIds.join(", ") || "-"}`,
+    `Artifacts: ${obligation.artifactRefs.map((ref) => ref.id).join(", ") || "-"}`,
+  ].join("\n");
+}
+
+function renderProofAttempts(
+  attempts: ReturnType<
+    ReturnType<typeof createMemoryInspector>["showProofAttempts"]
+  >,
+): string {
+  if (attempts.length === 0) {
+    return "No proof attempts found.";
+  }
+
+  return attempts
+    .map((attempt) =>
+      [
+        attempt.status,
+        attempt.result ?? "-",
+        attempt.id,
+        attempt.obligationId,
+        attempt.method.kind,
+        attempt.summary,
+      ].join("\t"),
+    )
+    .join("\n");
+}
+
+function renderProofAttempt(
+  attempt: ReturnType<
+    ReturnType<typeof createMemoryInspector>["showProofAttemptById"]
+  > | null,
+): string {
+  if (!attempt) {
+    return "No proof attempt found.";
+  }
+
+  return [
+    `${attempt.status}\t${attempt.result ?? "-"}\t${attempt.id}`,
+    `Obligation: ${attempt.obligationId}`,
+    `Method: ${attempt.method.kind} (${attempt.method.name})`,
+    `Evidence: ${attempt.evidenceRefIds.join(", ") || "-"}`,
+    `Artifacts: ${attempt.artifactRefs.map((ref) => ref.id).join(", ") || "-"}`,
+    attempt.summary,
   ].join("\n");
 }
 

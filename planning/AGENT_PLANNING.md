@@ -101,21 +101,21 @@ Checklist:
 
 Move Beale's general verifier concept into Honeycrisp as an extensible proof mechanism while leaving domain-specific proof logic to skills and MCP.
 
-Status: not started.
+Status: completed.
 
 Checklist:
 
-- [ ] Add proof obligation and proof attempt contracts to Honeycrisp.
-- [ ] Add accepted event kinds for proof lifecycle: `proof.requested`, `proof.attempted`, `proof.observed`, `proof.reviewed`.
-- [ ] Persist proof obligations and attempts with links to goals, subgoals, evidence records, findings, artifacts, and tool events.
-- [ ] Add a generic proof result vocabulary: `pass`, `fail`, `inconclusive`, `blocked`, `superseded`.
-- [ ] Support proof artifacts through existing Honeycrisp storage manifest and memory artifact refs.
-- [ ] Add proof retrieval and context sections so the model sees proof state separately from evidence and hypothesis text.
-- [ ] Add a proof guidance interface that skills can extend with domain-specific proof expectations.
-- [ ] Add MCP/tool integration hooks so external proof providers can create proof attempts without special Beale code.
-- [ ] Add inspector commands for proof obligations and proof attempts.
-- [ ] Add deterministic tests for proof contracts, persistence, retrieval, and context packet rendering.
-- [ ] Run a real health check using a simple local proof method, such as a command that validates an artifact or reproducible claim.
+- [x] Add proof obligation and proof attempt contracts to Honeycrisp.
+- [x] Add accepted event kinds for proof lifecycle: `proof.requested`, `proof.attempted`, `proof.observed`, `proof.reviewed`.
+- [x] Persist proof obligations and attempts with links to goals, subgoals, evidence records, findings, artifacts, and tool events.
+- [x] Add a generic proof result vocabulary: `pass`, `fail`, `inconclusive`, `blocked`, `superseded`.
+- [x] Support proof artifacts through existing Honeycrisp storage manifest and memory artifact refs.
+- [x] Add proof retrieval and context sections so the model sees proof state separately from evidence and hypothesis text.
+- [x] Add a proof guidance interface that skills can extend with domain-specific proof expectations.
+- [x] Add MCP/tool integration hooks so external proof providers can create proof attempts without special Beale code.
+- [x] Add inspector commands for proof obligations and proof attempts.
+- [x] Add deterministic tests for proof contracts, persistence, retrieval, and context packet rendering.
+- [x] Run a real health check using a simple local proof method, such as a command that validates an artifact or reproducible claim.
 
 ## Phase 4: Repository And Workspace Context Without Guards
 

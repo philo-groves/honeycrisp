@@ -11,6 +11,7 @@ import {
   createResearchEventId,
   createSqliteMemoryEventLog,
   createSqliteMemoryRecordStore,
+  createSqliteProofStore,
 } from "../packages/research-agent/dist/index.js";
 
 const cliPath = fileURLToPath(new URL("../packages/cli/dist/cli.js", import.meta.url));
@@ -427,10 +428,11 @@ test("memory CLI shows subcommand help", () => {
 });
 
 test("memory CLI prints event timelines and records as JSON", async () => {
-  const { workspaceRoot, eventId, eventLog, recordStore } = await createCliFixture();
+  const { workspaceRoot, eventId, eventLog, recordStore, proofStore } =
+    await createCliFixture();
 
   const timeline = runMemoryCliJson("timeline", "--workspace-root", workspaceRoot);
-  assert.equal(timeline.length, 4);
+  assert.equal(timeline.length, 6);
   assert.equal(timeline[1]?.id, eventId);
 
   const records = runMemoryCliJson(
@@ -459,12 +461,37 @@ test("memory CLI prints event timelines and records as JSON", async () => {
   assert.equal(findingDetail.finding.id, finding.id);
   assert.deepEqual(findingDetail.proofAttemptIds, ["proof_attempt_cli"]);
 
+  const proofState = runMemoryCliJson(
+    "proof-state",
+    "--workspace-root",
+    workspaceRoot,
+  );
+  assert.equal(proofState.obligations.length, 1);
+  assert.equal(proofState.attempts.length, 1);
+
+  const proofObligations = runMemoryCliJson(
+    "proof-obligations",
+    "--workspace-root",
+    workspaceRoot,
+  );
+  const obligation = proofObligations[0];
+  assert.equal(obligation.id, "proof_obl_cli");
+
+  const proofAttempt = runMemoryCliJson(
+    "proof-attempt",
+    "proof_attempt_cli_store",
+    "--workspace-root",
+    workspaceRoot,
+  );
+  assert.equal(proofAttempt.result, "pass");
+
   eventLog.close();
   recordStore.close();
+  proofStore.close();
 });
 
 test("memory CLI prints recall, context, decision, and debug capture data", async () => {
-  const { workspaceRoot, eventLog, recordStore } = await createCliFixture();
+  const { workspaceRoot, eventLog, recordStore, proofStore } = await createCliFixture();
   const goal = "Goal: Inspect parser memory\nScope constraints: local only";
 
   const preconscious = runMemoryCliJson(
@@ -486,6 +513,11 @@ test("memory CLI prints recall, context, decision, and debug capture data", asyn
     goal,
   );
   assert.ok(context.sections.some((section) => section.itemCount > 0));
+  assert.ok(
+    context.sections.some(
+      (section) => section.label === "proof_state" && section.itemCount > 0,
+    ),
+  );
 
   const decision = runMemoryCliJson(
     "decision",
@@ -511,12 +543,14 @@ test("memory CLI prints recall, context, decision, and debug capture data", asyn
 
   eventLog.close();
   recordStore.close();
+  proofStore.close();
 });
 
 async function createCliFixture() {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-cli-"));
   const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
   const recordStore = createSqliteMemoryRecordStore({ workspaceRoot });
+  const proofStore = createSqliteProofStore({ workspaceRoot });
   const events = [
     createEvent("tool.observed", {
       summary: "Parser source was inspected.",
@@ -537,15 +571,50 @@ async function createCliFixture() {
       trigger: "Before any search action.",
     }),
   ];
+  const proofEvents = [
+    createEvent("proof.requested", {
+      obligationId: "proof_obl_cli",
+      question: "Can the CLI parser finding be reproduced?",
+      subject: {
+        kind: "memory_record",
+        id: "mem_cli_finding",
+      },
+      findingRecordIds: ["mem_cli_finding"],
+      evidenceRefIds: ["parser_source"],
+      acceptableMethods: [
+        {
+          kind: "empirical_reproduction",
+          name: "Run CLI parser fixture",
+        },
+      ],
+    }),
+    createEvent("proof.observed", {
+      attemptId: "proof_attempt_cli_store",
+      obligationId: "proof_obl_cli",
+      status: "completed",
+      result: "pass",
+      summary: "CLI parser fixture reproduced the finding.",
+      method: {
+        kind: "empirical_reproduction",
+        name: "Run CLI parser fixture",
+      },
+      evidenceRefIds: ["parser_source"],
+    }),
+  ];
   const acceptedEvents = eventLog.appendMany(events);
+  const acceptedProofEvents = eventLog.appendMany(proofEvents);
   const records = createDeterministicMemoryWritePipeline().deriveMany(acceptedEvents);
   recordStore.writeMany(records);
+  for (const event of acceptedProofEvents) {
+    proofStore.applyEvent(event);
+  }
 
   return {
     workspaceRoot,
     eventId: acceptedEvents[1].id,
     eventLog,
     recordStore,
+    proofStore,
   };
 }
 

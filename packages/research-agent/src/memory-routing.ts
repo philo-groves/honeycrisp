@@ -31,6 +31,10 @@ export const ACCEPTED_RAW_EVENT_KINDS = [
   "finding.proposed",
   "finding.updated",
   "finding.reviewed",
+  "proof.requested",
+  "proof.attempted",
+  "proof.observed",
+  "proof.reviewed",
   "user.commitment",
   "error.observed",
 ] as const satisfies readonly ResearchAcceptedRawEventKind[];

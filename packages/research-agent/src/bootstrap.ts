@@ -40,6 +40,10 @@ import {
   type MemoryEventLog,
 } from "./memory-event-log.js";
 import {
+  createSqliteProofStore,
+  type ProofStore,
+} from "./proof-store.js";
+import {
   createDeterministicMemoryWritePipeline,
   type MemoryWritePipeline,
 } from "./memory-write-pipeline.js";
@@ -69,6 +73,7 @@ import type {
 export interface ResearchDurableMemoryIntegrationOptions {
   eventLog?: MemoryEventLog;
   recordStore?: MemoryRecordStore;
+  proofStore?: ProofStore;
   writePipeline?: MemoryWritePipeline;
   retriever?: MemoryRetriever;
   closeStores?: boolean;
@@ -79,6 +84,8 @@ export interface ResearchDurableMemoryRunSummary {
   databasePath?: string;
   eventLogCount: number;
   recordCount: number;
+  proofObligationCount: number;
+  proofAttemptCount: number;
   eventsAppended: number;
   recordsWritten: number;
   latestRetrievalCandidateCount: number;
@@ -318,6 +325,7 @@ interface DurableMemoryRuntime {
   storageLayout: ResearchStorageLayout;
   eventLog: MemoryEventLog;
   recordStore: MemoryRecordStore;
+  proofStore: ProofStore;
   writePipeline: MemoryWritePipeline;
   retriever: MemoryRetriever;
   close(): void;
@@ -359,14 +367,22 @@ function createDurableMemoryRuntime(input: {
     });
   const writePipeline =
     options.writePipeline ?? createDeterministicMemoryWritePipeline();
+  const proofStore =
+    options.proofStore ??
+    createSqliteProofStore({
+      workspaceRoot,
+      databasePath: input.storageLayout.databasePath,
+    });
   const retriever = options.retriever ?? createDeterministicMemoryRetriever();
   const closeStores =
-    options.closeStores ?? (!options.eventLog && !options.recordStore);
+    options.closeStores ??
+    (!options.eventLog && !options.recordStore && !options.proofStore);
 
   return {
     storageLayout: input.storageLayout,
     eventLog,
     recordStore,
+    proofStore,
     writePipeline,
     retriever,
     close() {
@@ -375,6 +391,7 @@ function createDurableMemoryRuntime(input: {
       }
       eventLog.close();
       recordStore.close();
+      proofStore.close();
     },
   };
 }
@@ -404,6 +421,9 @@ function appendAndConsolidateDurableEvents(input: {
   input.stats.eventsAppended += appended.length;
   const candidateRecords = input.durableMemory.writePipeline.deriveMany(appended);
   registerEventArtifactRefs(input.durableMemory.storageLayout, appended);
+  for (const event of appended) {
+    input.durableMemory.proofStore.applyEvent(event);
+  }
   const newRecords = candidateRecords.filter(
     (record) => !input.durableMemory.recordStore.getById(record.id),
   );
@@ -620,6 +640,8 @@ function finalizeDurableMemorySummary(
     ...(databasePath ? { databasePath } : {}),
     eventLogCount: durableMemory.eventLog.listAll().length,
     recordCount: durableMemory.recordStore.list().length,
+    proofObligationCount: durableMemory.proofStore.listObligations().length,
+    proofAttemptCount: durableMemory.proofStore.listAttempts().length,
     eventsAppended: stats.eventsAppended,
     recordsWritten: stats.recordsWritten,
     latestRetrievalCandidateCount: stats.latestRetrievalCandidateCount,

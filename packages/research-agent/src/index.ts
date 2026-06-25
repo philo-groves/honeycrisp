@@ -341,6 +341,18 @@ export {
   createResearchSystemPrompt,
 } from "./pi-runtime.js";
 export type { CreateResearchPiAgentOptions } from "./pi-runtime.js";
+export {
+  createProofAttemptFromEvent,
+  createProofObligationFromEvent,
+  createSqliteProofStore,
+  SqliteProofStore,
+} from "./proof-store.js";
+export type {
+  ListProofAttemptsOptions,
+  ListProofObligationsOptions,
+  ProofStore,
+  SqliteProofStoreOptions,
+} from "./proof-store.js";
 export type {
   ResearchAcceptedRawEventKind,
   ResearchActionClass,

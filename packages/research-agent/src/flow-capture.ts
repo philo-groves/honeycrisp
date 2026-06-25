@@ -120,6 +120,8 @@ export interface ResearchFlowCapture {
     databasePath?: string;
     eventLogCount: number;
     recordCount: number;
+    proofObligationCount: number;
+    proofAttemptCount: number;
     eventsAppended: number;
     recordsWritten: number;
     latestRetrievalCandidateCount: number;
@@ -228,6 +230,8 @@ function createMemoryIntegrationCapture(
       : {}),
     eventLogCount: durableMemory.eventLogCount,
     recordCount: durableMemory.recordCount,
+    proofObligationCount: durableMemory.proofObligationCount,
+    proofAttemptCount: durableMemory.proofAttemptCount,
     eventsAppended: durableMemory.eventsAppended,
     recordsWritten: durableMemory.recordsWritten,
     latestRetrievalCandidateCount: durableMemory.latestRetrievalCandidateCount,

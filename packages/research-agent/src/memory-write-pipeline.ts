@@ -125,6 +125,19 @@ export class DeterministicMemoryWritePipeline implements MemoryWritePipeline {
             tags: ["finding-review"],
           }),
         ];
+      case "proof.requested":
+      case "proof.attempted":
+      case "proof.observed":
+      case "proof.reviewed":
+        return [
+          createEpisodeRecord(event, {
+            episodeKind: "memory_decision",
+            summary: summarizeMemoryEvent(event),
+            status: event.kind === "proof.requested" ? "active" : "confirmed",
+            confidence: 0.85,
+            tags: ["proof-state", event.kind],
+          }),
+        ];
       case "user.commitment":
         return [createProspectiveCommitmentRecord(event)];
       case "error.observed":
@@ -156,6 +169,8 @@ export function summarizeMemoryEvent(event: ResearchEvent): string {
       "claim",
       "hypothesis",
       "finding",
+      "question",
+      "result",
       "procedure",
       "check",
       "objective",

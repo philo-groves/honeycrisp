@@ -9,11 +9,13 @@ import {
 } from "./memory-retriever.js";
 import type { MemoryEventLog } from "./memory-event-log.js";
 import type { MemoryRecordStore } from "./memory-record-store.js";
+import type { ProofStore } from "./proof-store.js";
 import type {
   ResearchClaimGraphEdge,
   ResearchDerivedMemoryRecord,
   ResearchEvent,
   ResearchFindingMemoryRecord,
+  ResearchProofStateReadModel,
 } from "./types.js";
 
 export interface RejectedMemoryEventInspection {
@@ -61,15 +63,18 @@ export interface MemoryDebugCapture {
 export interface MemoryInspectorOptions {
   eventLog?: MemoryEventLog;
   recordStore?: MemoryRecordStore;
+  proofStore?: ProofStore;
 }
 
 export class MemoryInspector {
   private readonly eventLog: MemoryEventLog | undefined;
   private readonly recordStore: MemoryRecordStore | undefined;
+  private readonly proofStore: ProofStore | undefined;
 
   constructor(options: MemoryInspectorOptions = {}) {
     this.eventLog = options.eventLog;
     this.recordStore = options.recordStore;
+    this.proofStore = options.proofStore;
   }
 
   eventTimeline(): readonly MemoryEventTimelineEntry[] {
@@ -206,6 +211,30 @@ export class MemoryInspector {
     return this.requireRecordStore().list({ kind: "prospective_check" });
   }
 
+  showProofState(): ResearchProofStateReadModel {
+    return this.requireProofStore().readState();
+  }
+
+  showProofObligations(): ResearchProofStateReadModel["obligations"] {
+    return this.requireProofStore().listObligations();
+  }
+
+  showProofAttempts(): ResearchProofStateReadModel["attempts"] {
+    return this.requireProofStore().listAttempts();
+  }
+
+  showProofObligationById(
+    obligationId: string,
+  ): ResearchProofStateReadModel["obligations"][number] | undefined {
+    return this.requireProofStore().getObligationById(obligationId);
+  }
+
+  showProofAttemptById(
+    attemptId: string,
+  ): ResearchProofStateReadModel["attempts"][number] | undefined {
+    return this.requireProofStore().getAttemptById(attemptId);
+  }
+
   captureDebug(input: MemoryDebugCaptureInput = {}): MemoryDebugCapture {
     const committedWrites = this.recordStore
       ? this.recordStore.list({ includeAudited: true }).map((record) => ({
@@ -256,6 +285,14 @@ export class MemoryInspector {
     }
 
     return this.recordStore;
+  }
+
+  private requireProofStore(): ProofStore {
+    if (!this.proofStore) {
+      throw new Error("MemoryInspector requires a proof store for this operation.");
+    }
+
+    return this.proofStore;
   }
 }
 

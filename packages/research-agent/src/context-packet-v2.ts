@@ -9,6 +9,9 @@ import type {
   ResearchGoalFrame,
   ResearchGoalNode,
   ResearchMemoryStoreKind,
+  ResearchProofAttempt,
+  ResearchProofObligation,
+  ResearchProofStateReadModel,
   ResearchSubGoal,
   ResearchToolBudget,
   ResearchToolDescriptor,
@@ -21,6 +24,7 @@ export type ResearchContextPacketV2SectionLabel =
   | "candidate_procedures"
   | "current_hypotheses"
   | "current_findings"
+  | "proof_state"
   | "contradictions_uncertainty"
   | "prospective_commitments";
 
@@ -31,14 +35,19 @@ export type ResearchContextPacketV2ItemLabel =
   | "inference"
   | "hypothesis"
   | "finding"
+  | "proof_obligation"
+  | "proof_attempt"
   | "belief"
   | "uncertainty"
   | "prospective_check";
 
 export interface ResearchContextPacketV2Item {
   recordId: string;
-  recordKind: ResearchDerivedMemoryRecord["kind"];
-  status: ResearchDerivedMemoryRecord["status"];
+  recordKind: ResearchDerivedMemoryRecord["kind"] | "proof_obligation" | "proof_attempt";
+  status:
+    | ResearchDerivedMemoryRecord["status"]
+    | ResearchProofObligation["status"]
+    | ResearchProofAttempt["status"];
   label: ResearchContextPacketV2ItemLabel;
   summary: string;
   score: number;
@@ -87,6 +96,7 @@ export interface CompileContextPacketV2Input {
   activeGoal: ResearchGoalNode;
   activeSubGoal: ResearchSubGoal;
   retrieval: MemoryRetrievalResult;
+  proofState?: ResearchProofStateReadModel;
   tools: readonly ResearchToolDescriptor[];
   governance?: ResearchGovernancePolicy;
   actionClass?: ResearchActionClass;
@@ -106,6 +116,7 @@ const DEFAULT_SECTION_TOKEN_BUDGETS: Record<
   candidate_procedures: 160,
   current_hypotheses: 180,
   current_findings: 180,
+  proof_state: 180,
   contradictions_uncertainty: 160,
   prospective_commitments: 120,
 };
@@ -147,6 +158,10 @@ export function compileContextPacketV2(
       "current_findings",
       input.retrieval.findings,
       sectionBudgets.current_findings,
+    ),
+    compileProofSection(
+      input.proofState ?? { obligations: [], attempts: [] },
+      sectionBudgets.proof_state,
     ),
     compileSection(
       "contradictions_uncertainty",
@@ -191,6 +206,84 @@ export function compileContextPacketV2(
       "working",
       "episodic",
     ],
+  };
+}
+
+function compileProofSection(
+  proofState: ResearchProofStateReadModel,
+  tokenBudget: number,
+): ResearchContextPacketV2Section {
+  const items = [
+    ...proofState.obligations.map(createProofObligationItem),
+    ...proofState.attempts.map(createProofAttemptItem),
+  ].sort((left, right) => right.score - left.score);
+  const kept: ResearchContextPacketV2Item[] = [];
+  const droppedRecordIds: string[] = [];
+  let usedTokens = 0;
+
+  for (const item of items) {
+    if (usedTokens + item.estimatedTokens > tokenBudget) {
+      droppedRecordIds.push(item.recordId);
+      continue;
+    }
+    kept.push(item);
+    usedTokens += item.estimatedTokens;
+  }
+
+  return {
+    label: "proof_state",
+    tokenBudget,
+    estimatedTokens: usedTokens,
+    items: kept,
+    droppedRecordIds,
+  };
+}
+
+function createProofObligationItem(
+  obligation: ResearchProofObligation,
+): ResearchContextPacketV2Item {
+  const summary = [
+    obligation.question,
+    `subject=${obligation.subject.kind}:${obligation.subject.id}`,
+    obligation.findingRecordIds.length > 0
+      ? `findings=${obligation.findingRecordIds.join(",")}`
+      : "",
+  ].filter(Boolean).join(" ");
+
+  return {
+    recordId: obligation.id,
+    recordKind: "proof_obligation",
+    status: obligation.status,
+    label: "proof_obligation",
+    summary,
+    score: scoreProofObligation(obligation),
+    sourceEventIds: [],
+    selectionReasons: [`Proof obligation status is ${obligation.status}.`],
+    warnings: obligation.status === "failed" ? ["Proof obligation failed."] : [],
+    estimatedTokens: estimateTokens(summary),
+  };
+}
+
+function createProofAttemptItem(
+  attempt: ResearchProofAttempt,
+): ResearchContextPacketV2Item {
+  const summary = [
+    attempt.summary,
+    `method=${attempt.method.kind}`,
+    attempt.result ? `result=${attempt.result}` : "",
+  ].filter(Boolean).join(" ");
+
+  return {
+    recordId: attempt.id,
+    recordKind: "proof_attempt",
+    status: attempt.status,
+    label: "proof_attempt",
+    summary,
+    score: scoreProofAttempt(attempt),
+    sourceEventIds: attempt.sourceEventIds,
+    selectionReasons: [`Proof attempt status is ${attempt.status}.`],
+    warnings: attempt.result === "fail" ? ["Proof attempt failed."] : [],
+    estimatedTokens: estimateTokens(summary),
   };
 }
 
@@ -408,6 +501,40 @@ function isCurrentHypothesisCandidate(
     candidate.record.kind === "hypothesis" ||
     candidate.record.kind === "belief"
   );
+}
+
+function scoreProofObligation(obligation: ResearchProofObligation): number {
+  switch (obligation.status) {
+    case "open":
+      return 80;
+    case "in_progress":
+      return 75;
+    case "failed":
+    case "blocked":
+      return 70;
+    case "satisfied":
+      return 55;
+    case "superseded":
+    case "tombstoned":
+      return 10;
+  }
+}
+
+function scoreProofAttempt(attempt: ResearchProofAttempt): number {
+  if (attempt.result === "fail" || attempt.result === "blocked") {
+    return 75;
+  }
+  if (attempt.result === "pass") {
+    return 65;
+  }
+  if (attempt.status === "running" || attempt.status === "planned") {
+    return 60;
+  }
+  if (attempt.result === "inconclusive") {
+    return 55;
+  }
+
+  return 40;
 }
 
 function truncateToTokenBudget(value: string, tokenBudget: number): string {

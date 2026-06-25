@@ -186,6 +186,77 @@ test("context packet v2 keeps relevant contradictions within bounded context", (
   );
 });
 
+test("context packet v2 includes proof obligations and attempts separately", () => {
+  const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
+    createEvent("finding.proposed", {
+      finding: "Parser ordering finding.",
+      findingStatus: "supported",
+      evidenceRefIds: ["parser_source"],
+    }),
+  ]);
+
+  const packet = compileContextPacketV2({
+    goalFrame,
+    activeGoal: goalFrame.root,
+    activeSubGoal: subGoal,
+    retrieval,
+    proofState: {
+      obligations: [
+        {
+          id: "proof_obl_context_fixture",
+          status: "open",
+          subject: {
+            kind: "memory_record",
+            id: "mem_finding_context_fixture",
+          },
+          question: "Is the parser ordering finding reproducible?",
+          acceptableMethods: [
+            {
+              kind: "empirical_reproduction",
+              name: "Run parser fixture",
+            },
+          ],
+          findingRecordIds: ["mem_finding_context_fixture"],
+          hypothesisRecordIds: [],
+          claimRecordIds: [],
+          evidenceRefIds: ["parser_source"],
+          artifactRefs: [],
+          createdAt: "2026-06-25T00:00:00.000Z",
+          updatedAt: "2026-06-25T00:00:00.000Z",
+        },
+      ],
+      attempts: [
+        {
+          id: "proof_attempt_context_fixture",
+          obligationId: "proof_obl_context_fixture",
+          status: "completed",
+          result: "pass",
+          method: {
+            kind: "empirical_reproduction",
+            name: "Run parser fixture",
+          },
+          summary: "Parser fixture reproduced the ordering finding.",
+          sourceEventIds: ["evt_context_proof"],
+          evidenceRefIds: ["parser_source"],
+          artifactRefs: [],
+          createdAt: "2026-06-25T00:00:00.000Z",
+          updatedAt: "2026-06-25T00:00:00.000Z",
+        },
+      ],
+    },
+  tools: [],
+  });
+  const proofState = packet.sections.find(
+    (section) => section.label === "proof_state",
+  );
+
+  assert.ok(proofState);
+  assert.ok(
+    proofState.items.some((item) => item.label === "proof_obligation"),
+  );
+  assert.ok(proofState.items.some((item) => item.label === "proof_attempt"));
+});
+
 test("flow capture exposes context packet v2 selection reasons", async () => {
   const result = await bootstrapResearchRun({
     prompt: "Goal: Capture v2 context reasons\nScope constraints: no external search",

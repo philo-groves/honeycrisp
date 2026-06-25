@@ -135,6 +135,28 @@ test("memory write pipeline stores finding proposals and updates as finding reco
   assert.ok(review.tags.includes("finding-review"));
 });
 
+test("memory write pipeline records proof events as audit episodes", () => {
+  const pipeline = createDeterministicMemoryWritePipeline();
+  const requested = pipeline.derive(
+    createEvent("proof.requested", {
+      question: "Can the parser finding be reproduced?",
+    }),
+  )[0];
+  const observed = pipeline.derive(
+    createEvent("proof.observed", {
+      result: "pass",
+      summary: "Parser finding was reproduced.",
+    }),
+  )[0];
+
+  assert.equal(requested.kind, "episodic");
+  assert.equal(requested.status, "active");
+  assert.ok(requested.tags.includes("proof-state"));
+  assert.equal(observed.kind, "episodic");
+  assert.equal(observed.status, "confirmed");
+  assert.ok(observed.tags.includes("proof.observed"));
+});
+
 test("memory write pipeline creates episodic summaries for terminal goal transitions", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
   const completeEvent = createEvent("goal.updated", {
