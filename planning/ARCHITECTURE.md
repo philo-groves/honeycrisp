@@ -11,6 +11,26 @@ In other words: The processing layer keeps the agent oriented around a goal tree
 
 Honeycrisp should remain goal-based: every run has a root goal, every loop has a bounded sub-goal, and every response is judged against completion gates. The important change is that sub-goals are not planned from prompt text alone. They are proposed by the memory controller after reviewing working state, past episodes, claims, procedures, hypotheses, prospective commitments, and available tools.
 
+## Implementation Status
+
+The current runtime has the integrated first slice of the architecture in place:
+
+- Real CLI runs use durable SQLite memory by default, append accepted events during each loop, consolidate derived records, retrieve before later loops, and capture context packet v2 plus memory-controller metadata.
+- Built-in tools are registered through the tool registry, governed by side-effect and budget policy, emitted as `tool.requested` and `tool.observed` events, and routed through the memory write pipeline.
+- Local MCP servers can be configured through an explicit stdio JSON-RPC config and allowlist. MCP outputs are treated as untrusted external content.
+- Local skills can be loaded from `SKILL.md` directories, selected by id, and injected as bounded runtime context without overriding governance.
+- Allowlisted experiments can be configured as local subprocess tools with explicit side-effect policy, permissions, timeouts, output limits, stdout/stderr hashing, and artifact registration.
+- Storage creates the default `.honeycrisp/memory/` directory layout and records persisted artifacts in `artifacts/manifest.json` with size, hash, kind, purpose, path, and source event ids.
+- Config is preference-only. The CLI reads `.honeycrisp/config.json` under `--workspace-root` by default, provides `honeycrisp config show/set`, and still requires provider credentials to be authorized through the auth layer.
+
+Known limitations after this slice:
+
+- MCP support currently targets configured stdio servers; richer transport management, authentication handoff, and long-lived server health monitoring remain future work.
+- Experiment tools are allowlisted and auditable, but they are not a security sandbox. Operators must still choose safe commands and working directories.
+- Memory retrieval is sparse/structured and graph-aware enough for the current integration path; dense embedding retrieval and more advanced utility learning remain future work.
+- Flow captures intentionally summarize event timelines. Use the durable event log and storage manifest when exact artifact refs, source event ids, or full raw outputs are needed.
+- Integration health checks are documented command sequences plus deterministic regression tests, not yet a single packaged CI command that can safely run live models everywhere.
+
 ## Runtime Model
 
 The runtime flow is:
@@ -35,6 +55,8 @@ The config layer is not an auth layer. It stores and resolves model preferences 
 - effort level
 
 Provider credentials are managed by the CLI auth layer. A configured provider/model must already be authorized through `honeycrisp auth login`. When no config file or CLI override is provided, Honeycrisp selects the first authorized provider/model found in the auth store. If no authorized provider exists, real mode fails before model execution and asks the user to log in or provide a config preference for an already-authorized provider.
+
+By default, project preferences live at `.honeycrisp/config.json` under `--workspace-root`. CLI overrides remain higher precedence than both explicit and default config files.
 
 ## Processing
 This section describes the general research workflow of the Honeycrisp agent. Research is never locked into a single workflow. Processing is conducted with a series of dynamic loops. The harness is built to provide the best security-relevant context to the model while processing.
@@ -256,7 +278,7 @@ Tools should not decide research strategy. They expose capabilities. The memory 
 
 ### Tool Registry
 
-The tool layer should expose a registry that the memory controller can query. Each registered tool should describe:
+The tool layer exposes a registry that the memory controller can query. Each registered tool should describe:
 
 - action classes it supports
 - input schema
@@ -269,6 +291,8 @@ The tool layer should expose a registry that the memory controller can query. Ea
 - memory writeback defaults
 
 The memory controller selects action classes and candidate tools. The processing layer validates that the selected tool is permitted for the current sub-goal and runtime configuration before execution.
+
+Configured tool surfaces currently include local inspection, repository search, structured file reads, analysis, synthesis, storage listing, live MCP tools/resources, local skills, and allowlisted experiments.
 
 ### Tool Result Events
 

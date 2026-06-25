@@ -8,6 +8,7 @@ import {
   bootstrapResearchRun,
   createDeterministicLoopExecutor,
   createLocalInspectionTool,
+  createResearchFlowCapture,
   createResearchToolRegistry,
   createSqliteMemoryEventLog,
   createSqliteMemoryRecordStore,
@@ -48,6 +49,7 @@ test("durable bootstrap writes records and retrieves them between loops", async 
   });
   const eventLog = createSqliteMemoryEventLog({ workspaceRoot });
   const recordStore = createSqliteMemoryRecordStore({ workspaceRoot });
+  const capture = createResearchFlowCapture(result);
 
   try {
     const records = recordStore.list();
@@ -61,6 +63,22 @@ test("durable bootstrap writes records and retrieves them between loops", async 
     assert.ok(result.durableMemory.recordsWritten > 0);
     assert.ok(result.durableMemory.latestRetrievalCandidateCount > 0);
     assert.equal(result.durableMemory.usedMemoryDrivenController, true);
+    assert.equal(capture.memoryIntegration?.enabled, true);
+    assert.ok(capture.contextV2?.sections.length > 0);
+    assert.ok(
+      capture.context.toolPermissions.some(
+        (permission) => permission.toolName === "local.inspection",
+      ),
+    );
+    assert.ok(
+      capture.storage.directories.some(
+        (directory) => directory.name === "scratch",
+      ),
+    );
+    assert.equal(
+      capture.storageManifest.path.endsWith(".honeycrisp/memory/artifacts/manifest.json"),
+      true,
+    );
     assert.ok(records.some((record) => record.kind === "evidence"));
     assert.deepEqual(toolEvents.map((event) => event.kind), [
       "tool.requested",

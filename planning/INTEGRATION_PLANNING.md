@@ -172,16 +172,26 @@ Verification:
 
 Prove the architecture works as one system and update the roadmap to reflect reality.
 
-Status: pending.
+Status: completed on 2026-06-24.
 
 Checklist:
 
-- [ ] Add an integration health script or documented command sequence for real runs.
-- [ ] Run a multi-loop real health check against a local research target.
-- [ ] Verify durable events, derived records, retrieval, selected tools, storage paths, config, and captures all line up.
-- [ ] Update `planning/ARCHITECTURE.md` with implemented status and remaining known limitations.
-- [ ] Update `README.md` with the integrated real-run path.
-- [ ] Remove or document obsolete runtime residue such as old storage draft directories.
-- [ ] Add regression coverage for the integrated health path where deterministic coverage is possible.
-- [ ] Run the full test suite.
-- [ ] Commit the final integration cleanup with a short message.
+- [x] Add an integration health script or documented command sequence for real runs.
+- [x] Run a multi-loop real health check against a local research target.
+- [x] Verify durable events, derived records, retrieval, selected tools, storage paths, config, and captures all line up.
+- [x] Update `planning/ARCHITECTURE.md` with implemented status and remaining known limitations.
+- [x] Update `README.md` with the integrated real-run path.
+- [x] Remove or document obsolete runtime residue such as old storage draft directories.
+- [x] Add regression coverage for the integrated health path where deterministic coverage is possible.
+- [x] Run the full test suite.
+- [x] Commit the final integration cleanup with a short message.
+
+Verification:
+
+- `pnpm test` passed with 124 tests on 2026-06-24.
+- Deterministic regression coverage now asserts durable memory, context packet v2, tool permissions, storage directories, and storage manifest shape in `tests/runtime-integration.test.mjs`.
+- Real health check capture: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase6/phase6-real-evidence.json`.
+- Real health workspace: `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase6/workspace-evidence`.
+- Local target: `/Users/philogroves/maxtac-resources/zsh/zsh`.
+- The real run used default config source `/Users/philogroves/Desktop/honeycrisp/tmp/integration-phase6/workspace-evidence/.honeycrisp/config.json` with provider `openai-codex`, model `gpt-5.3-codex-spark`, and effort `minimal`; selected tools `local.inspection`, `repository.search`, `file.read`, and `storage.list`; appended 42 durable events; wrote 42 derived records; retrieved 20 candidates; used context packet v2 direct evidence `mem_evidence_43ae870fde374c7d07e4b4d7` from `evt_568f8bff-a162-4537-804c-a3a5501222f6`; and confirmed the storage layout directories `events`, `episodes`, `claims`, `procedures`, `hypotheses`, `prospective`, `artifacts`, and `scratch`.
+- The real run did not generate artifact spillover, so the storage manifest path was present with zero artifact entries; prior Phase 2 and Phase 4 health checks cover raw-output and experiment artifact manifest entries with source event ids.
