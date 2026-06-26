@@ -23,7 +23,10 @@ import {
   registerResearchStorageArtifactRef,
 } from "./storage.js";
 import { createResearchWorkspaceContext } from "./workspace-context.js";
-import type { ResearchContextPacketV2 } from "./context-packet-v2.js";
+import type {
+  ResearchContextPacketV2,
+  ResearchContextPacketV2SectionLabel,
+} from "./context-packet-v2.js";
 import {
   createDeterministicMemoryRetriever,
   type MemoryRetrievalResult,
@@ -637,6 +640,7 @@ function mergeMemoryDrivenDecision(input: {
     ...priorGoalDirectEvidence,
     ...(memory.priorEpisodes ?? input.fallback.contextPacket.priorObservations),
   ]);
+  const contextPacketV2 = input.memoryDrivenDecision.contextPacketV2;
   const selectedCandidateToolActions = selectMemoryDrivenCandidateToolActions(
     input.fallback.candidateToolActions,
     input.memoryDrivenDecision.actionClass,
@@ -644,16 +648,38 @@ function mergeMemoryDrivenDecision(input: {
   const contextPacket = {
     ...input.fallback.contextPacket,
     activeSubGoal: input.memoryDrivenDecision.subGoal,
-    directEvidence,
-    priorObservations,
-    candidateProcedures:
-      memory.candidateProcedures ?? input.fallback.contextPacket.candidateProcedures,
-    currentHypotheses:
-      memory.currentHypotheses ?? input.fallback.contextPacket.currentHypotheses,
-    currentFindings:
+    directEvidence: boundMemoryRefsForContextSection(
+      directEvidence,
+      contextPacketV2,
+      "direct_evidence",
+    ),
+    priorObservations: boundMemoryRefsForContextSection(
+      priorObservations,
+      contextPacketV2,
+      "prior_episodes",
+    ),
+    candidateProcedures: boundMemoryRefsForContextSection(
+      memory.candidateProcedures ??
+        input.fallback.contextPacket.candidateProcedures,
+      contextPacketV2,
+      "candidate_procedures",
+    ),
+    currentHypotheses: boundMemoryRefsForContextSection(
+      memory.currentHypotheses ??
+        input.fallback.contextPacket.currentHypotheses,
+      contextPacketV2,
+      "current_hypotheses",
+    ),
+    currentFindings: boundMemoryRefsForContextSection(
       memory.currentFindings ?? input.fallback.contextPacket.currentFindings,
-    contradictions:
+      contextPacketV2,
+      "current_findings",
+    ),
+    contradictions: boundMemoryRefsForContextSection(
       memory.contradictions ?? input.fallback.contextPacket.contradictions,
+      contextPacketV2,
+      "contradictions_uncertainty",
+    ),
     openQuestions: mergeContextStrings([
       ...input.fallback.contextPacket.openQuestions,
       ...(requiresCurrentEvidence && directEvidence.length === 0
@@ -689,6 +715,46 @@ function mergeMemoryDrivenDecision(input: {
     completionGates: input.memoryDrivenDecision.completionGates,
     writeback: input.memoryDrivenDecision.writeback,
   };
+}
+
+function boundMemoryRefsForContextSection(
+  refs: readonly ResearchMemoryRef[],
+  contextPacket: ResearchContextPacketV2,
+  sectionLabel: ResearchContextPacketV2SectionLabel,
+): ResearchMemoryRef[] {
+  const section = contextPacket.sections.find(
+    (candidate) => candidate.label === sectionLabel,
+  );
+  if (!section || section.items.length === 0 || refs.length === 0) {
+    return [];
+  }
+
+  const refById = new Map(refs.map((ref) => [ref.id, ref]));
+  const bounded: ResearchMemoryRef[] = [];
+  const seen = new Set<string>();
+
+  for (const item of section.items) {
+    if (seen.has(item.recordId)) {
+      continue;
+    }
+    const ref = refById.get(item.recordId);
+    if (!ref) {
+      continue;
+    }
+    seen.add(item.recordId);
+    bounded.push({
+      ...ref,
+      ...(item.summary ? { summary: item.summary } : {}),
+      ...(item.sourceEventIds.length > 0
+        ? { sourceEventIds: item.sourceEventIds }
+        : {}),
+      ...(typeof item.confidence === "number"
+        ? { confidence: item.confidence }
+        : {}),
+    });
+  }
+
+  return bounded;
 }
 
 function selectMemoryDrivenCandidateToolActions(

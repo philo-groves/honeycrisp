@@ -10,6 +10,7 @@ import {
   createLocalInspectionTool,
   createRepositorySearchTool,
   createResearchFlowCapture,
+  createResearchEventId,
   createResearchStorageLayout,
   createResearchToolRegistry,
   createResearchWorkspaceContext,
@@ -92,6 +93,73 @@ test("durable bootstrap writes records and retrieves them between loops", async 
     eventLog.close();
     recordStore.close();
   }
+});
+
+test("durable bootstrap sends compacted memory context to loop model input", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runtime-compact-model-input-"));
+  const noisyPriorEvents = Array.from({ length: 140 }, (_, index) => ({
+    id: createResearchEventId(),
+    kind: "model.visible_note",
+    timestamp: "2026-06-24T00:00:00.000Z",
+    payload: {
+      summary: [
+        `Prior-goal scan ${index}: selected Src/noisy-${index}.c and exhausted the candidate without confirmed proof.`,
+        "This intentionally verbose episode should not all be replayed into the next model input.",
+        "repeat-context-detail ".repeat(20),
+      ].join(" "),
+    },
+  }));
+  let capturedModelInput = null;
+  const captureExecutor = {
+    name: "capture-model-input",
+    async execute(input) {
+      capturedModelInput = input.modelInput;
+      return {
+        text: "Captured compact context.",
+        artifacts: [],
+        evidenceRefs: [],
+        claimRefs: [],
+        followUpActions: [],
+      };
+    },
+  };
+
+  const result = await bootstrapResearchRun({
+    prompt: [
+      "Goal: Inspect fresh parser evidence without repeating prior exhausted files",
+      "Success gates: choose a fresh target",
+      "Scope constraints: local fixture only",
+    ].join("\n"),
+    workspaceRoot,
+    durableMemory: true,
+    events: noisyPriorEvents,
+    loopExecutor: captureExecutor,
+    goalRun: {
+      maxLoops: 1,
+    },
+  });
+
+  assert.equal(result.durableMemory?.usedMemoryDrivenController, true);
+  assert.ok(capturedModelInput);
+  const priorSection = capturedModelInput.contextSections.find(
+    (section) => section.label === "prior_observations",
+  );
+  assert.ok(priorSection);
+  assert.ok(Array.isArray(priorSection.content));
+  assert.ok(
+    priorSection.content.length < noisyPriorEvents.length,
+    "prior observations should be bounded by contextV2 selection",
+  );
+  assert.equal(
+    priorSection.content.length,
+    result.durableMemory?.latestContextPacketV2?.sections.find(
+      (section) => section.label === "prior_episodes",
+    )?.items.length,
+  );
+  assert.ok(
+    JSON.stringify(capturedModelInput.contextSections).length < 50_000,
+    "model input context sections should stay below the conservative context guard",
+  );
 });
 
 test("bootstrap run exposes workspace context with repository and source hints", async () => {
