@@ -1,5 +1,9 @@
 import { createResearchGoalFrame } from "./goal.js";
 import {
+  goalObjectiveNeedsFreshEvidence,
+  memoryRefBelongsToGoal,
+} from "./goal-evidence-policy.js";
+import {
   advanceGoalRunState,
   appendGoalContinuationToLoopPlan,
   createGoalIteration,
@@ -63,12 +67,15 @@ import type {
   ResearchLiveEventSink,
   ResearchMemoryControllerDecision,
   ResearchMemoryControllerInput,
+  ResearchMemoryRef,
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
   ResearchSelectedSkill,
   ResearchSkillDescriptor,
+  ResearchSkippedToolAction,
   ResearchStorageLayout,
   ResearchSubGoal,
+  ResearchToolAction,
   ResearchToolDescriptor,
   ResearchWorkspaceContext,
 } from "./types.js";
@@ -607,12 +614,38 @@ function mergeMemoryDrivenDecision(input: {
   memory?: Partial<ResearchMemorySnapshot>;
 }): ResearchMemoryControllerDecision {
   const memory = input.memory ?? {};
+  const activeGoal = input.fallback.contextPacket.activeGoal;
+  const memoryEventLog = memory.eventLog ?? [];
+  const memoryDirectEvidence =
+    memory.directEvidence ?? input.fallback.contextPacket.directEvidence;
+  const requiresCurrentEvidence =
+    input.memoryDrivenDecision.actionClass === "inspect" &&
+    goalObjectiveNeedsFreshEvidence(activeGoal.objective);
+  const directEvidence = requiresCurrentEvidence
+    ? memoryDirectEvidence.filter((ref) =>
+        memoryRefBelongsToGoal(ref, activeGoal, memoryEventLog),
+      )
+    : memoryDirectEvidence;
+  const priorGoalDirectEvidence = requiresCurrentEvidence
+    ? memoryDirectEvidence
+        .filter(
+          (ref) => !memoryRefBelongsToGoal(ref, activeGoal, memoryEventLog),
+        )
+        .map(createPriorGoalDirectEvidenceRef)
+    : [];
+  const priorObservations = mergeMemoryRefs([
+    ...priorGoalDirectEvidence,
+    ...(memory.priorEpisodes ?? input.fallback.contextPacket.priorObservations),
+  ]);
+  const selectedCandidateToolActions = selectMemoryDrivenCandidateToolActions(
+    input.fallback.candidateToolActions,
+    input.memoryDrivenDecision.actionClass,
+  );
   const contextPacket = {
     ...input.fallback.contextPacket,
     activeSubGoal: input.memoryDrivenDecision.subGoal,
-    directEvidence: memory.directEvidence ?? input.fallback.contextPacket.directEvidence,
-    priorObservations:
-      memory.priorEpisodes ?? input.fallback.contextPacket.priorObservations,
+    directEvidence,
+    priorObservations,
     candidateProcedures:
       memory.candidateProcedures ?? input.fallback.contextPacket.candidateProcedures,
     currentHypotheses:
@@ -621,6 +654,12 @@ function mergeMemoryDrivenDecision(input: {
       memory.currentFindings ?? input.fallback.contextPacket.currentFindings,
     contradictions:
       memory.contradictions ?? input.fallback.contextPacket.contradictions,
+    openQuestions: mergeContextStrings([
+      ...input.fallback.contextPacket.openQuestions,
+      ...(requiresCurrentEvidence && directEvidence.length === 0
+        ? ["What current-goal direct evidence is available to satisfy this fresh inspection goal?"]
+        : []),
+    ]),
     userCommitments: mergeContextStrings([
       ...input.fallback.contextPacket.userCommitments,
       ...(memory.userCommitments ?? []),
@@ -629,6 +668,13 @@ function mergeMemoryDrivenDecision(input: {
     toolBudget: input.memoryDrivenDecision.toolBudget,
     writebackExpectations: input.memoryDrivenDecision.writeback,
   };
+  const skippedToolActions = [
+    ...input.fallback.skippedToolActions,
+    ...createSkippedFallbackToolActions(
+      input.fallback.candidateToolActions,
+      input.memoryDrivenDecision.actionClass,
+    ),
+  ];
 
   return {
     subGoal: input.memoryDrivenDecision.subGoal,
@@ -636,13 +682,58 @@ function mergeMemoryDrivenDecision(input: {
     rationale: input.memoryDrivenDecision.rationale,
     actionScores: input.memoryDrivenDecision.actionScores,
     selectedSkills: input.fallback.selectedSkills,
-    candidateToolActions: input.fallback.candidateToolActions,
-    skippedToolActions: input.fallback.skippedToolActions,
+    candidateToolActions: selectedCandidateToolActions,
+    skippedToolActions,
     contextPacket,
     toolBudget: input.memoryDrivenDecision.toolBudget,
     completionGates: input.memoryDrivenDecision.completionGates,
     writeback: input.memoryDrivenDecision.writeback,
   };
+}
+
+function selectMemoryDrivenCandidateToolActions(
+  actions: readonly ResearchToolAction[],
+  selectedActionClass: ResearchToolAction["actionClass"],
+): ResearchToolAction[] {
+  return actions.filter((action) => action.actionClass === selectedActionClass);
+}
+
+function createSkippedFallbackToolActions(
+  actions: readonly ResearchToolAction[],
+  selectedActionClass: ResearchToolAction["actionClass"],
+): ResearchSkippedToolAction[] {
+  return actions
+    .filter((action) => action.actionClass !== selectedActionClass)
+    .map((action) => ({
+      action,
+      code: "action_class_not_selected" as const,
+      reason: `Memory-driven action class ${selectedActionClass} replaced fallback action ${action.actionClass}.`,
+    }));
+}
+
+function createPriorGoalDirectEvidenceRef(ref: ResearchMemoryRef): ResearchMemoryRef {
+  return {
+    ...ref,
+    summary: ref.summary
+      ? `Prior-goal direct evidence (context only; do not count as current completion proof): ${ref.summary}`
+      : "Prior-goal direct evidence (context only; do not count as current completion proof).",
+  };
+}
+
+function mergeMemoryRefs(refs: readonly ResearchMemoryRef[]): ResearchMemoryRef[] {
+  const seen = new Set<string>();
+  const merged: ResearchMemoryRef[] = [];
+
+  for (const ref of refs) {
+    const key = `${ref.store}:${ref.id}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(ref);
+  }
+
+  return merged;
 }
 
 function mergeContextStrings(values: readonly string[]): readonly string[] {

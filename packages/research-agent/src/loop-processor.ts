@@ -5,6 +5,7 @@ import {
   normalizeResearchTrace,
   renderResearchTraceContract,
 } from "./research-trace.js";
+import { createRepeatAvoidanceTargets } from "./repeat-targets.js";
 import type {
   Context,
   Message,
@@ -15,6 +16,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import {
   createToolResultMessage,
+  type ExecuteToolCallOptions,
   getToolTransportName,
   type ResearchExecutableTool,
   type ResearchToolExecutionResult,
@@ -263,17 +265,20 @@ export function createPiLoopExecutor(
             break;
           }
 
-          const execution = await options.toolRegistry.executeToolCall(toolCall.call, {
-            goalId: input.loopPlan.rootGoalId,
-            subGoalId: input.loopPlan.subGoal.id,
-            permittedActionClasses: input.loopPlan.permittedToolClasses,
-            defaultActionClass: input.loopPlan.subGoal.actionClass,
-            toolCallCount,
-            ...(input.loopPlan.governancePolicy
-              ? { governance: input.loopPlan.governancePolicy }
-              : {}),
-            ...(input.signal ? { signal: input.signal } : {}),
-          });
+          const execution = await options.toolRegistry.executeToolCall(
+            toolCall.call,
+            createLoopToolExecutionOptions(input.loopPlan, {
+              goalId: input.loopPlan.rootGoalId,
+              subGoalId: input.loopPlan.subGoal.id,
+              permittedActionClasses: input.loopPlan.permittedToolClasses,
+              defaultActionClass: input.loopPlan.subGoal.actionClass,
+              toolCallCount,
+              ...(input.loopPlan.governancePolicy
+                ? { governance: input.loopPlan.governancePolicy }
+                : {}),
+              ...(input.signal ? { signal: input.signal } : {}),
+            }),
+          );
           toolCallCount += 1;
           toolEvents.push(...execution.events);
           emitLiveResearchEvents(input.eventSink, execution.events);
@@ -419,17 +424,20 @@ export function createPiAgentLoopExecutor(
           toolExecution,
           beforeToolCall: async (hookContext, signal) => {
             const toolCall = createToolCallFromAgentHook(hookContext);
-            const preflight = options.toolRegistry?.preflightToolCall(toolCall, {
-              goalId: input.loopPlan.rootGoalId,
-              subGoalId: input.loopPlan.subGoal.id,
-              permittedActionClasses: input.loopPlan.permittedToolClasses,
-              defaultActionClass: input.loopPlan.subGoal.actionClass,
-              toolCallCount,
-              ...(input.loopPlan.governancePolicy
-                ? { governance: input.loopPlan.governancePolicy }
-                : {}),
-              ...(signal ? { signal } : {}),
-            });
+            const preflight = options.toolRegistry?.preflightToolCall(
+              toolCall,
+              createLoopToolExecutionOptions(input.loopPlan, {
+                goalId: input.loopPlan.rootGoalId,
+                subGoalId: input.loopPlan.subGoal.id,
+                permittedActionClasses: input.loopPlan.permittedToolClasses,
+                defaultActionClass: input.loopPlan.subGoal.actionClass,
+                toolCallCount,
+                ...(input.loopPlan.governancePolicy
+                  ? { governance: input.loopPlan.governancePolicy }
+                  : {}),
+                ...(signal ? { signal } : {}),
+              }),
+            );
             if (preflight) {
               toolCallReservations.set(toolCall.id, toolCallCount);
               toolCallCount += 1;
@@ -565,6 +573,7 @@ function createLoopContextSections(
   storageLayout: ResearchStorageLayout,
 ): ResearchLoopContextSection[] {
   const packet = loopPlan.contextPacket;
+  const repeatAvoidanceTargets = createRepeatAvoidanceTargets(packet);
   return [
     {
       label: "goal_frame",
@@ -590,6 +599,11 @@ function createLoopContextSections(
       label: "direct_evidence",
       required: false,
       content: packet.directEvidence,
+    },
+    {
+      label: "avoid_repeated_targets",
+      required: repeatAvoidanceTargets.length > 0,
+      content: repeatAvoidanceTargets,
     },
     {
       label: "prior_observations",
@@ -660,6 +674,20 @@ function createLoopContextSections(
   ];
 }
 
+function createLoopToolExecutionOptions(
+  loopPlan: ResearchLoopPlan,
+  options: ExecuteToolCallOptions,
+): ExecuteToolCallOptions {
+  const excludedPaths = createRepeatAvoidanceTargets(loopPlan.contextPacket).map(
+    (target) => target.path,
+  );
+
+  return {
+    ...options,
+    ...(excludedPaths.length > 0 ? { excludedPaths } : {}),
+  };
+}
+
 function createFreeFormToolRegistry(
   toolRegistry: ResearchToolRegistry | undefined,
   modelInput: ResearchLoopModelInput,
@@ -693,7 +721,9 @@ async function executeControllerPlannedToolActions(input: {
       break;
     }
 
-    const record = await input.toolRegistry.execute(action, {
+    const record = await input.toolRegistry.execute(
+      action,
+      createLoopToolExecutionOptions(input.loopPlan, {
         goalId: input.loopPlan.rootGoalId,
         subGoalId: input.loopPlan.subGoal.id,
         permittedActionClasses: input.loopPlan.permittedToolClasses,
@@ -703,7 +733,8 @@ async function executeControllerPlannedToolActions(input: {
           ? { governance: input.loopPlan.governancePolicy }
           : {}),
         ...(input.signal ? { signal: input.signal } : {}),
-      });
+      }),
+    );
     records.push(record);
     emitLiveResearchEvents(input.eventSink, record.events);
   }
@@ -729,6 +760,9 @@ function createPiSystemPrompt(hasTools: boolean): string {
     "You are Honeycrisp, a goal-oriented research agent built on Pi.",
     "Execute only the current bounded loop. Preserve evidence, inference, hypotheses, uncertainty, and user commitments as distinct categories.",
     "Do not claim that files were inspected unless evidence is present in the supplied context.",
+    "For fresh inspection, testing, or static-analysis goals, treat prior memory as context rather than completion proof; perform current-loop evidence work before declaring the goal complete.",
+    "For fresh inspection goals, paths listed in avoid_repeated_targets are not valid fresh targets unless the user explicitly asks to revisit one.",
+    "If prior memory says a file, function, or path was already exhausted, avoid repeating it unless the user explicitly asks to revisit it.",
     "Use memory for recallable facts, summaries, decisions, commitments, procedures, and paths to persisted files; use storage only for durable files, blobs, artifacts, binaries, raw logs, and other non-memory objects.",
     hasTools
       ? "Use available tool calls for permitted bounded actions. Do not print tool-call JSON when native tool calls are available."
@@ -818,7 +852,7 @@ function createPiAgentTool(
           name: getToolTransportName(tool),
           arguments: params,
         },
-        {
+        createLoopToolExecutionOptions(input.loopPlan, {
           goalId: input.loopPlan.rootGoalId,
           subGoalId: input.loopPlan.subGoal.id,
           permittedActionClasses: input.loopPlan.permittedToolClasses,
@@ -828,7 +862,7 @@ function createPiAgentTool(
             ? { governance: input.loopPlan.governancePolicy }
             : {}),
           ...(signal ? { signal } : {}),
-        },
+        }),
       );
       input.recordExecution(record);
       return {

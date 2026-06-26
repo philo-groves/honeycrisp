@@ -808,6 +808,7 @@ export interface ResearchRequiredContextSection {
     | "workspace_context"
     | "storage"
     | "direct_evidence"
+    | "avoid_repeated_targets"
     | "prior_observations"
     | "candidate_procedures"
     | "current_hypotheses"

@@ -72,6 +72,7 @@ export interface ExecuteToolCallOptions extends ResearchToolExecutionContext {
   toolCallId?: string;
   governance?: ResearchGovernancePolicy;
   toolCallCount?: number;
+  excludedPaths?: readonly string[];
 }
 
 export interface ResearchToolRegistryOptions {
@@ -433,6 +434,11 @@ function validateToolAction(
     return fileBudgetError;
   }
 
+  const excludedPathError = validateExcludedPaths(action, options.excludedPaths);
+  if (excludedPathError) {
+    return excludedPathError;
+  }
+
   const schemaErrors = validateJsonSchema(action.input, tool.descriptor.inputSchema);
   if (schemaErrors.length > 0) {
     return `Tool input failed schema validation: ${schemaErrors.join("; ")}`;
@@ -549,6 +555,40 @@ function validateFileBudgets(
   }
 
   return undefined;
+}
+
+function validateExcludedPaths(
+  action: ResearchToolAction,
+  excludedPaths: readonly string[] | undefined,
+): string | undefined {
+  if (!excludedPaths || excludedPaths.length === 0) {
+    return undefined;
+  }
+  if (typeof action.input.path !== "string") {
+    return undefined;
+  }
+
+  const requestedPath = normalizeComparablePath(action.input.path);
+  const excludedPath = excludedPaths.find((path) =>
+    pathsMatch(requestedPath, normalizeComparablePath(path)),
+  );
+  if (!excludedPath) {
+    return undefined;
+  }
+
+  return `Path ${action.input.path} is listed in avoid_repeated_targets for this fresh loop; choose a different source path unless the user explicitly asks to revisit it.`;
+}
+
+function pathsMatch(left: string, right: string): boolean {
+  return (
+    left === right ||
+    left.endsWith(`/${right}`) ||
+    right.endsWith(`/${left}`)
+  );
+}
+
+function normalizeComparablePath(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/^\.\/+/u, "").replace(/\/+$/u, "");
 }
 
 function applyBudgetDefaults(

@@ -1,4 +1,8 @@
 import { compileContextPacketV2 } from "./context-packet-v2.js";
+import {
+  candidateBelongsToGoal,
+  goalObjectiveNeedsFreshEvidence,
+} from "./goal-evidence-policy.js";
 import { createId } from "./ids.js";
 import { createFirstRunMemoryController } from "./memory-controller.js";
 import type {
@@ -71,7 +75,11 @@ export class MemoryDrivenController {
       governance: input.governance,
     });
     const actionClass = actionScores[0]?.actionClass ?? "synthesize";
-    const supportingCandidates = selectSupportingCandidates(actionClass, retrieval);
+    const supportingCandidates = selectSupportingCandidates(
+      actionClass,
+      retrieval,
+      activeGoal,
+    );
     const subGoal = createMemoryDrivenSubGoal({
       activeGoal,
       actionClass,
@@ -189,14 +197,14 @@ function scoreMemoryDrivenActions(input: {
   addScore(scores, "respond",
     completionGatesSatisfied(input) &&
       !(
-        needsMoreDirectEvidence(input.retrieval) &&
+        needsMoreDirectEvidence(input) &&
         supportsAction(input.tools, "inspect", input.governance)
       )
       ? 95
       : 0,
     "Retrieved memory supports all root completion gates.");
   addScore(scores, "inspect",
-    needsMoreDirectEvidence(input.retrieval) &&
+    needsMoreDirectEvidence(input) &&
       supportsAction(input.tools, "inspect", input.governance)
       ? 85
       : 0,
@@ -247,10 +255,13 @@ function completionGatesSatisfied(input: {
   activeGoal: ResearchGoalNode;
   retrieval: MemoryRetrievalResult;
 }): boolean {
+  const goalLocalCandidates = input.retrieval.candidates.filter((candidate) =>
+    candidateBelongsToGoal(candidate, input.activeGoal),
+  );
   return (
     input.activeGoal.completionGates.length > 0 &&
     input.activeGoal.completionGates.every((gate) =>
-      input.retrieval.candidates.some((candidate) =>
+      goalLocalCandidates.some((candidate) =>
         candidateMatchesGate(candidate, gate),
       ),
     )
@@ -310,10 +321,19 @@ function hasWeakHypothesis(retrieval: MemoryRetrievalResult): boolean {
   );
 }
 
-function needsMoreDirectEvidence(retrieval: MemoryRetrievalResult): boolean {
+function needsMoreDirectEvidence(input: {
+  activeGoal: ResearchGoalNode;
+  retrieval: MemoryRetrievalResult;
+}): boolean {
+  const evidence = goalObjectiveNeedsFreshEvidence(input.activeGoal.objective)
+    ? input.retrieval.directEvidence.filter((candidate) =>
+        candidateBelongsToGoal(candidate, input.activeGoal),
+      )
+    : input.retrieval.directEvidence;
+
   return (
-    retrieval.directEvidence.length === 0 ||
-    retrieval.directEvidence.every((candidate) =>
+    evidence.length === 0 ||
+    evidence.every((candidate) =>
       isRecoverableEvidenceGap(candidate),
     )
   );
@@ -329,6 +349,7 @@ function isRecoverableEvidenceGap(candidate: MemoryRetrievalCandidate): boolean 
 function selectSupportingCandidates(
   actionClass: ResearchActionClass,
   retrieval: MemoryRetrievalResult,
+  activeGoal: ResearchGoalNode,
 ): readonly MemoryRetrievalCandidate[] {
   if (actionClass === "stop") {
     return retrieval.candidates.slice(0, 3);
@@ -347,6 +368,12 @@ function selectSupportingCandidates(
     ].slice(0, 5);
   }
   if (actionClass === "inspect") {
+    if (goalObjectiveNeedsFreshEvidence(activeGoal.objective)) {
+      return retrieval.directEvidence
+        .filter((candidate) => candidateBelongsToGoal(candidate, activeGoal))
+        .slice(0, 3);
+    }
+
     return retrieval.directEvidence.slice(0, 3);
   }
 

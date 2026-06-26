@@ -113,6 +113,10 @@ function scoreRecord(input: {
   if (input.record.goalId && input.record.goalId === input.input.activeGoal.id) {
     score += 15;
     reasons.push("Matches the active goal id (+15).");
+  } else if (input.record.goalId) {
+    warnings.push(
+      "From a different goal; use as prior context only, not current completion proof.",
+    );
   }
   if (
     input.input.activeSubGoal?.id &&

@@ -55,6 +55,77 @@ test("memory-driven controller responds only when completion gates are supported
   assert.match(decision.rationale, /Selected respond/);
 });
 
+test("memory-driven controller treats prior-goal analysis as context, not fresh goal completion", () => {
+  const goalFrame = createResearchGoalFrame(
+    "Pick a single source file of the ZSH repository and perform static analysis. Stop if you run out of functions to scan in that file or find a bug.",
+  );
+  const retrieval = createRetrieval(goalFrame, [
+    createEvent(
+      "tool.observed",
+      {
+        summary:
+          "Read 3931 byte(s) from /Users/philogroves/maxtac-resources/zsh/zsh/Src/Modules/clone.c.",
+        confidence: 0.95,
+      },
+      { goalId: "previous_goal" },
+    ),
+    createEvent(
+      "loop.processed",
+      {
+        summary:
+          "Selected and statically analyzed one source file zsh/Src/Modules/clone.c. Functions scanned: bin_clone, setup_, features_, enables_, boot_, cleanup_, finish_. No confirmed bug found.",
+        confidence: 0.95,
+      },
+      { goalId: "previous_goal" },
+    ),
+    createEvent(
+      "model.claim",
+      {
+        summary:
+          "Success gates are satisfied: the response directly addresses the root goal by selecting one ZSH source file and statically scanning all functions, and key claims are separated from assumptions and uncertainty.",
+        confidence: 0.95,
+      },
+      { goalId: "previous_goal" },
+    ),
+  ]);
+  const decision = createMemoryDrivenController().decide({
+    goalFrame,
+    retrieval,
+    tools: [
+      {
+        name: "repository.search",
+        transportName: "repository_search",
+        description: "Search local repository files.",
+        actionClasses: ["search", "inspect"],
+        sideEffects: "read",
+        requiredPermissions: ["filesystem:read"],
+        artifactLocations: [],
+        metadata: {},
+      },
+    ],
+  });
+
+  assert.equal(decision.actionClass, "inspect");
+  assert.match(decision.subGoal.objective, /^Gather direct evidence/);
+  assert.equal(decision.supportingRecordIds.length, 0);
+
+  const directEvidenceSection = decision.contextPacketV2.sections.find(
+    (section) => section.label === "direct_evidence",
+  );
+  const priorEpisodesSection = decision.contextPacketV2.sections.find(
+    (section) => section.label === "prior_episodes",
+  );
+
+  assert.equal(directEvidenceSection?.items.length, 0);
+  assert.ok(
+    priorEpisodesSection?.items.some((item) =>
+      item.warnings.includes(
+        "From a different goal; use as prior context only, not current completion proof.",
+      ),
+    ),
+  );
+});
+
 test("memory-driven controller stops when a stop gate is supported by memory", () => {
   const goalFrame = createResearchGoalFrame(
     [

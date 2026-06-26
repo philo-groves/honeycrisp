@@ -1,4 +1,5 @@
 import { createId } from "./ids.js";
+import { createRepeatAvoidanceTargets } from "./repeat-targets.js";
 import type {
   ResearchActionClass,
   ResearchContextPacket,
@@ -120,6 +121,7 @@ function getPermittedToolClasses(
 function createRequiredContext(
   packet: ResearchContextPacket,
 ): ResearchRequiredContextSection[] {
+  const repeatAvoidanceTargets = createRepeatAvoidanceTargets(packet);
   return [
     {
       label: "goal_frame",
@@ -150,6 +152,12 @@ function createRequiredContext(
       description: "Evidence records selected for this loop.",
       itemCount: packet.directEvidence.length,
       required: false,
+    },
+    {
+      label: "avoid_repeated_targets",
+      description: "Prior source paths that should not be selected again for a fresh inspection goal.",
+      itemCount: repeatAvoidanceTargets.length,
+      required: repeatAvoidanceTargets.length > 0,
     },
     {
       label: "prior_observations",

@@ -2,6 +2,12 @@ import type {
   MemoryRetrievalCandidate,
   MemoryRetrievalResult,
 } from "./memory-retriever.js";
+import {
+  addPriorGoalContextWarning,
+  candidateBelongsToGoal,
+  goalObjectiveNeedsFreshEvidence,
+  isPriorGoalCandidate,
+} from "./goal-evidence-policy.js";
 import type {
   ResearchActionClass,
   ResearchDerivedMemoryRecord,
@@ -139,6 +145,24 @@ export function compileContextPacketV2(
     ...DEFAULT_SECTION_TOKEN_BUDGETS,
     ...(input.sectionTokenBudgets ?? {}),
   };
+  const requiresCurrentEvidence =
+    input.actionClass === "inspect" &&
+    goalObjectiveNeedsFreshEvidence(input.activeGoal.objective);
+  const directEvidenceCandidates = requiresCurrentEvidence
+    ? input.retrieval.directEvidence.filter((candidate) =>
+        candidateBelongsToGoal(candidate, input.activeGoal),
+      )
+    : input.retrieval.directEvidence;
+  const priorEpisodeCandidates = [
+    ...(requiresCurrentEvidence
+      ? input.retrieval.directEvidence
+          .filter((candidate) => isPriorGoalCandidate(candidate, input.activeGoal))
+          .map(addPriorGoalContextWarning)
+      : []),
+    ...input.retrieval.candidates.filter((candidate) =>
+      isPriorEpisodeCandidate(candidate),
+    ),
+  ];
   const compiledSections: ResearchContextPacketV2Section[] = [
     compileWorkspaceSection(
       input.workspaceContext,
@@ -146,14 +170,12 @@ export function compileContextPacketV2(
     ),
     compileSection(
       "direct_evidence",
-      input.retrieval.directEvidence,
+      directEvidenceCandidates,
       sectionBudgets.direct_evidence,
     ),
     compileSection(
       "prior_episodes",
-      input.retrieval.candidates.filter((candidate) =>
-        isPriorEpisodeCandidate(candidate),
-      ),
+      priorEpisodeCandidates,
       sectionBudgets.prior_episodes,
     ),
     compileSection(

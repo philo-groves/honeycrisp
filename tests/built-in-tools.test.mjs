@@ -56,9 +56,19 @@ test("memory recall exposes retriever refs as evidence", async () => {
 test("repository search finds bounded local source matches", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-"));
   await mkdir(join(root, "Src"));
+  await mkdir(join(root, ".honeycrisp", "memory"), { recursive: true });
+  await mkdir(join(root, ".beale"), { recursive: true });
   await writeFile(
     join(root, "Src", "parse.c"),
     "static void parse_context_save(void) {}\nparse_context_save();\n",
+  );
+  await writeFile(
+    join(root, ".honeycrisp", "memory", "memory.sqlite-wal"),
+    "parse_context_save stale internal memory hit\n",
+  );
+  await writeFile(
+    join(root, ".beale", "beale.sqlite-wal"),
+    "parse_context_save stale interface state hit\n",
   );
   await writeFile(join(root, "README.md"), "no parser symbol here\n");
 
@@ -80,6 +90,13 @@ test("repository search finds bounded local source matches", async () => {
     assert.equal(result.result.status, "complete");
     assert.equal(result.result.output.matches.length, 1);
     assert.equal(result.result.output.matches[0].path, "Src/parse.c");
+    assert.ok(
+      result.result.output.matches.every(
+        (match) =>
+          !match.path.startsWith(".honeycrisp/") &&
+          !match.path.startsWith(".beale/"),
+      ),
+    );
     assert.equal(result.result.output.matches[0].line, 1);
     assert.equal(tool.descriptor.sideEffects, "read");
     assert.equal(tool.descriptor.requiredPermissions[0], "filesystem:read");
@@ -150,6 +167,22 @@ test("structured file read supports ranges and annotates paths outside context r
     assert.equal(outsideResult.result.output.withinContextRoot, false);
     assert.equal(outsideResult.result.output.root, null);
     assert.match(outsideResult.result.summary, /outside workspace context hints/);
+
+    const repeatedResult = await registry.execute(
+      {
+        id: "read_3",
+        actionClass: "inspect",
+        toolName: "file.read",
+        input: {
+          path: file,
+        },
+      },
+      {
+        excludedPaths: [file],
+      },
+    );
+    assert.equal(repeatedResult.result.status, "blocked");
+    assert.match(repeatedResult.result.summary, /avoid_repeated_targets/);
   } finally {
     await rm(root, {
       recursive: true,

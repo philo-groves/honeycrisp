@@ -28,6 +28,14 @@ import type {
 
 const DEFAULT_MAX_RESULTS = 20;
 const DEFAULT_MAX_BYTES = 16_384;
+const REPOSITORY_SEARCH_IGNORED_DIRECTORIES = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  ".honeycrisp",
+  ".beale",
+  "node_modules",
+]);
 const MEMORY_RECALL_PARAMETERS = {
   type: "object",
   required: ["query"],
@@ -635,7 +643,10 @@ async function searchRepository(
 
     const entries = await opendir(directory);
     for await (const entry of entries) {
-      if (matches.length >= options.maxResults || entry.name === ".git") {
+      if (
+        matches.length >= options.maxResults ||
+        REPOSITORY_SEARCH_IGNORED_DIRECTORIES.has(entry.name)
+      ) {
         continue;
       }
 
