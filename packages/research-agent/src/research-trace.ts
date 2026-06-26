@@ -86,6 +86,10 @@ export function extractResearchTraceFromText(
   }
 }
 
+export function stripResearchTraceFromText(text: string): string {
+  return stripTaggedJsonFence(text, "honeycrisp-research-trace-json").trim();
+}
+
 export function createResearchTraceEventsFromLoopResult(
   loopResult: ResearchLoopProcessingResult,
   options: {
@@ -431,6 +435,20 @@ function extractTraceJson(text: string): string | undefined {
     /```honeycrisp-research-trace-json\s*([\s\S]*)$/i,
   );
   return openFence?.[1] ? extractFirstJsonObject(openFence[1]) : undefined;
+}
+
+function stripTaggedJsonFence(text: string, tag: string): string {
+  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const completeFence = new RegExp(
+    `\\n?\\\`\\\`\\\`${escapedTag}\\s*[\\s\\S]*?\\\`\\\`\\\``,
+    "gi",
+  );
+  const withoutComplete = text.replace(completeFence, "");
+  const openFence = new RegExp(
+    `\\n?\\\`\\\`\\\`${escapedTag}\\s*[\\s\\S]*$`,
+    "i",
+  );
+  return withoutComplete.replace(openFence, "");
 }
 
 function extractFirstJsonObject(text: string): string | undefined {

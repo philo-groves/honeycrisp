@@ -313,6 +313,12 @@ test("Pi loop executor makes model calls and exposes execution metadata", async 
                 "## Result",
                 "Mock model call completed.",
                 "",
+                "## Next Steps",
+                '{"verbose": "this should be structured metadata instead"}',
+                "",
+                "## Goal Assessment",
+                "This visible assessment should be stripped from user output.",
+                "",
                 "```honeycrisp-research-trace-json",
                 JSON.stringify({
                   observations: [
@@ -326,6 +332,27 @@ test("Pi loop executor makes model calls and exposes execution metadata", async 
                     rationale: "The mocked model call produced a visible trace.",
                   },
                 }),
+                "```",
+                "",
+                "```honeycrisp-next-prompts-json",
+                JSON.stringify([
+                  {
+                    title: "Verify parser candidate",
+                    promptMarkdown:
+                      "Skeptically verify the mocked parser candidate with fresh evidence.",
+                    rationale: "Exercises structured prompt capture.",
+                  },
+                  {
+                    title: "Inspect nearby code",
+                    promptMarkdown:
+                      "Inspect adjacent mocked parser code without repeating exhausted targets.",
+                  },
+                  {
+                    title: "Summarize current evidence",
+                    promptMarkdown:
+                      "Summarize the mocked evidence and decide whether to continue.",
+                  },
+                ]),
                 "```",
               ].join("\n"),
             },
@@ -360,12 +387,42 @@ test("Pi loop executor makes model calls and exposes execution metadata", async 
   assert.match(capturedContext.systemPrompt, /Honeycrisp/);
   assert.match(capturedContext.systemPrompt, /Use memory for recallable facts/);
   assert.match(capturedContext.messages[0]?.content, /Visible Research Trace/);
+  assert.match(capturedContext.messages[0]?.content, /Next Prompt Suggestions/);
   assert.match(capturedContext.messages[0]?.content, /### storage \(required\)/);
   assert.match(capturedContext.messages[0]?.content, /"events"/);
   assert.match(capturedContext.messages[0]?.content, /"scratch"/);
+  assert.doesNotMatch(
+    result.loopResult.output.text,
+    /honeycrisp-research-trace-json/,
+  );
+  assert.doesNotMatch(
+    result.loopResult.output.text,
+    /honeycrisp-next-prompts-json/,
+  );
+  assert.doesNotMatch(result.loopResult.output.text, /## Next Steps/);
+  assert.doesNotMatch(result.loopResult.output.text, /Goal Assessment/);
   assert.equal(
     result.loopResult.output.researchTrace?.observations[0]?.text,
     "The mocked model path executed with the compiled context.",
+  );
+  assert.equal(result.loopResult.output.nextPromptSuggestions?.length, 3);
+  assert.equal(
+    result.loopResult.output.nextPromptSuggestions?.[0]?.title,
+    "Verify parser candidate",
+  );
+  const promptCapture = createResearchFlowCapture(result, {
+    capturedAt: "2026-06-24T00:00:00.000Z",
+  });
+  assert.equal(
+    promptCapture.loop.nextPromptSuggestions?.[0]?.promptMarkdown,
+    "Skeptically verify the mocked parser candidate with fresh evidence.",
+  );
+  const loopProcessed = result.events.find(
+    (event) => event.kind === "loop.processed",
+  );
+  assert.equal(
+    loopProcessed?.payload.nextPromptSuggestions?.[0]?.title,
+    "Verify parser candidate",
   );
 
   const raw = result.loopResult.output.raw;

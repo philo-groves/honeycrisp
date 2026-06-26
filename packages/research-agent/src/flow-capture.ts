@@ -18,6 +18,7 @@ import type {
   ResearchLoopProcessingResult,
   ResearchMemoryRef,
   ResearchMemorySnapshot,
+  ResearchNextPromptSuggestion,
   ResearchSelectedSkill,
   ResearchSkippedToolAction,
   ResearchStorageLayout,
@@ -72,6 +73,7 @@ export interface ResearchFlowCapture {
     outputText: string;
     followUpRecommendation: string;
     followUpRationale: string;
+    nextPromptSuggestions?: readonly ResearchNextPromptSuggestion[];
     researchTrace?: ResearchTrace;
     raw?: unknown;
   };
@@ -276,6 +278,9 @@ function createLoopCapture(
     outputText: loopResult.output.text,
     followUpRecommendation: loopResult.followUpRecommendation,
     followUpRationale: loopResult.followUpRationale,
+    ...(loopResult.output.nextPromptSuggestions
+      ? { nextPromptSuggestions: loopResult.output.nextPromptSuggestions }
+      : {}),
     ...(loopResult.output.researchTrace
       ? { researchTrace: loopResult.output.researchTrace }
       : {}),

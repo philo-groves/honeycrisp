@@ -901,12 +901,19 @@ export interface ResearchLoopExecutionInput {
   signal?: AbortSignal;
 }
 
+export interface ResearchNextPromptSuggestion {
+  title: string;
+  promptMarkdown: string;
+  rationale?: string;
+}
+
 export interface ResearchLoopExecutionOutput {
   text: string;
   artifacts: readonly string[];
   evidenceRefs: readonly ResearchMemoryRef[];
   claimRefs: readonly ResearchMemoryRef[];
   followUpActions: readonly string[];
+  nextPromptSuggestions?: readonly ResearchNextPromptSuggestion[];
   toolEvents?: readonly ResearchEvent[];
   researchTrace?: ResearchTrace;
   raw?: unknown;

@@ -4,6 +4,7 @@ import {
   extractResearchTraceFromText,
   normalizeResearchTrace,
   renderResearchTraceContract,
+  stripResearchTraceFromText,
 } from "./research-trace.js";
 import { createRepeatAvoidanceTargets } from "./repeat-targets.js";
 import type {
@@ -46,6 +47,7 @@ import type {
   ResearchLoopModelInput,
   ResearchLoopPlan,
   ResearchLoopProcessingResult,
+  ResearchNextPromptSuggestion,
   ResearchStorageLayout,
   ResearchTrace,
 } from "./types.js";
@@ -57,6 +59,9 @@ export interface ProcessResearchLoopInput {
   eventSink?: ResearchLiveEventSink;
   signal?: AbortSignal;
 }
+
+const NEXT_PROMPTS_FENCE = "honeycrisp-next-prompts-json";
+const NEXT_PROMPT_SUGGESTION_COUNT = 3;
 
 export async function processResearchLoop(
   input: ProcessResearchLoopInput,
@@ -100,6 +105,10 @@ export async function processResearchLoop(
       evidenceRefs: [],
       claimRefs: [],
       followUpActions: ["Report the loop processing error before continuing."],
+      nextPromptSuggestions: createFallbackNextPromptSuggestions(
+        input.loopPlan,
+        message,
+      ),
     };
 
     return {
@@ -165,6 +174,7 @@ export function createDeterministicLoopExecutor(
         evidenceRefs: [],
         claimRefs: [],
         followUpActions: createFollowUpActions(loopPlan),
+        nextPromptSuggestions: createFallbackNextPromptSuggestions(loopPlan, text),
         ...(toolEvents.length > 0 ? { toolEvents } : {}),
         researchTrace,
         raw: {
@@ -292,8 +302,10 @@ export function createPiLoopExecutor(
         modelCalls.push(createModelCallMetadata(message));
       }
 
-      const text = extractAssistantText(message.content);
-      const researchTrace = extractResearchTraceFromText(text);
+      const parsedOutput = parseLoopModelText(
+        extractAssistantText(message.content),
+        input.loopPlan,
+      );
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         throw new Error(
@@ -302,15 +314,18 @@ export function createPiLoopExecutor(
       }
 
       return {
-        text,
+        text: parsedOutput.text,
         artifacts: [...input.loopPlan.expectedArtifacts],
         evidenceRefs: [],
         claimRefs: [],
         followUpActions: [
           "Ask the memory controller whether to continue this branch, create a sibling, refine the goal tree, or respond.",
         ],
+        nextPromptSuggestions: parsedOutput.nextPromptSuggestions,
         ...(toolEvents.length > 0 ? { toolEvents } : {}),
-        ...(researchTrace ? { researchTrace } : {}),
+        ...(parsedOutput.researchTrace
+          ? { researchTrace: parsedOutput.researchTrace }
+          : {}),
         raw: {
           provider: model.provider,
           model: model.id,
@@ -501,10 +516,10 @@ export function createPiAgentLoopExecutor(
 
       const assistantMessages = agentMessages.filter(isAssistantMessage);
       const finalAssistant = assistantMessages[assistantMessages.length - 1];
-      const text = finalAssistant
-        ? extractAssistantText(finalAssistant.content)
-        : "";
-      const researchTrace = extractResearchTraceFromText(text);
+      const parsedOutput = parseLoopModelText(
+        finalAssistant ? extractAssistantText(finalAssistant.content) : "",
+        input.loopPlan,
+      );
 
       if (
         finalAssistant &&
@@ -517,15 +532,18 @@ export function createPiAgentLoopExecutor(
       }
 
       return {
-        text,
+        text: parsedOutput.text,
         artifacts: [...input.loopPlan.expectedArtifacts],
         evidenceRefs: [],
         claimRefs: [],
         followUpActions: [
           "Ask the memory controller whether to continue this branch, create a sibling, refine the goal tree, or respond.",
         ],
+        nextPromptSuggestions: parsedOutput.nextPromptSuggestions,
         ...(toolEvents.length > 0 ? { toolEvents } : {}),
-        ...(researchTrace ? { researchTrace } : {}),
+        ...(parsedOutput.researchTrace
+          ? { researchTrace: parsedOutput.researchTrace }
+          : {}),
         raw: {
           provider: model.provider,
           model: model.id,
@@ -742,6 +760,366 @@ async function executeControllerPlannedToolActions(input: {
   return records;
 }
 
+interface ParsedLoopModelText {
+  text: string;
+  researchTrace?: ResearchTrace;
+  nextPromptSuggestions: readonly ResearchNextPromptSuggestion[];
+}
+
+function parseLoopModelText(
+  rawText: string,
+  loopPlan: ResearchLoopPlan,
+): ParsedLoopModelText {
+  const researchTrace = extractResearchTraceFromText(rawText);
+  const nextPromptSuggestions = normalizeNextPromptSuggestions(
+    extractNextPromptSuggestionsJson(rawText),
+    loopPlan,
+    rawText,
+  );
+  const text = stripReservedVisibleOutputSections(
+    stripNextPromptSuggestionsFromText(stripResearchTraceFromText(rawText)),
+  ).trim();
+
+  return {
+    text,
+    ...(researchTrace ? { researchTrace } : {}),
+    nextPromptSuggestions,
+  };
+}
+
+function renderNextPromptSuggestionsContract(): string {
+  return [
+    `At the end, include one fenced JSON block named ${NEXT_PROMPTS_FENCE}.`,
+    "This block drives clickable UI suggestions and replaces narrative Next Steps.",
+    "Return exactly three suggestions. Each suggestion must be a complete prompt for a follow-up Honeycrisp research session.",
+    "Use this exact object shape:",
+    `\`\`\`${NEXT_PROMPTS_FENCE}`,
+    JSON.stringify(
+      [
+        {
+          title: "Verify current candidate",
+          promptMarkdown:
+            "Skeptically verify the current candidate with fresh evidence. Build or reject an end-to-end proof before confirming it.",
+          rationale: "Continues the strongest current branch.",
+        },
+        {
+          title: "Expand nearby surface",
+          promptMarkdown:
+            "Inspect adjacent code or evidence for related behavior, avoiding targets already exhausted in memory.",
+          rationale: "Looks for nearby follow-up evidence.",
+        },
+        {
+          title: "Summarize and persist",
+          promptMarkdown:
+            "Summarize the current evidence, uncertainty, and persisted artifacts, then recommend whether to continue or stop.",
+          rationale: "Turns the run into reusable memory.",
+        },
+      ],
+      null,
+      2,
+    ),
+    "```",
+  ].join("\n");
+}
+
+function extractNextPromptSuggestionsJson(text: string): unknown {
+  const json = extractTaggedJsonFence(text, NEXT_PROMPTS_FENCE);
+  if (!json) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+}
+
+function stripNextPromptSuggestionsFromText(text: string): string {
+  return stripTaggedFence(text, NEXT_PROMPTS_FENCE);
+}
+
+function stripReservedVisibleOutputSections(text: string): string {
+  const reservedSection = new RegExp(
+    String.raw`(^|\n)#{1,6}\s*(?:next steps?|suggested next steps?|suggested next step|goal assessment|checkpoint|subgoals?)\b[\s\S]*?(?=\n#{1,6}\s+\S|$)`,
+    "gi",
+  );
+  return text.replace(reservedSection, "\n").trim();
+}
+
+function extractTaggedJsonFence(text: string, tag: string): string | undefined {
+  const completeFence = new RegExp(
+    `\n?\`\`\`${escapeRegExp(tag)}\\s*([\\s\\S]*?)\`\`\``,
+    "i",
+  );
+  const complete = text.match(completeFence);
+  if (complete?.[1]) {
+    return complete[1].trim();
+  }
+
+  const openFence = new RegExp(
+    `\n?\`\`\`${escapeRegExp(tag)}\\s*([\\s\\S]*)$`,
+    "i",
+  );
+  const open = text.match(openFence);
+  return open?.[1] ? extractFirstJsonValue(open[1]) : undefined;
+}
+
+function stripTaggedFence(text: string, tag: string): string {
+  const completeFence = new RegExp(
+    `\n?\`\`\`${escapeRegExp(tag)}\\s*[\\s\\S]*?\`\`\``,
+    "gi",
+  );
+  const withoutComplete = text.replace(completeFence, "");
+  const openFence = new RegExp(
+    `\n?\`\`\`${escapeRegExp(tag)}\\s*[\\s\\S]*$`,
+    "i",
+  );
+  return withoutComplete.replace(openFence, "").trim();
+}
+
+function extractFirstJsonValue(text: string): string | undefined {
+  const objectStart = text.indexOf("{");
+  const arrayStart = text.indexOf("[");
+  const starts = [objectStart, arrayStart].filter((index) => index >= 0);
+  const start = Math.min(...starts);
+  if (!Number.isFinite(start)) {
+    return undefined;
+  }
+
+  const opening = text[start];
+  const closing = opening === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      escaping = inString;
+      continue;
+    }
+
+    if (character === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (character === opening) {
+      depth += 1;
+    } else if (character === closing) {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1).trim();
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeNextPromptSuggestions(
+  raw: unknown,
+  loopPlan: ResearchLoopPlan,
+  fallbackContext: string,
+): readonly ResearchNextPromptSuggestion[] {
+  const rawSuggestions = coerceNextPromptSuggestionArray(raw);
+  const suggestions: ResearchNextPromptSuggestion[] = [];
+  const seenPrompts = new Set<string>();
+
+  for (const rawSuggestion of rawSuggestions) {
+    const suggestion = normalizeNextPromptSuggestion(rawSuggestion);
+    if (!suggestion) {
+      continue;
+    }
+    const key = suggestion.promptMarkdown.trim().toLowerCase();
+    if (seenPrompts.has(key)) {
+      continue;
+    }
+    seenPrompts.add(key);
+    suggestions.push(suggestion);
+    if (suggestions.length >= NEXT_PROMPT_SUGGESTION_COUNT) {
+      break;
+    }
+  }
+
+  for (const fallback of createFallbackNextPromptSuggestions(
+    loopPlan,
+    fallbackContext,
+  )) {
+    if (suggestions.length >= NEXT_PROMPT_SUGGESTION_COUNT) {
+      break;
+    }
+    const key = fallback.promptMarkdown.trim().toLowerCase();
+    if (seenPrompts.has(key)) {
+      continue;
+    }
+    seenPrompts.add(key);
+    suggestions.push(fallback);
+  }
+
+  return suggestions;
+}
+
+function coerceNextPromptSuggestionArray(raw: unknown): readonly unknown[] {
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+
+  if (!isRecord(raw)) {
+    return [];
+  }
+
+  const candidates = [
+    raw.nextPromptSuggestions,
+    raw.nextPrompts,
+    raw.suggestions,
+    raw.prompts,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  return [];
+}
+
+function normalizeNextPromptSuggestion(
+  raw: unknown,
+): ResearchNextPromptSuggestion | undefined {
+  if (typeof raw === "string") {
+    const promptMarkdown = raw.trim();
+    if (!promptMarkdown) {
+      return undefined;
+    }
+    return {
+      title: inferNextPromptTitle(promptMarkdown),
+      promptMarkdown,
+    };
+  }
+
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+
+  const promptMarkdown = firstStringValue(raw, [
+    "promptMarkdown",
+    "prompt",
+    "text",
+    "body",
+  ])?.trim();
+  if (!promptMarkdown) {
+    return undefined;
+  }
+
+  const rationale = firstStringValue(raw, ["rationale", "reason"])?.trim();
+
+  return {
+    title:
+      firstStringValue(raw, ["title", "label", "summary"])?.trim() ??
+      inferNextPromptTitle(promptMarkdown),
+    promptMarkdown,
+    ...(rationale ? { rationale } : {}),
+  };
+}
+
+function createFallbackNextPromptSuggestions(
+  loopPlan: ResearchLoopPlan,
+  context: string,
+): readonly ResearchNextPromptSuggestion[] {
+  const rootGoal = loopPlan.contextPacket.goalFrame.root.objective;
+  const subGoal = loopPlan.subGoal.objective;
+  const compactContext = summarizeForPrompt(context);
+
+  return [
+    {
+      title: "Continue current branch",
+      promptMarkdown: [
+        `Continue the Honeycrisp research goal: ${rootGoal}`,
+        "",
+        `Current subgoal: ${subGoal}`,
+        compactContext
+          ? `Use the latest result as context: ${compactContext}`
+          : "Use current memory as context and gather fresh evidence before marking the goal complete.",
+      ].join("\n"),
+      rationale: "Keeps momentum on the active branch.",
+    },
+    {
+      title: "Skeptically verify evidence",
+      promptMarkdown: [
+        `Review the current Honeycrisp evidence skeptically for: ${rootGoal}`,
+        "",
+        "Identify the strongest unsupported assumptions, gather fresh evidence, and do not promote candidates without proof.",
+      ].join("\n"),
+      rationale: "Tests whether the current result deserves promotion.",
+    },
+    {
+      title: "Explore a fresh branch",
+      promptMarkdown: [
+        `Start a fresh branch for the Honeycrisp research goal: ${rootGoal}`,
+        "",
+        "Avoid targets already exhausted in memory, select a distinct promising area, and persist any useful evidence or artifacts.",
+      ].join("\n"),
+      rationale: "Avoids repeating the same target.",
+    },
+  ];
+}
+
+function firstStringValue(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function inferNextPromptTitle(promptMarkdown: string): string {
+  const firstLine = promptMarkdown
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^#+\s*/, "").trim())
+    .find(Boolean);
+  if (!firstLine) {
+    return "Continue research";
+  }
+
+  return firstLine.length > 64
+    ? `${firstLine.slice(0, 61).trim()}...`
+    : firstLine;
+}
+
+function summarizeForPrompt(text: string): string {
+  const compact = text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (compact.length <= 240) {
+    return compact;
+  }
+
+  return `${compact.slice(0, 237).trim()}...`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function createPiContext(
   modelInput: ResearchLoopModelInput,
   toolRegistry: ResearchToolRegistry | undefined,
@@ -787,7 +1165,11 @@ function createPiAgentUserMessage(modelInput: ResearchLoopModelInput): Message {
       ),
       "",
       "## Output Shape",
-      "Return concise markdown with: Result, Evidence Used, Assumptions, Open Questions, Suggested Next Step.",
+      "Return concise markdown with: Result, Evidence Used, Assumptions, Open Questions.",
+      "Do not include visible Next Steps, Goal Assessment, Checkpoint, or Subgoal sections.",
+      "",
+      "## Next Prompt Suggestions",
+      renderNextPromptSuggestionsContract(),
       "",
       "## Visible Research Trace",
       renderResearchTraceContract(),

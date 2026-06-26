@@ -384,6 +384,7 @@ export {
   extractResearchTraceFromText,
   normalizeResearchTrace,
   renderResearchTraceContract,
+  stripResearchTraceFromText,
 } from "./research-trace.js";
 export {
   createResearchPiAgent,
@@ -455,6 +456,7 @@ export type {
   ResearchMemorySnapshot,
   ResearchMemoryStoreKind,
   ResearchMemoryReadModel,
+  ResearchNextPromptSuggestion,
   ResearchProcedureMemoryRecord,
   ResearchProofAttempt,
   ResearchProofAttemptStatus,

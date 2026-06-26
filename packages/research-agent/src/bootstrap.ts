@@ -911,6 +911,9 @@ function createLoopProcessedEvent(
       artifacts: loopResult.output.artifacts,
       evidenceRefs: loopResult.output.evidenceRefs,
       claimRefs: loopResult.output.claimRefs,
+      ...(loopResult.output.nextPromptSuggestions
+        ? { nextPromptSuggestions: loopResult.output.nextPromptSuggestions }
+        : {}),
       ...(loopResult.output.researchTrace
         ? { researchTrace: loopResult.output.researchTrace }
         : {}),
