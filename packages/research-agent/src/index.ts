@@ -55,6 +55,8 @@ export type {
   ResearchToolConfigPreference,
   WriteResearchToolConfigOptions,
 } from "./tool-config.js";
+export { createCodeIntelligenceTools } from "./code-tools.js";
+export type { BuiltInCodeIntelligenceToolOptions } from "./code-tools.js";
 export {
   createAnalysisTool,
   createDefaultBuiltInToolFamily,

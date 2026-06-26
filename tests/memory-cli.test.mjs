@@ -264,7 +264,18 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(
     payload.tools.map((tool) => tool.name).sort(),
-    ["analysis.transform", "file.read", "repository.search", "storage.list"],
+    [
+      "analysis.transform",
+      "code.call_candidates",
+      "code.detect",
+      "code.node_context",
+      "code.outline",
+      "code.query",
+      "code.references",
+      "file.read",
+      "repository.search",
+      "storage.list",
+    ],
   );
   assert.deepEqual(payload.governance.allowedSideEffects, ["read"]);
   assert.equal(payload.governance.maxToolCalls, 2);
@@ -272,6 +283,10 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
   assert.equal(
     payload.tools.find((tool) => tool.name === "repository.search").metadata.defaultBudget.maxBytes,
     200000,
+  );
+  assert.equal(
+    payload.tools.find((tool) => tool.name === "code.outline").metadata.parser,
+    "tree-sitter",
   );
   assert.deepEqual(payload.mcp.allowedServers, ["alpha"]);
   assert.equal(payload.mcp.status, "no_mcp_client_configured");
@@ -397,6 +412,8 @@ test("tools CLI honors disabled tool families and treats repository roots as con
     "repository-search",
     "--disable-tool-family",
     "file-read",
+    "--disable-tool-family",
+    "code",
     "--json",
   ]);
   const disabledPayload = JSON.parse(disabled.stdout);
@@ -416,6 +433,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
   assert.deepEqual(disabledPayload.toolFamilies.disabled, [
     "repository-search",
     "file-read",
+    "code",
   ]);
   assert.equal(workspaceDefault.status, 0, workspaceDefault.stderr);
   assert.deepEqual(

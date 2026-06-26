@@ -20,6 +20,7 @@ The current runtime has the integrated first slice of the architecture in place:
 - Findings are first-class durable memory records. The event log accepts finding proposal/update/review events, the write pipeline derives finding records, lifecycle helpers and CLI commands promote/reject/supersede/tombstone/delete findings, retrieval ranks supported findings separately from hypotheses, and context packet v2 exposes a `current_findings` section.
 - Proof state is durable and domain-neutral. The event log accepts proof request/attempt/observation/review events, the proof store persists obligations and attempts in the memory SQLite database, proof artifacts are linked through artifact refs, steering commands can request/review proof state, and context packet v2 exposes a `proof_state` section.
 - Built-in tools are registered through the tool registry, governed by side-effect and budget policy, emitted as `tool.requested` and `tool.observed` events, and routed through the memory write pipeline.
+- Tree-sitter-backed code intelligence is a built-in, domain-neutral tool family. It provides code detection, symbol outlines, raw bounded Tree-sitter queries, node context, structural references, and best-effort call candidates for local repository/source context without claiming full static-analysis precision.
 - Local MCP servers can be configured through an explicit stdio JSON-RPC config and allowlist. MCP outputs are treated as untrusted external content.
 - Local skills can be loaded from `SKILL.md` directories, selected by id, and injected as bounded runtime context without overriding governance.
 - Allowlisted experiments can be configured as local subprocess tools with explicit side-effect policy, permissions, timeouts, output limits, stdout/stderr hashing, and artifact registration.
@@ -31,6 +32,7 @@ Known limitations after this slice:
 - Richer proof/verifier UI workflows remain interface work, but Honeycrisp exposes durable proof obligations, proof attempts, and review commands through the proof store and memory CLI.
 - MCP support currently targets configured stdio servers; richer transport management, authentication handoff, and long-lived server health monitoring remain future work.
 - Experiment tools are allowlisted and auditable, but they are not a security sandbox. Operators must still choose safe commands and working directories.
+- Code intelligence is structural syntax assistance, not semantic indexing, taint analysis, or a precise language-server replacement. OpenGrep/Semgrep-style analysis remains a possible optional analyzer layer if Tree-sitter primitives prove insufficient.
 - Memory retrieval is sparse/structured and graph-aware enough for the current integration path; dense embedding retrieval and more advanced utility learning remain future work.
 - Flow captures intentionally summarize event timelines. Use the durable event log and storage manifest when exact artifact refs, source event ids, or full raw outputs are needed.
 - Integration health checks are documented command sequences plus deterministic regression tests, not yet a single packaged CI command that can safely run live models everywhere.

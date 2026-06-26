@@ -42,11 +42,13 @@ The project already has a first executable tool slice:
 - A Pi Agent lifecycle executor is available from the library layer. It maps Honeycrisp tools to Pi `AgentTool`s, uses Agent tool hooks for governance preflight and event capture, supports sequential or parallel tool batches, and keeps the older `completeSimple` executor as the fallback/default path.
 - The CLI can configure tool families, side-effect and budget governance, selected local skills, MCP server allowlists, and the Agent executor. `honeycrisp tools list` exposes the configured registry, MCP allowlist status, and selected skills, and flow captures include runtime tool configuration metadata.
 - Tool evaluation stays focused on generic surfaces: built-in tools, MCP adapters, skill selection, governance, Agent lifecycle execution, and durable tool events. Domain-specific research behavior is expected to come from user-provided MCP servers, local skills, and configured tool families rather than packaged Honeycrisp harnesses.
+- Tree-sitter-backed code intelligence is now a generic built-in tool family for workspaces with repository/source context. It gives the agent syntax-aware code detection, outlines, raw queries, node context, references, and best-effort call candidates without baking in domain-specific SAST strategy.
 
 Known limitations to address:
 
 - The CLI supports local inspection, repository search, file read, analysis, and synthesis families; allowlisted experiment functions still need a safer operator configuration shape.
 - MCP server allowlists are visible in CLI config and capture output, and evaluation fixtures exercise MCP discovery/execution, but live MCP client discovery still requires a configured client integration.
+- Code intelligence is intentionally structural. It does not yet provide semantic indexing, type resolution, taint/data-flow analysis, or OpenGrep/Semgrep-compatible rule packs.
 
 ## Phase 1: Core Tool Contract And Local Inspection Bridge
 
@@ -300,3 +302,29 @@ Verification:
 - The health check used the real `openai-codex/gpt-5.3-codex-spark` Agent executor through normal CLI configuration: `--repo-root`, `--allowed-side-effect read`, `--tool-max-calls 1`, and `--tool-max-bytes 200000`.
 - The real run completed one user-configured `repository.search` call with no packaged harness API, produced Agent lifecycle metadata, and routed the search observation into memory.
 - The zsh evidence included `Src/context.c:67` and `Src/parse.c:295` for `parse_context_save`, confirming the generic user-configured tool path preserves the same health-check value without locking Honeycrisp into maintained domain harnesses.
+
+## Phase 11: Tree-Sitter Code Intelligence Tools
+
+Add a domain-neutral code tool family so Honeycrisp can use syntax-aware code structure whenever workspace context indicates that it is working with source code.
+
+Status: completed on 2026-06-25.
+
+Checklist:
+
+- [x] Add a `code` built-in tool family backed by Tree-sitter rather than domain-specific SAST rules.
+- [x] Add `code.detect` for language detection and parse-health summaries.
+- [x] Add `code.outline` for Tree-sitter tag-query definitions such as functions, methods, classes, types, and modules.
+- [x] Add `code.query` for bounded raw Tree-sitter queries with capture ranges.
+- [x] Add `code.node_context` for enclosing node and ancestor context at a line/range.
+- [x] Add `code.references` for structural definition/reference candidates.
+- [x] Add `code.call_candidates` for best-effort call-reference candidates, explicitly not a full call graph.
+- [x] Register provider-safe transport aliases for all code tools.
+- [x] Auto-enable the `code` family from repository/source/workspace-context hints and allow `--disable-tool-family code`.
+- [x] Expose code tools through `honeycrisp tools list`, runtime captures, and the public library export.
+- [x] Add tests for direct code tool execution and CLI family behavior.
+
+Verification:
+
+- `pnpm check` passed on 2026-06-25.
+- `pnpm test -- --test-name-pattern "code intelligence|tools CLI lists|tools CLI honors|default built-in"` ran the workspace suite and passed 154 tests on 2026-06-25.
+- The direct code-tool fixture parsed JavaScript with Tree-sitter, detected parse health, outlined `parse_context_save`, executed a raw call-expression query, returned enclosing function context, found definition/reference candidates, and produced a `reference.call` call candidate.

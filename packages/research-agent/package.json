@@ -20,7 +20,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.2",
-    "@earendil-works/pi-ai": "0.80.2"
+    "@earendil-works/pi-ai": "0.80.2",
+    "tree-sitter-wasm": "1.1.1",
+    "web-tree-sitter": "0.26.9"
   },
   "license": "UNLICENSED",
   "engines": {

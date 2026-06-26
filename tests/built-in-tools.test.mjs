@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   createAnalysisTool,
+  createCodeIntelligenceTools,
   createDefaultBuiltInToolFamily,
   createExperimentTool,
   createMemoryRecallTool,
@@ -223,6 +224,126 @@ test("analysis tool runs deterministic metrics and diffs", async () => {
   assert.deepEqual(diff.result.output.changes, ["-2: b", "+2: c"]);
 });
 
+test("code intelligence tools expose Tree-sitter detect, outline, query, context, references, and call candidates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-code-tools-"));
+  await mkdir(join(root, "src"));
+  const sourcePath = join(root, "src", "parser.js");
+  await writeFile(
+    sourcePath,
+    [
+      "function parse_context_save(input) {",
+      "  return input;",
+      "}",
+      "",
+      "parse_context_save('fixture');",
+      "",
+    ].join("\n"),
+  );
+
+  try {
+    const registry = createResearchToolRegistry(
+      createCodeIntelligenceTools({
+        roots: [root],
+        maxFileBytes: 20_000,
+      }),
+    );
+    const detect = await registry.execute({
+      id: "code_detect_1",
+      actionClass: "inspect",
+      toolName: "code.detect",
+      input: {
+        path: root,
+      },
+    });
+    const outline = await registry.execute({
+      id: "code_outline_1",
+      actionClass: "inspect",
+      toolName: "code.outline",
+      input: {
+        path: "src/parser.js",
+      },
+    });
+    const query = await registry.execute({
+      id: "code_query_1",
+      actionClass: "inspect",
+      toolName: "code.query",
+      input: {
+        path: sourcePath,
+        query: "(call_expression function: (identifier) @call)",
+        includeText: true,
+      },
+    });
+    const context = await registry.execute({
+      id: "code_context_1",
+      actionClass: "inspect",
+      toolName: "code.node_context",
+      input: {
+        path: sourcePath,
+        line: 2,
+      },
+    });
+    const references = await registry.execute({
+      id: "code_refs_1",
+      actionClass: "search",
+      toolName: "code.references",
+      input: {
+        path: "src/parser.js",
+        symbol: "parse_context_save",
+      },
+    });
+    const calls = await registry.execute({
+      id: "code_calls_1",
+      actionClass: "analyze",
+      toolName: "code.call_candidates",
+      input: {
+        path: "src/parser.js",
+        symbol: "parse_context_save",
+      },
+    });
+
+    assert.equal(detect.result.status, "complete");
+    assert.equal(detect.result.output.detections[0].language, "javascript");
+    assert.equal(detect.result.output.detections[0].parseHealth.hasError, false);
+    assert.equal(outline.result.status, "complete");
+    assert.ok(
+      outline.result.output.symbols.some(
+        (symbol) =>
+          symbol.kind === "definition.function" &&
+          symbol.name === "parse_context_save",
+      ),
+    );
+    assert.equal(query.result.status, "complete");
+    assert.equal(query.result.output.matches[0].captures[0].text, "parse_context_save");
+    assert.equal(context.result.status, "complete");
+    assert.ok(
+      context.result.output.ancestors.some(
+        (ancestor) => ancestor.nodeType === "function_declaration",
+      ),
+    );
+    assert.equal(references.result.status, "complete");
+    assert.ok(
+      references.result.output.references.some(
+        (reference) => reference.kind === "definition.function",
+      ),
+    );
+    assert.ok(
+      references.result.output.references.some(
+        (reference) => reference.kind === "reference.call",
+      ),
+    );
+    assert.equal(calls.result.status, "complete");
+    assert.deepEqual(
+      calls.result.output.callCandidates.map((candidate) => candidate.kind),
+      ["reference.call"],
+    );
+  } finally {
+    await rm(root, {
+      recursive: true,
+      force: true,
+    });
+  }
+});
+
 test("experiment tool runs only allowlisted experiments", async () => {
   const registry = createResearchToolRegistry([
     createExperimentTool({
@@ -332,6 +453,9 @@ test("default built-in family assembles configured tool surfaces", async () => {
       fileRead: {
         allowedRoots: [root],
       },
+      code: {
+        roots: [root],
+      },
       experiments: {
         experiments: {
           noop() {
@@ -348,6 +472,12 @@ test("default built-in family assembles configured tool surfaces", async () => {
 
     assert.deepEqual(names, [
       "analysis.transform",
+      "code.call_candidates",
+      "code.detect",
+      "code.node_context",
+      "code.outline",
+      "code.query",
+      "code.references",
       "experiment.run",
       "file.read",
       "memory.recall",
@@ -356,6 +486,12 @@ test("default built-in family assembles configured tool surfaces", async () => {
     ]);
     assert.deepEqual(transportNames, [
       "analysis_transform",
+      "code_call_candidates",
+      "code_detect",
+      "code_node_context",
+      "code_outline",
+      "code_query",
+      "code_references",
       "experiment_run",
       "file_read",
       "memory_recall",

@@ -43,7 +43,7 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 ### Beale Agent Features To Retire Or Reduce
 
-- Project semantic indexing, project inventory, structure graph, graph search, and graph visualization as agent-state mechanisms. Honeycrisp intentionally should not add semantic search now. Tree-sitter, code intelligence, or semantic search can return later as optional Beale skills/MCP servers.
+- Project semantic indexing, project inventory, structure graph, graph search, and graph visualization as agent-state mechanisms. Honeycrisp intentionally should not add semantic/vector search as core memory now. Tree-sitter code intelligence has since moved into Honeycrisp as a generic structural tool family, while deeper semantic retrieval remains optional skills/MCP territory.
 - Beale OpenAI/fake/executor agent runtimes and their custom tool stack once Honeycrisp is the only research agent engine.
 - Beale VM/sandbox implementation, VM setup UX, executor backends, network-profile enforcement, and approval gates. Operators can run Beale/Honeycrisp inside their own VM when isolation matters.
 - Benchmark and CyberGym code, tests, UI settings, storage, model proxy, and reserved programs. This was proof-of-concept scaffolding and should be removed.
@@ -159,7 +159,7 @@ Remove Beale's semantic/project graph machinery from the agent path while keepin
 
 Status: completed.
 
-Implementation note: Beale's built-in semantic index and project graph are no longer agent state. Future code intelligence should be supplied as optional Honeycrisp skills or MCP servers, such as Tree-sitter indexing, structural source search, or semantic retrieval providers, with Honeycrisp storing only recallable findings, evidence, procedures, proof state, and artifact pointers.
+Implementation note: Beale's built-in semantic index and project graph are no longer agent state. This note is partly superseded: Honeycrisp now owns a generic Tree-sitter structural code tool family for code detection, outlines, queries, node context, references, and call candidates. Semantic/vector retrieval and domain-specific analyzers remain optional skills/MCP providers, with Honeycrisp storing only recallable findings, evidence, procedures, proof state, and artifact pointers.
 
 Checklist:
 
@@ -169,7 +169,7 @@ Checklist:
 - [x] Remove project inventory/search/structure/graph refreshes that only exist to feed Beale's old agent tools.
 - [x] Remove graph search and semantic retrieval from Beale's old OpenAI tool stack as that stack is retired.
 - [x] Keep or redesign heatmap visuals so they do not depend on project graph state.
-- [x] Document future code-intelligence direction as optional Tree-sitter or semantic retrieval skills/MCP, not Honeycrisp core.
+- [x] Document future code-intelligence direction. Superseded on 2026-06-25 for Tree-sitter structural tools, which now live in Honeycrisp core; semantic retrieval remains outside core.
 - [x] Add migration/recovery tests proving existing workspaces with old semantic tables still open.
 - [x] Remove semantic-index renderer tests or rewrite them around the new memory-backed UI.
 - [x] Run Beale build and workbench tests after removal.
@@ -270,7 +270,7 @@ Checklist:
 ## Non-Goals For This Plan
 
 - Do not add semantic/vector retrieval to Honeycrisp core in this migration.
-- Do not add Tree-sitter or language-server indexing to Honeycrisp core; those belong in optional skills or MCP servers.
+- Do not add semantic/vector retrieval or language-server indexing to Honeycrisp core; Tree-sitter structural code tools are now an intentional Honeycrisp built-in.
 - Do not keep Beale's VM sandbox as a hidden safety layer.
 - Do not migrate program/project setup out of Beale yet.
 - Do not migrate Beale's disclosure/export/report UX into Honeycrisp until a separate cross-domain design exists.

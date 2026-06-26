@@ -18,6 +18,10 @@ import type {
   ResearchExecutableTool,
   ResearchToolExecutionResult,
 } from "./tool-registry.js";
+import {
+  createCodeIntelligenceTools,
+  type BuiltInCodeIntelligenceToolOptions,
+} from "./code-tools.js";
 import type {
   ResearchArtifactRef,
   ResearchMemoryRef,
@@ -131,6 +135,7 @@ export interface DefaultBuiltInToolFamilyOptions {
   recall?: BuiltInMemoryRecallToolOptions;
   repositorySearch?: BuiltInRepositorySearchToolOptions;
   fileRead?: BuiltInStructuredFileReadToolOptions;
+  code?: BuiltInCodeIntelligenceToolOptions;
   experiments?: BuiltInExperimentToolOptions;
   storage?: BuiltInStorageListToolOptions;
 }
@@ -549,6 +554,7 @@ export function createDefaultBuiltInToolFamily(
       ? [createRepositorySearchTool(options.repositorySearch)]
       : []),
     ...(options.fileRead ? [createStructuredFileReadTool(options.fileRead)] : []),
+    ...(options.code ? createCodeIntelligenceTools(options.code) : []),
     ...(options.storage ? [createStorageListTool(options.storage)] : []),
     createAnalysisTool(),
     ...(options.experiments ? [createExperimentTool(options.experiments)] : []),

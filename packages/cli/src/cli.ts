@@ -7,6 +7,7 @@ import {
   bootstrapResearchRun,
   compileContextPacketV2,
   createAnalysisTool,
+  createCodeIntelligenceTools,
   createConfiguredResearchMcpClient,
   createConfiguredExperimentTool,
   createLocalInspectionObservationEvent,
@@ -91,6 +92,7 @@ type ToolFamily =
   | "local-inspection"
   | "repository-search"
   | "file-read"
+  | "code"
   | "analysis"
   | "synthesis"
   | "storage"
@@ -964,6 +966,7 @@ function parseToolFamily(value: string): ToolFamily {
     value === "local-inspection" ||
     value === "repository-search" ||
     value === "file-read" ||
+    value === "code" ||
     value === "analysis" ||
     value === "synthesis" ||
     value === "storage" ||
@@ -973,7 +976,7 @@ function parseToolFamily(value: string): ToolFamily {
   }
 
   throw new Error(
-    "--tool-family must be one of local-inspection, repository-search, file-read, analysis, synthesis, storage, experiment.",
+    "--tool-family must be one of local-inspection, repository-search, file-read, code, analysis, synthesis, storage, experiment.",
   );
 }
 
@@ -1070,7 +1073,7 @@ function usage(): string {
     "  --inspect-path <path>  Inspect a local path before the loop",
     "  --inspect-action <a>   Inspection action: read_text or list",
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
-    "  --tool-family <name>   Enable local-inspection, repository-search, file-read, analysis, synthesis, storage, or experiment",
+    "  --tool-family <name>   Enable local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --tool-config <path>   Runtime tool preference config (default: .honeycrisp/tools.json)",
     "  --no-default-tool-config Ignore .honeycrisp/tools.json unless --tool-config is provided",
@@ -2150,7 +2153,7 @@ function toolsUsage(): string {
     "Usage: honeycrisp tools list [options]",
     "",
     "Options:",
-    "  --tool-family <name>        Enable local-inspection, repository-search, file-read, analysis, synthesis, storage, or experiment",
+    "  --tool-family <name>        Enable local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
     "  --disable-tool-family <n>   Disable a tool family after implicit/default enables",
     "  --tool-config <path>        Runtime tool preference config (default: .honeycrisp/tools.json)",
     "  --no-default-tool-config    Ignore .honeycrisp/tools.json unless --tool-config is provided",
@@ -3114,6 +3117,20 @@ async function createRuntimeConfig(args: {
     toolDescriptors.push(tool.descriptor);
   }
 
+  if (families.has("code")) {
+    const tools = createCodeIntelligenceTools({
+      roots: repositorySearchRootsFromWorkspaceContext(workspaceContext),
+      ...(runtimeTools.toolMaxBytes
+        ? { maxFileBytes: runtimeTools.toolMaxBytes }
+        : {}),
+      ...(runtimeTools.toolMaxFiles
+        ? { maxFiles: runtimeTools.toolMaxFiles }
+        : {}),
+    });
+    executableTools.push(...tools);
+    toolDescriptors.push(...tools.map((tool) => tool.descriptor));
+  }
+
   if (families.has("analysis")) {
     const tool = createAnalysisTool();
     executableTools.push(tool);
@@ -3411,6 +3428,13 @@ function resolveEnabledToolFamilies(args: {
     args.runtimeTools.workspaceContextPath
   ) {
     families.add("file-read");
+  }
+  if (
+    args.runtimeTools.repoRoots.length > 0 ||
+    args.runtimeTools.sourcePaths.length > 0 ||
+    args.runtimeTools.workspaceContextPath
+  ) {
+    families.add("code");
   }
 
   for (const family of args.runtimeTools.disabledToolFamilies) {
