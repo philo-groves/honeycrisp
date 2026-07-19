@@ -352,6 +352,7 @@ export interface CreatePiAgentLoopExecutorOptions {
   models?: Pick<Models, "getModel" | "streamSimple">;
   toolRegistry?: ResearchToolRegistry;
   toolExecution?: ToolExecutionMode;
+  getSteeringMessages?: () => Promise<AgentMessage[]>;
 }
 
 export function createPiAgentLoopExecutor(
@@ -503,7 +504,7 @@ export function createPiAgentLoopExecutor(
 
             return undefined;
           },
-          getSteeringMessages: async () => [],
+          getSteeringMessages: options.getSteeringMessages ?? (async () => []),
           getFollowUpMessages: async () => [],
         },
         async (event) => {

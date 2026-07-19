@@ -3,6 +3,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
+import { HoneycrispControlStream } from "./control-stream.js";
 import {
   bootstrapResearchRun,
   compileContextPacketV2,
@@ -169,6 +170,7 @@ interface ParsedArgs {
   runtimeTools: RuntimeToolConfig;
   capturePath: string | undefined;
   eventStream: boolean;
+  controlStream: boolean;
   workspaceRoot: string;
   goalLoops: number | null | undefined;
   json: boolean;
@@ -247,6 +249,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let inspectBytes: number | undefined;
   let capturePath: string | undefined;
   let eventStream = false;
+  let controlStream = false;
   let workspaceRoot = process.cwd();
   let goalLoops: number | null | undefined;
   const toolFamilies: ToolFamily[] = [];
@@ -421,6 +424,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
     } else if (arg === "--event-stream") {
       eventStream = true;
+    } else if (arg === "--control-stream") {
+      controlStream = true;
     } else if (arg === "--workspace-root") {
       workspaceRoot = readOptionValue(argv, index, arg);
       index += 1;
@@ -489,6 +494,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     },
     capturePath,
     eventStream,
+    controlStream,
     workspaceRoot,
     goalLoops,
     json,
@@ -1096,6 +1102,7 @@ function usage(): string {
     "  --skill <id>           Request a loaded skill by id",
     "  --capture <path>       Write a local flow-capture JSON artifact",
     "  --event-stream         Write prefixed live JSON events to stdout",
+    "  --control-stream       Read host control JSONL from stdin",
     "  --workspace-root <p>   Workspace root for durable runtime memory",
     "  --goal-loops <n|none>  Max loops, or none for no configured loop limit",
     "  --json                 Print the initialized run as JSON",
@@ -1178,6 +1185,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     }
 
     const runtimeConfig = await createRuntimeConfig(args);
+    const liveEventSink = args.eventStream ? createCliLiveEventSink() : undefined;
+    const controlStream = args.controlStream
+      ? new HoneycrispControlStream(input, (event) => {
+          void liveEventSink?.({
+            schemaVersion: 1,
+            kind: "agent.event",
+            timestamp: new Date().toISOString(),
+            payload: { eventType: "control.received", ...event },
+          });
+        })
+      : undefined;
+    controlStream?.start();
     try {
       let modelConfig: ResolvedResearchModelConfig | undefined;
       const loopExecutor = args.mock
@@ -1196,6 +1215,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
               ...(args.model ? { model: args.model } : {}),
               ...(args.reasoning ? { effort: args.reasoning } : {}),
             })),
+            controlStream,
           );
 
       const inspectionState =
@@ -1224,7 +1244,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           : {}),
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
         loopExecutor,
-        ...(args.eventStream ? { eventSink: createCliLiveEventSink() } : {}),
+        ...(liveEventSink ? { eventSink: liveEventSink } : {}),
         durableMemory: true,
         ...(args.goalLoops !== undefined
           ? { goalRun: { maxLoops: args.goalLoops } }
@@ -1254,6 +1274,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 
       console.log(result.response);
     } finally {
+      controlStream?.close();
       await runtimeConfig.cleanup?.();
     }
   } catch (error) {
@@ -1267,6 +1288,7 @@ function createRealLoopExecutor(
   args: ParsedArgs,
   toolRegistry: ResearchToolRegistry | undefined,
   modelConfig: ResolvedResearchModelConfig,
+  controlStream: HoneycrispControlStream | undefined,
 ): ResearchLoopExecutor {
   const executorInput = {
     provider: modelConfig.provider,
@@ -1280,6 +1302,16 @@ function createRealLoopExecutor(
     ? createPiAgentLoopExecutor({
         ...executorInput,
         ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
+        ...(controlStream
+          ? {
+              getSteeringMessages: async () =>
+                (await controlStream.takeSteeringInstructions()).map((instruction) => ({
+                  role: "user" as const,
+                  content: `User steering for the active research run:\n\n${instruction}`,
+                  timestamp: Date.now(),
+                })),
+            }
+          : {}),
       })
     : createPiLoopExecutor(executorInput);
 }

@@ -128,6 +128,22 @@ user-response point, or the configured `--goal-loops` budget stops the run. Use
 `--goal-loops none` for no configured loop limit; an internal safety ceiling
 still prevents accidental infinite runs.
 
+### Host control stream
+
+Hosts can add `--control-stream` to send schema-versioned JSONL commands over
+stdin while a run is active:
+
+```jsonl
+{"schemaVersion":1,"type":"pause"}
+{"schemaVersion":1,"type":"resume"}
+{"schemaVersion":1,"type":"steer","instruction":"Inspect the authorization boundary next."}
+```
+
+Pause holds the agent at its next safe turn boundary until resume arrives.
+Steering is injected as a user message into the active Pi agent loop before its
+next model turn. With `--event-stream`, accepted or rejected control messages
+are reported as `agent.event` records with `eventType: "control.received"`.
+
 ## Auth
 
 Honeycrisp stores provider credentials in `~/.honeycrisp/auth.json` by default, or the path set in `HONEYCRISP_AUTH_FILE`.

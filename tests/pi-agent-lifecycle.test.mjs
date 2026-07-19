@@ -177,6 +177,48 @@ test("Pi Agent executor streams live thought events", async () => {
   assert.equal(thoughtEvents.at(-1).payload.text, "Inspect parser entrypoints first.");
 });
 
+test("Pi Agent executor injects live steering into the next model turn", async () => {
+  const goalFrame = createResearchGoalFrame("Inspect the parser boundary.");
+  const decision = createFirstRunMemoryController().decide({ goalFrame });
+  const loopPlan = planResearchLoop({ decision });
+  const contexts = [];
+  let steeringPoll = 0;
+  const result = await processResearchLoop({
+    loopPlan,
+    executor: createPiAgentLoopExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels(
+        [
+          assistant("## Result\nInitial parser orientation."),
+          assistant("## Result\nApplied the authorization-boundary steering."),
+        ],
+        contexts,
+      ),
+      async getSteeringMessages() {
+        steeringPoll += 1;
+        return steeringPoll === 2
+          ? [
+              {
+                role: "user",
+                content: "User steering: inspect the authorization boundary next.",
+                timestamp: Date.now(),
+              },
+            ]
+          : [];
+      },
+    }),
+  });
+
+  assert.equal(result.status, "complete");
+  assert.equal(contexts.length, 2);
+  assert.ok(
+    contexts[1].messageContents.some((content) =>
+      content.includes("inspect the authorization boundary next"),
+    ),
+  );
+});
+
 test("Pi Agent executor supports parallel same-turn tool execution", async () => {
   const calls = [];
   const tool = createFixtureInspectTool(calls);
@@ -339,6 +381,7 @@ function createScriptedModels(messages, contexts = []) {
       contexts.push({
         toolNames: context.tools?.map((tool) => tool.name) ?? [],
         messageRoles: context.messages.map((message) => message.role),
+        messageContents: context.messages.map((message) => JSON.stringify(message.content)),
       });
       const message = messages[index] ?? assistant("## Result\nNo scripted response.");
       index += 1;
