@@ -14,6 +14,7 @@ import {
   createLocalInspectionTool,
   createDeterministicAgentExecutor,
   createMemoryGraphTools,
+  compileMemoryModelContext,
   createMemoryInspector,
   createMemorySteeringController,
   createPiAgentExecutor,
@@ -76,6 +77,7 @@ import type {
   ResearchModelConfigPreference,
   MemoryNodeStatus,
   MemoryNodeType,
+  ResearchModelMemoryContextNode,
   ResearchProofMethodDescriptor,
   ResearchToolConfigPreference,
   ResolvedResearchModelConfig,
@@ -1208,6 +1210,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         prompt: args.prompt,
         workspaceRoot: args.workspaceRoot,
         workspaceContext: runtimeConfig.workspaceContext,
+        memoryContext: runtimeConfig.memoryContext,
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
         ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
@@ -2779,6 +2782,7 @@ function isRecordArray(value: unknown): Record<string, unknown>[] {
 await main();
 
 async function createRuntimeConfig(args: {
+  prompt?: string | undefined;
   inspectRoots: string[];
   inspectPaths: string[];
   inspectAction: LocalInspectionAction;
@@ -2793,6 +2797,7 @@ async function createRuntimeConfig(args: {
   skills: ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
+  memoryContext: readonly ResearchModelMemoryContextNode[];
   runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
   cleanup?: () => Promise<void>;
@@ -2846,6 +2851,9 @@ async function createRuntimeConfig(args: {
   executableTools.push(...memoryTools);
   toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));
   cleanupCallbacks.push(async () => memoryGraph.close());
+  const memoryContext = args.prompt
+    ? compileMemoryModelContext(memoryGraph, args.prompt)
+    : [];
   const mcpCapture = await configureRuntimeMcpTools({
     runtimeTools,
     executableTools,
@@ -2960,6 +2968,7 @@ async function createRuntimeConfig(args: {
     skills,
     governance,
     workspaceContext,
+    memoryContext,
     runtimeTools,
     capture: createRuntimeCapture({
       families,

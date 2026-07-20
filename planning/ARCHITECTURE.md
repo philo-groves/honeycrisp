@@ -13,12 +13,12 @@ Honeycrisp does not maintain an outer goal tree, generated subgoals, a triager, 
 ## Runtime Flow
 
 1. The host or CLI supplies a research request and structured authorized workspace context.
-2. Honeycrisp retrieves concise relevant knowledge from the unified SQLite database.
-3. Honeycrisp compiles workspace, memory, skills, storage, and research-tool policy into model context.
+2. Honeycrisp selects concise relevant tiered knowledge from the unified SQLite database.
+3. Honeycrisp compiles projected workspace identity, source references, selected memory, and skills into model context. Database paths and storage layout remain runtime-only.
 4. Pi runs the selected model with research tools and collaboration tools.
-5. Research tool observations are appended to the event stream and consolidated when they produce useful durable knowledge.
+5. Research tool observations are appended to the operational event stream. The model explicitly saves or updates concise graph knowledge when it is reusable.
 6. The model may spawn bounded child sessions, communicate with them, and incorporate their results.
-7. Honeycrisp returns the root response and writes a schema-v2 flow capture containing root, child, tool, memory, context, and storage metadata.
+7. Honeycrisp returns the root response and writes a schema-v3 flow capture containing root, child, tool, memory, context, and operational storage metadata.
 
 ## Context
 
@@ -27,10 +27,10 @@ The context packet is guidance, not a repository permission fence. It contains:
 - the user's request;
 - structured authorization and scope metadata supplied by the host;
 - known repositories and materialized source paths;
-- concise relevant durable knowledge, contradictions, findings, and proof state;
-- selected skills;
-- storage locations; and
-- research-tool permissions and budget.
+- bounded session, workspace, and relevant or linked subject memory with stable ids, evidence references, relationships, and revisions; and
+- selected skills.
+
+Pi presents the tools themselves through their typed definitions. Honeycrisp enforces permissions and budgets in lifecycle hooks instead of restating that policy as prompt prose. The compiled-context event records concise summaries of the tools actually available for inspection by host interfaces.
 
 Repository paths help the model discover likely source. A repository need not be known before research begins, and the same user-global checkout may be referenced by multiple workspaces.
 
@@ -80,7 +80,7 @@ The default durable surfaces are:
 - `.honeycrisp/memory/memory.sqlite` for operational state and tiered knowledge; and
 - `.honeycrisp/memory/artifacts/` for files, raw outputs, logs, generated material, and reproducible scripts.
 
-Schema-v2 flow captures summarize the request, root result, child session tree, model calls, tool events, compiled context, memory integration, and storage manifest. Child metadata includes path, parent, lifecycle state, model, effort, inheritance mode, timestamps, result, errors, and usage.
+Schema-v3 flow captures summarize the request, root result, child session tree, model calls, tool events, compiled context, memory integration, and storage manifest. Child metadata includes path, parent, lifecycle state, model, effort, inheritance mode, timestamps, result, errors, and usage.
 
 ## Trust Boundary
 

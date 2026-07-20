@@ -696,7 +696,6 @@ export interface ResearchAgentModelInput {
   prompt: string;
   contextSections: readonly ResearchAgentContextSection[];
   toolBudget: ResearchToolBudget;
-  storageLayout: ResearchStorageLayout;
 }
 
 export interface ResearchAgentExecutionInput {

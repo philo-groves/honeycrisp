@@ -1,6 +1,6 @@
 # Memory Layer Implementation Plan
 
-> Historical note: the controller, goal-tree, subgoal, loop-boundary reflection, and goal-index sections below describe the retired pre-alpha architecture. Honeycrisp now retrieves memory against the user's request and places bounded results directly in front of Pi's native agent loop. The model owns decomposition and completion. Nullable correlation fields in the current SQLite memory tables are persistence metadata, not an active goal runtime.
+> Historical note: the controller, goal-tree, subgoal, loop-boundary reflection, derived-record retrieval, and goal-index sections below describe the retired pre-alpha architecture. The production CLI now selects bounded session, workspace, and subject nodes from `MemoryGraphStore` and places their ids, evidence references, and relationships directly in front of Pi's native agent loop. The model owns decomposition and completion. Context packet v2 remains a legacy library/capture surface, not the source of production graph-memory context. Nullable correlation fields in the current SQLite memory tables are persistence metadata, not an active goal runtime.
 
 This plan turns the architecture's memory model into an incremental implementation path. The guiding principle is:
 

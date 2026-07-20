@@ -10,14 +10,17 @@ import {
   type ResearchStorageArtifactManifestEntry,
 } from "./storage.js";
 import type {
+  ResearchAvailableToolContext,
+  ResearchModelMemoryContextNode,
+  ResearchModelSkillContext,
+  ResearchModelWorkspaceContext,
+} from "./model-context.js";
+import type {
   ResearchCollaborationToolDescriptor,
   ResearchEvent,
   ResearchMemoryRef,
   ResearchNextPromptSuggestion,
-  ResearchSelectedSkill,
   ResearchStorageLayout,
-  ResearchToolBudget,
-  ResearchToolPermission,
   ResearchTrace,
   ResearchWorkspaceContext,
 } from "./types.js";
@@ -72,7 +75,7 @@ interface ResearchMemoryCapture {
 }
 
 export interface ResearchAgentFlowCapture {
-  schemaVersion: 2;
+  schemaVersion: 3;
   capturedAt: string;
   request: { prompt: string };
   agent: {
@@ -87,11 +90,11 @@ export interface ResearchAgentFlowCapture {
     raw?: unknown;
   };
   context: {
-    workspaceContext: ResearchWorkspaceContext;
-    selectedSkills: readonly ResearchSelectedSkill[];
-    toolPermissions: readonly ResearchToolPermission[];
+    workspaceContext: ResearchModelWorkspaceContext;
+    memory: readonly ResearchModelMemoryContextNode[];
+    selectedSkills: readonly ResearchModelSkillContext[];
+    availableTools: readonly ResearchAvailableToolContext[];
     collaborationTools: readonly ResearchCollaborationToolDescriptor[];
-    toolBudget: ResearchToolBudget;
   };
   workspaceContext: ResearchWorkspaceContext;
   storage: ResearchStorageLayout;
@@ -131,7 +134,7 @@ export function createResearchAgentFlowCapture(
 ): ResearchAgentFlowCapture {
   const contextPacket = result.durableMemory?.latestContextPacketV2;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     capturedAt: options.capturedAt ?? nowIso(),
     request: { prompt: result.prompt },
     agent: {
@@ -152,11 +155,11 @@ export function createResearchAgentFlowCapture(
         : {}),
     },
     context: {
-      workspaceContext: result.workspaceContext,
-      selectedSkills: result.selectedSkills,
-      toolPermissions: result.toolPermissions,
+      workspaceContext: result.modelWorkspaceContext,
+      memory: result.memoryContext,
+      selectedSkills: result.modelSelectedSkills,
+      availableTools: result.availableTools,
       collaborationTools: result.collaborationTools,
-      toolBudget: result.agentRun.modelInput.toolBudget,
     },
     workspaceContext: result.workspaceContext,
     storage: result.storageLayout,

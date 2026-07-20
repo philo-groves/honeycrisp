@@ -60,6 +60,54 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   );
   const result = await runResearchAgent({
     prompt: "Inspect parse.c with the fixture tool.",
+    workspaceContext: {
+      schemaVersion: 1,
+      workspaceRoot: "/private/workspaces/fixture",
+      memoryTierContext: {
+        sessionId: "run_fixture",
+        workspaceId: "workspace_fixture",
+        workspaceName: "Fixture",
+        subjectId: "subject_fixture",
+        subjectName: "Fixture Owner",
+        peers: [{
+          databasePath: "/private/peer/memory.sqlite",
+          workspaceId: "workspace_peer",
+          workspaceName: "Peer Fixture",
+          subjectId: "subject_fixture",
+          subjectName: "Fixture Owner",
+        }],
+      },
+      knownRepositories: [],
+      materializedSourcePaths: [],
+      projectNotes: [],
+    },
+    memoryContext: [{
+      id: "mem_fixture_parser",
+      tier: "workspace",
+      scope: {
+        sessionId: "run_fixture",
+        workspace: { id: "workspace_fixture", name: "Fixture" },
+      },
+      type: "hypothesis",
+      title: "Parser boundary",
+      summary: "parse.c contains the current boundary candidate.",
+      status: "suspected",
+      confidence: 0.7,
+      assetIds: ["parse.c"],
+      tags: ["parser"],
+      evidence: [{
+        id: "evidence_fixture_parser",
+        kind: "code",
+        pathBase: "repository",
+        path: "parse.c",
+        locator: { line: 12 },
+        summary: "Candidate boundary.",
+        createdAt: "2026-07-20T12:00:00.000Z",
+      }],
+      relationships: [],
+      updatedAt: "2026-07-20T12:00:00.000Z",
+      revision: 1,
+    }],
     tools: [tool.descriptor],
     governance: {
       allowedActionClasses: ["inspect"],
@@ -91,6 +139,11 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   assert.ok(raw.agentEvents.some((event) => event.type === "tool_execution_update"));
   assert.deepEqual(contexts[0].toolNames, ["fixture_inspect", ...COLLABORATION_TOOL_NAMES]);
   assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
+  const initialMessage = contexts[0].messageContents.join("\n");
+  assert.match(initialMessage, /### memory/);
+  assert.match(initialMessage, /mem_fixture_parser/);
+  assert.match(initialMessage, /evidence_fixture_parser/);
+  assert.doesNotMatch(initialMessage, /### storage|### tool_policy|memory\.sqlite/);
 });
 
 test("Pi Agent keeps tools available without an explicit governance call limit", async () => {

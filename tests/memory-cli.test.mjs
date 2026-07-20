@@ -74,6 +74,47 @@ test("main CLI initializes the durable knowledge graph without treating run even
   }
 });
 
+test("main CLI injects relevant graph memory without storage or tool-policy prompt sections", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-top-cli-context-"));
+  const graph = new MemoryGraphStore({ workspaceRoot });
+  const memory = graph.save({
+    type: "hypothesis",
+    title: "ZFTP length boundary",
+    summary: "The ZFTP allocation path may accept a negative length.",
+    status: "suspected",
+    tags: ["zftp"],
+    evidence: [{
+      kind: "code",
+      pathBase: "repository",
+      path: "Src/Modules/zftp.c",
+      locator: { line: 734 },
+      summary: "Length reaches the allocation boundary.",
+    }],
+  });
+  graph.close();
+
+  const result = runTopCli([
+    "--mock",
+    "--json",
+    "--workspace-root",
+    workspaceRoot,
+    "-p",
+    "Continue bounded vulnerability research on the ZFTP length boundary.",
+  ]);
+  const payload = JSON.parse(result.stdout);
+  const sectionLabels = payload.agentRun.modelInput.contextSections.map((section) => section.label);
+  const memorySection = payload.agentRun.modelInput.contextSections.find((section) => section.label === "memory");
+  const contextEvent = payload.events.find((event) => event.kind === "context.compiled");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(sectionLabels, ["workspace", "memory", "selected_skills"]);
+  assert.equal(memorySection.content[0].id, memory.id);
+  assert.equal(memorySection.content[0].evidence[0].path, "Src/Modules/zftp.c");
+  assert.equal("storage" in contextEvent.payload, false);
+  assert.equal("toolPermissions" in contextEvent.payload, false);
+  assert.ok(contextEvent.payload.availableTools.some((tool) => tool.name === "memory.search"));
+});
+
 test("main CLI rejects retired run-mode flags with migration hints", () => {
   const realResult = runTopCli(["--real", "-p", "Goal: old flag"]);
 
@@ -551,6 +592,10 @@ test("main CLI capture includes runtime tool and skill configuration", async () 
   );
   assert.deepEqual(capture.runtimeConfig.skills.selectedIds, ["parser-cli"]);
   assert.equal(capture.runtimeConfig.governance.maxToolCalls, 2);
+  assert.equal(capture.schemaVersion, 3);
+  assert.ok(capture.context.availableTools.some((tool) => tool.name === "repository.search"));
+  assert.equal("toolPermissions" in capture.context, false);
+  assert.equal("workspaceRoot" in capture.context.workspaceContext, false);
   assert.equal("memory" in capture.runtimeConfig.workspaceContext, false);
   assert.equal(JSON.stringify(capture.runtimeConfig.workspaceContext).includes("episodes"), false);
   assert.equal(JSON.stringify(capture.runtimeConfig.workspaceContext).includes("prospective"), false);

@@ -22,7 +22,7 @@ pnpm build
 pnpm start -p "Investigate the parser behavior in this workspace"
 ```
 
-Honeycrisp passes the request, authorized workspace context, relevant durable memory, selected skills, storage locations, and available tools directly to Pi's native agent loop. The model owns investigation planning, tool use, and completion; Honeycrisp does not create a parallel goal tree, subgoal controller, or outer loop.
+Honeycrisp passes the request, authorized workspace and source context, bounded tiered graph memory, and selected skills to Pi's native agent loop. Pi supplies the actual research and collaboration tool definitions separately. Internal database, artifact, and peer-storage paths are runtime details rather than prompt guidance. The model owns investigation planning, tool use, and completion; Honeycrisp does not create a parallel goal tree, subgoal controller, or outer loop.
 
 The Pi agent can delegate bounded independent work through Codex-style collaboration tools: `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, `list_agents`, and `wait_agent`. Children share the current workspace, tool policy, storage, and memory tier context. A child may inherit all, none, or the last N user turns. Full-history children inherit the parent model and effort; partial or fresh children may choose another model from the active provider and a supported effort. The initial runtime permits six concurrent children at one level of depth.
 
@@ -81,7 +81,7 @@ pnpm start --mock \
   -p "Review the local source evidence"
 ```
 
-The schema-v2 capture records the request, agent result, model/tool metadata,
+The schema-v3 capture records the request, agent result, model/tool metadata,
 event timeline, bounded memory context, storage manifest, and workspace context.
 Private model thought traces are not persisted as durable memory.
 Subagent identity, lifecycle, model calls, result text, and errors are retained in `agent.raw.subagents` in the flow capture. Research tool events produced by children remain part of the same authorized session event stream.

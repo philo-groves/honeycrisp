@@ -285,8 +285,23 @@ export class MemoryGraphStore {
     params.push(...visibility.params);
     if (input.query?.trim()) {
       const query = `%${input.query.trim().toLowerCase()}%`;
-      clauses.push("(lower(n.title) LIKE ? OR lower(n.summary) LIKE ? OR lower(n.body) LIKE ? OR lower(n.attributes_json) LIKE ?)");
-      params.push(query, query, query, query);
+      clauses.push(`(
+        lower(n.title) LIKE ? OR
+        lower(n.summary) LIKE ? OR
+        lower(n.body) LIKE ? OR
+        lower(n.attributes_json) LIKE ? OR
+        EXISTS (SELECT 1 FROM memory_node_assets a_query WHERE a_query.node_id = n.id AND lower(a_query.asset_id) LIKE ?) OR
+        EXISTS (SELECT 1 FROM memory_node_tags t_query WHERE t_query.node_id = n.id AND lower(t_query.tag) LIKE ?) OR
+        EXISTS (
+          SELECT 1 FROM memory_evidence_refs e_query
+          WHERE e_query.node_id = n.id AND (
+            lower(e_query.path) LIKE ? OR
+            lower(e_query.locator_json) LIKE ? OR
+            lower(e_query.summary) LIKE ?
+          )
+        )
+      )`);
+      params.push(query, query, query, query, query, query, query, query, query);
     }
     if (input.types?.length) {
       clauses.push(`n.type IN (${input.types.map(() => "?").join(",")})`);

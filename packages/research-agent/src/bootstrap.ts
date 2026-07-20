@@ -13,7 +13,7 @@ import {
   type MemoryRetrievalResult,
   type MemoryRetriever,
 } from "./memory-retriever.js";
-import { createToolBudget, createToolPermissions } from "./context-packet.js";
+import { createToolBudget } from "./context-packet.js";
 import { selectResearchSkills } from "./skills.js";
 import {
   createMemorySnapshotFromRecordStore,
@@ -31,6 +31,15 @@ import {
   type MemoryWritePipeline,
 } from "./memory-write-pipeline.js";
 import { createResearchTraceEvents } from "./research-trace.js";
+import {
+  createAvailableToolContext,
+  createModelSkillContext,
+  createModelWorkspaceContext,
+  type ResearchAvailableToolContext,
+  type ResearchModelMemoryContextNode,
+  type ResearchModelSkillContext,
+  type ResearchModelWorkspaceContext,
+} from "./model-context.js";
 import { createId, createResearchEventId, nowIso } from "./ids.js";
 import type {
   ResearchAgentExecutor,
@@ -52,6 +61,7 @@ export interface RunResearchAgentInput {
   workspaceRoot?: string;
   storageLayout?: ResearchStorageLayout;
   workspaceContext?: ResearchWorkspaceContext;
+  memoryContext?: readonly ResearchModelMemoryContextNode[];
   durableMemory?: boolean | ResearchDurableMemoryIntegrationOptions;
   events?: readonly ResearchEvent[];
   memory?: Partial<ResearchMemorySnapshot>;
@@ -71,8 +81,11 @@ export interface RunResearchAgentResult {
   memory: ResearchMemorySnapshot;
   storageLayout: ResearchStorageLayout;
   workspaceContext: ResearchWorkspaceContext;
+  modelWorkspaceContext: ResearchModelWorkspaceContext;
+  memoryContext: readonly ResearchModelMemoryContextNode[];
+  modelSelectedSkills: readonly ResearchModelSkillContext[];
+  availableTools: readonly ResearchAvailableToolContext[];
   selectedSkills: readonly ResearchSelectedSkill[];
-  toolPermissions: ReturnType<typeof createToolPermissions>;
   collaborationTools: readonly ResearchCollaborationToolDescriptor[];
   durableMemory?: ResearchDurableMemoryRunSummary;
   piBase: {
@@ -194,38 +207,22 @@ export async function runResearchAgent(
     });
     stats.latestContextPacketV2 = contextPacketV2;
     const toolBudget = createToolBudget(input.governance, tools);
-    const toolPermissions = createToolPermissions(tools, input.governance);
     const collaborationTools = input.executor.collaborationTools ?? [];
+    const modelWorkspaceContext = createModelWorkspaceContext(workspaceContext);
+    const memoryContext = input.memoryContext ?? [];
+    const availableTools = createAvailableToolContext(tools);
+    const modelSelectedSkills = createModelSkillContext(selectedSkills);
     const modelInput = {
       prompt: input.prompt,
       contextSections: [
-        { label: "workspace", content: workspaceContext },
-        {
-          label: "relevant_memory",
-          content: contextPacketV2.sections.flatMap((section) =>
-            section.items.map((item) => ({
-              kind: item.recordKind,
-              status: item.status,
-              summary: item.summary,
-              confidence: item.confidence,
-              warnings: item.warnings,
-            })),
-          ),
-        },
+        { label: "workspace", content: modelWorkspaceContext },
+        { label: "memory", content: memoryContext },
         {
           label: "selected_skills",
-          content: selectedSkills.map((skill) => ({
-            id: skill.id,
-            description: skill.description,
-            instructions: skill.instructions,
-            runbook: skill.runbook,
-          })),
+          content: modelSelectedSkills,
         },
-        { label: "storage", content: storageLayout },
-        { label: "tool_policy", content: toolPermissions },
       ],
       toolBudget,
-      storageLayout,
     };
     const contextEvent: ResearchEvent = {
       id: createResearchEventId(),
@@ -233,14 +230,11 @@ export async function runResearchAgent(
       timestamp: nowIso(),
       payload: {
         request: { prompt: input.prompt },
-        workspaceContext,
-        selectedSkills,
-        toolPermissions,
+        workspaceContext: modelWorkspaceContext,
+        memoryContext,
+        selectedSkills: modelSelectedSkills,
+        availableTools,
         collaborationTools,
-        storage: storageLayout,
-        relevantMemory: contextPacketV2.sections.flatMap((section) =>
-          section.items.map((item) => item.recordId),
-        ),
         summary: "Compiled model context for the research session.",
       },
     };
@@ -322,8 +316,11 @@ export async function runResearchAgent(
       memory,
       storageLayout,
       workspaceContext,
+      modelWorkspaceContext,
+      memoryContext,
+      availableTools,
+      modelSelectedSkills,
       selectedSkills,
-      toolPermissions,
       collaborationTools,
       ...(durableMemory
         ? { durableMemory: durableMemorySummary(durableMemory, stats) }

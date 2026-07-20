@@ -20,6 +20,20 @@ export type {
 } from "./memory-graph.js";
 export { createMemoryGraphTools } from "./memory-graph-tools.js";
 export {
+  compileMemoryModelContext,
+  createAvailableToolContext,
+  createModelSkillContext,
+  createModelWorkspaceContext,
+  selectMemoryModelContext,
+} from "./model-context.js";
+export type {
+  ResearchAvailableToolContext,
+  ResearchModelMemoryContextNode,
+  ResearchModelMemoryRelationship,
+  ResearchModelSkillContext,
+  ResearchModelWorkspaceContext,
+} from "./model-context.js";
+export {
   createAuthenticatedModels,
   createCredentialStore,
   FileCredentialStore,
