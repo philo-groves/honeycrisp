@@ -1,4 +1,19 @@
 export {
+  MemoryGraphStore,
+  MEMORY_NODE_STATUSES,
+  MEMORY_NODE_TYPES,
+} from "./memory-graph.js";
+export type {
+  MemoryEdge,
+  MemoryEvidenceRef,
+  MemoryNode,
+  MemoryNodeStatus,
+  MemoryNodeType,
+  SaveMemoryNodeInput,
+  SearchMemoryNodesInput,
+} from "./memory-graph.js";
+export { createMemoryGraphTools } from "./memory-graph-tools.js";
+export {
   createAuthenticatedModels,
   createCredentialStore,
   FileCredentialStore,

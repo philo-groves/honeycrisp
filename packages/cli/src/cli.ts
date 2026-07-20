@@ -15,6 +15,7 @@ import {
   createLocalInspectionTool,
   createDeterministicLoopExecutor,
   createMemoryDrivenController,
+  createMemoryGraphTools,
   createMemoryInspector,
   createMemorySteeringController,
   createPiAgentLoopExecutor,
@@ -27,6 +28,7 @@ import {
   createResearchToolRegistry,
   createResearchWorkspaceContext,
   createMcpResearchTools,
+  MemoryGraphStore,
   createStorageListTool,
   createStructuredFileReadTool,
   getDefaultResearchModelConfigPath,
@@ -76,6 +78,8 @@ import type {
   ResearchLoopExecutor,
   ResearchMemorySnapshot,
   ResearchModelConfigPreference,
+  MemoryNodeStatus,
+  MemoryNodeType,
   ResearchProofMethodDescriptor,
   ResearchToolConfigPreference,
   ResolvedResearchModelConfig,
@@ -198,6 +202,11 @@ interface ParsedMemoryArgs {
   questions: string[];
   limit: number | undefined;
   summary: string | undefined;
+  body: string | undefined;
+  types: MemoryNodeType[];
+  tags: string[];
+  assetIds: string[];
+  expectedRevision: number | undefined;
   status: string | undefined;
   findingStatus: string | undefined;
   supersededByRecordId: string | undefined;
@@ -510,6 +519,8 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
   let goal: string | undefined;
   let limit: number | undefined;
   let summary: string | undefined;
+  let body: string | undefined;
+  let expectedRevision: number | undefined;
   let status: string | undefined;
   let findingStatus: string | undefined;
   let supersededByRecordId: string | undefined;
@@ -533,6 +544,9 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
   let json = false;
   let help = false;
   const questions: string[] = [];
+  const types: MemoryNodeType[] = [];
+  const tags: string[] = [];
+  const assetIds: string[] = [];
   const positionals: string[] = [];
 
   for (let index = command ? 1 : 0; index < argv.length; index += 1) {
@@ -558,6 +572,22 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
       index += 1;
     } else if (arg === "--summary" || arg === "--note") {
       summary = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--body") {
+      body = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--type") {
+      types.push(readOptionValue(argv, index, arg) as MemoryNodeType);
+      index += 1;
+    } else if (arg === "--tag") {
+      tags.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--asset") {
+      assetIds.push(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--expected-revision") {
+      expectedRevision = Number.parseInt(readOptionValue(argv, index, arg), 10);
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error("--expected-revision requires a positive integer.");
       index += 1;
     } else if (arg === "--status") {
       status = readOptionValue(argv, index, arg);
@@ -642,6 +672,11 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
     questions,
     limit,
     summary,
+    body,
+    types,
+    tags,
+    assetIds,
+    expectedRevision,
     status,
     findingStatus,
     supersededByRecordId,
@@ -1110,30 +1145,25 @@ function usage(): string {
     "  -v, --version          Show version",
     "",
     "Memory commands:",
-    "  memory timeline                  Show accepted event timeline",
-    "  memory event <event-id>           Show one accepted raw event",
-    "  memory records-for-event <id>     Show derived records for an event",
-    "  memory recall --goal <text>       Run a recall query",
-    "  memory preconscious --goal <text> Show preconscious candidates",
-    "  memory context --goal <text>      Show compiled context selections",
-    "  memory decision --goal <text>     Explain selected action",
-    "  memory hypotheses                 Show hypotheses and semantic claims",
-    "  memory findings                   Show finding records",
-    "  memory finding <record-id>        Show one finding with evidence/proof links",
-    "  memory proof-state                Show proof obligations and attempts",
-    "  memory proof-obligations          Show proof obligations",
-    "  memory proof-obligation <id>      Show one proof obligation",
-    "  memory proof-attempts             Show proof attempts",
-    "  memory proof-attempt <id>         Show one proof attempt",
-    "  memory claim-graph                Show claim graph edges",
-    "  memory prospective-checks         Show prospective checks",
-    "  memory debug-capture              Show read-only memory debug capture",
+    "  memory state                     Summarize durable knowledge",
+    "  memory list                      List durable knowledge nodes",
+    "  memory search <query>            Search durable knowledge nodes",
+    "  memory get <node-id>             Show one node and its evidence",
+    "  memory save <type> <title>       Add or refine a node",
+    "  memory correct <node-id>         Correct a node by revision",
+    "  memory link <from> <to> <rel>    Link two nodes",
     "",
     "Memory options:",
     "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
-    "  --goal, --prompt <text>  Goal text for recall, context, or decision",
-    "  --question <text>       Add an open question to recall",
-    "  --limit <n>             Limit recall candidates",
+    "  --type <type>           Filter node type (repeatable)",
+    "  --status <status>       Filter or set node status",
+    "  --tag <tag>             Filter or add a tag (repeatable)",
+    "  --asset <asset-id>      Filter or add an asset link (repeatable)",
+    "  --summary <text>        Set a concise summary or relationship note",
+    "  --body <text>           Set supporting detail",
+    "  --confidence <0..1>     Set confidence",
+    "  --expected-revision <n> Required for exact correction",
+    "  --limit <n>             Limit returned nodes",
     "  --json                  Print JSON",
     "",
     "Tool debug commands:",
@@ -1245,7 +1275,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
         loopExecutor,
         ...(liveEventSink ? { eventSink: liveEventSink } : {}),
-        durableMemory: true,
         ...(args.goalLoops !== undefined
           ? { goalRun: { maxLoops: args.goalLoops } }
           : {}),
@@ -1336,248 +1365,95 @@ function createCliLiveEventSink(): ResearchLiveEventSink {
 
 async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
   const args = parseMemoryArgs(argv);
-
   if (!args.command || args.help) {
     console.log(memoryUsage());
     return;
   }
-
-  const eventLog = createSqliteMemoryEventLog({
-    workspaceRoot: args.workspaceRoot,
-  });
-  const recordStore = createSqliteMemoryRecordStore({
-    workspaceRoot: args.workspaceRoot,
-  });
-  const proofStore = createSqliteProofStore({
-    workspaceRoot: args.workspaceRoot,
-  });
-  const inspector = createMemoryInspector({ eventLog, recordStore, proofStore });
-  const steering = createMemorySteeringController({
-    eventLog,
-    recordStore,
-    proofStore,
-  });
-
+  const store = new MemoryGraphStore({ workspaceRoot: args.workspaceRoot });
   try {
-    if (args.command === "import-events") {
-      const result = await importMemoryEvents(args, {
-        eventLog,
-        recordStore,
-        proofStore,
-        inspector,
+    if (args.command === "list" || args.command === "search") {
+      const query = args.command === "search" ? args.positionals.join(" ") : "";
+      const nodes = store.search({
+        ...(query ? { query } : {}),
+        ...(args.types.length ? { types: args.types } : {}),
+        ...(args.status ? { statuses: [args.status as MemoryNodeStatus] } : {}),
+        ...(args.assetIds.length ? { assetIds: args.assetIds } : {}),
+        ...(args.tags.length ? { tags: args.tags } : {}),
+        ...(args.limit ? { limit: args.limit } : {}),
       });
-      printMemoryOutput(args, result, renderMemoryImportResult);
+      printMemoryOutput(args, nodes, (value) => value.length ? value.map((node) => `${node.id}\t${node.type}\t${node.status}\t${node.title}`).join("\n") : "No durable knowledge nodes found.");
       return;
     }
-
-    if (isMemorySteeringCommand(args.command)) {
-      const result = handleMemorySteeringCommand(args, steering);
-      printMemoryOutput(
-        args,
-        {
-          ...result,
-          agentState: inspector.showAgentState({
-            storage: createMemoryCommandStorageReadModel(args),
-          }),
-        },
-        renderMemorySteeringResult,
-      );
+    if (args.command === "get") {
+      const id = requireMemoryPositional(args, "get <node-id>");
+      const node = store.get(id);
+      printMemoryOutput(args, node, (value) => value ? JSON.stringify(value, null, 2) : `No durable knowledge node found: ${id}`);
       return;
     }
-
-    if (args.command === "timeline") {
-      printMemoryOutput(args, inspector.eventTimeline(), renderTimeline);
+    if (args.command === "save") {
+      const type = requireMemoryPositional(args, "save <type> <title>") as MemoryNodeType;
+      const title = args.positionals[1];
+      if (!title) throw new Error("save requires a quoted title after the node type.");
+      const node = store.save({
+        type,
+        title,
+        ...(args.summary !== undefined ? { summary: args.summary } : {}),
+        ...(args.body !== undefined ? { body: args.body } : {}),
+        ...(args.status ? { status: args.status as MemoryNodeStatus } : {}),
+        ...(args.confidence !== undefined ? { confidence: args.confidence } : {}),
+        ...(args.assetIds.length ? { assetIds: args.assetIds } : {}),
+        ...(args.tags.length ? { tags: args.tags } : {}),
+      });
+      printMemoryOutput(args, node, (value) => `${value.id}\t${value.type}\t${value.status}\t${value.title}`);
       return;
     }
-
-    if (args.command === "agent-state") {
-      printMemoryOutput(
-        args,
-        inspector.showAgentState({ storage: createMemoryCommandStorageReadModel(args) }),
-        renderAgentState,
-      );
+    if (args.command === "correct") {
+      const id = requireMemoryPositional(args, "correct <node-id> --expected-revision <n>");
+      if (args.expectedRevision === undefined) throw new Error("correct requires --expected-revision.");
+      const node = store.correct(id, args.expectedRevision, {
+        ...(args.summary !== undefined ? { summary: args.summary } : {}),
+        ...(args.body !== undefined ? { body: args.body } : {}),
+        ...(args.status ? { status: args.status as MemoryNodeStatus } : {}),
+        ...(args.confidence !== undefined ? { confidence: args.confidence } : {}),
+        ...(args.assetIds.length ? { assetIds: args.assetIds } : {}),
+        ...(args.tags.length ? { tags: args.tags } : {}),
+      });
+      printMemoryOutput(args, node, (value) => `${value.id}\trevision ${value.revision}\t${value.status}\t${value.title}`);
       return;
     }
-
-    if (args.command === "event") {
-      const eventId = requireMemoryPositional(args, "event <event-id>");
-      printMemoryOutput(
-        args,
-        inspector.showEventById(eventId) ?? null,
-        (event) => (event ? JSON.stringify(event, null, 2) : `No event found: ${eventId}`),
-      );
+    if (args.command === "link") {
+      const [fromId, toId, relation] = args.positionals;
+      if (!fromId || !toId || !relation) throw new Error("link requires <from-id> <to-id> <relation>.");
+      const edge = store.link(fromId, toId, relation, args.summary ?? "");
+      printMemoryOutput(args, edge, (value) => `${value.fromId}\t${value.relation}\t${value.toId}`);
       return;
     }
-
-    if (args.command === "records-for-event") {
-      const eventId = requireMemoryPositional(
-        args,
-        "records-for-event <event-id>",
-      );
-      printMemoryOutput(
-        args,
-        inspector.showDerivedRecordsForEvent(eventId),
-        renderRecords,
-      );
+    if (args.command === "state") {
+      const nodes = store.search({ limit: 100 });
+      const edges = store.listEdges();
+      const state = {
+        databasePath: store.databasePath,
+        nodeCount: nodes.length,
+        edgeCount: edges.length,
+        typeCounts: countStrings(nodes.map((node) => node.type)),
+        statusCounts: countStrings(nodes.map((node) => node.status)),
+        nodes,
+        edges,
+      };
+      printMemoryOutput(args, state, (value) => [`Database: ${value.databasePath}`, `Nodes: ${value.nodeCount}`, `Relationships: ${value.edgeCount}`].join("\n"));
       return;
     }
-
-    if (args.command === "recall") {
-      const { retrieval } = createRecallInspection(args, inspector);
-      printMemoryOutput(
-        args,
-        retrieval,
-        (value) => renderRecords(value.candidates.map((candidate) => candidate.record)),
-      );
-      return;
-    }
-
-    if (args.command === "preconscious") {
-      const { retrieval } = createRecallInspection(args, inspector);
-      printMemoryOutput(
-        args,
-        inspector.showPreconsciousPacket(retrieval),
-        renderPreconsciousPacket,
-      );
-      return;
-    }
-
-    if (args.command === "context") {
-      const { contextPacket } = createDecisionInspection(args, inspector);
-      printMemoryOutput(
-        args,
-        inspector.showCompiledContextPacket(contextPacket),
-        renderContextSelections,
-      );
-      return;
-    }
-
-    if (args.command === "decision") {
-      const { decision } = createDecisionInspection(args, inspector);
-      printMemoryOutput(
-        args,
-        inspector.explainSelectedAction(decision),
-        renderDecisionExplanation,
-      );
-      return;
-    }
-
-    if (args.command === "hypotheses") {
-      printMemoryOutput(args, inspector.showHypotheses(), renderRecords);
-      return;
-    }
-
-    if (args.command === "findings") {
-      printMemoryOutput(args, inspector.showFindings(), renderRecords);
-      return;
-    }
-
-    if (args.command === "finding") {
-      const recordId = requireMemoryPositional(args, "finding <record-id>");
-      printMemoryOutput(
-        args,
-        inspector.showFindingById(recordId) ?? null,
-        renderFindingDetails,
-      );
-      return;
-    }
-
-    if (args.command === "claim-graph") {
-      printMemoryOutput(args, inspector.showClaimGraph(), renderClaimGraph);
-      return;
-    }
-
-    if (args.command === "prospective-checks") {
-      printMemoryOutput(args, inspector.showProspectiveChecks(), renderRecords);
-      return;
-    }
-
-    if (args.command === "proof-state") {
-      printMemoryOutput(args, inspector.showProofState(), renderProofState);
-      return;
-    }
-
-    if (args.command === "proof-obligations") {
-      printMemoryOutput(
-        args,
-        inspector.showProofObligations(),
-        renderProofObligations,
-      );
-      return;
-    }
-
-    if (args.command === "proof-obligation") {
-      const obligationId = requireMemoryPositional(
-        args,
-        "proof-obligation <obligation-id>",
-      );
-      printMemoryOutput(
-        args,
-        inspector.showProofObligationById(obligationId) ?? null,
-        renderProofObligation,
-      );
-      return;
-    }
-
-    if (args.command === "proof-attempts") {
-      printMemoryOutput(
-        args,
-        inspector.showProofAttempts(),
-        renderProofAttempts,
-      );
-      return;
-    }
-
-    if (args.command === "proof-attempt") {
-      const attemptId = requireMemoryPositional(args, "proof-attempt <attempt-id>");
-      printMemoryOutput(
-        args,
-        inspector.showProofAttemptById(attemptId) ?? null,
-        renderProofAttempt,
-      );
-      return;
-    }
-
-    if (args.command === "debug-capture") {
-      const captureInput = args.goal
-        ? createDecisionInspection(args, inspector)
-        : undefined;
-      printMemoryOutput(
-        args,
-        inspector.captureDebug(
-          captureInput
-            ? {
-                retrieval: captureInput.retrieval,
-                contextPacketV2: captureInput.contextPacket,
-                decision: captureInput.decision,
-              }
-            : {},
-        ),
-        (capture) => [
-          `Accepted events: ${capture.acceptedEvents.length}`,
-          `Rejected events: ${capture.rejectedEvents.length}`,
-          `Candidate writes: ${capture.candidateWrites.length}`,
-          `Committed writes: ${capture.committedWrites.length}`,
-          capture.retrievalResults
-            ? `Retrieval candidates: ${capture.retrievalResults.candidateCount}`
-            : "Retrieval candidates: not captured",
-          capture.contextSelections
-            ? `Context sections: ${capture.contextSelections.sections.length}`
-            : "Context sections: not captured",
-          capture.controllerDecision
-            ? `Decision: ${capture.controllerDecision.actionClass}`
-            : "Decision: not captured",
-        ].join("\n"),
-      );
-      return;
-    }
-
     throw new Error(`Unknown memory command: ${args.command}`);
   } finally {
-    eventLog.close();
-    recordStore.close();
-    proofStore.close();
+    store.close();
   }
+}
+
+function countStrings(values: readonly string[]): Record<string, number> {
+  return values.reduce<Record<string, number>>((counts, value) => {
+    counts[value] = (counts[value] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 async function handleToolsCommand(argv: readonly string[]): Promise<void> {
@@ -2247,41 +2123,25 @@ function memoryUsage(): string {
     "Usage: honeycrisp memory <command> [options]",
     "",
     "Commands:",
-    "  timeline                  Show accepted event timeline",
-    "  agent-state               Show Beale-facing memory/proof/storage state",
-    "  event <event-id>           Show one accepted raw event",
-    "  records-for-event <id>     Show derived records for an event",
-    "  recall --goal <text>       Run a recall query",
-    "  preconscious --goal <text> Show preconscious candidates",
-    "  context --goal <text>      Show compiled context selections",
-    "  decision --goal <text>     Explain selected action",
-    "  hypotheses                 Show hypotheses and semantic claims",
-    "  findings                   Show finding records",
-    "  finding <record-id>        Show one finding with evidence/proof links",
-    "  proof-state                Show proof obligations and attempts",
-    "  proof-obligations          Show proof obligations",
-    "  proof-obligation <id>      Show one proof obligation",
-    "  proof-attempts             Show proof attempts",
-    "  proof-attempt <id>         Show one proof attempt",
-    "  import-events <file>       Import validated JSON/JSONL Honeycrisp memory events",
-    "  promote-hypothesis <id>    Promote a hypothesis record to a finding",
-    "  review-record <id>         Review a hypothesis/finding/record status",
-    "  reject-record <id>         Reject a hypothesis/finding/record",
-    "  supersede-record <id>      Supersede a record with --superseded-by",
-    "  tombstone-record <id>      Tombstone a record",
-    "  request-proof <kind> <id>  Request a proof obligation for a subject",
-    "  attach-proof-attempt <id>  Attach a proof attempt to an obligation",
-    "  review-proof-attempt <id>  Review a proof attempt outcome",
-    "  mark-artifact <id>         Mark an artifact important/sensitive/tombstoned",
-    "  claim-graph                Show claim graph edges",
-    "  prospective-checks         Show prospective checks",
-    "  debug-capture              Show read-only memory debug capture",
+    "  state                     Summarize durable knowledge",
+    "  list                      List durable knowledge nodes",
+    "  search <query>            Search durable knowledge nodes",
+    "  get <node-id>             Show one node and its evidence",
+    "  save <type> <title>       Add or refine a node",
+    "  correct <node-id>         Correct a node by revision",
+    "  link <from> <to> <rel>    Link two nodes",
     "",
     "Options:",
     "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
-    "  --goal, --prompt <text>  Goal text for recall, context, or decision",
-    "  --question <text>       Add an open question to recall",
-    "  --limit <n>             Limit recall candidates",
+    "  --type <type>           Filter node type (repeatable)",
+    "  --status <status>       Filter or set node status",
+    "  --tag <tag>             Filter or add a tag (repeatable)",
+    "  --asset <asset-id>      Filter or add an asset link (repeatable)",
+    "  --summary <text>        Set a concise summary or relationship note",
+    "  --body <text>           Set supporting detail",
+    "  --confidence <0..1>     Set confidence",
+    "  --expected-revision <n> Required for exact correction",
+    "  --limit <n>             Limit returned nodes",
     "  --json                  Print JSON",
     "  -h, --help              Show help",
   ].join("\n");
@@ -3092,6 +2952,11 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   });
+  const memoryGraph = new MemoryGraphStore({ workspaceRoot });
+  const memoryTools = createMemoryGraphTools(memoryGraph);
+  executableTools.push(...memoryTools);
+  toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));
+  cleanupCallbacks.push(async () => memoryGraph.close());
   const mcpCapture = await configureRuntimeMcpTools({
     runtimeTools,
     executableTools,

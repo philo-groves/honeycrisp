@@ -33,7 +33,7 @@ pnpm start -p "Investigate parser behavior" \
   --json
 ```
 
-On a real run, Honeycrisp opens durable SQLite memory under the workspace root, asks the memory controller for the next bounded sub-goal, retrieves relevant records, compiles context packet v2, exposes configured tools and storage guidance, and processes the loop with a Pi-backed executor. Accepted runtime events are appended to `.honeycrisp/memory/memory.sqlite`, derived records are consolidated after each loop, and captures include memory integration, storage manifest, tool, skill, MCP, and model-config metadata.
+On a real run, Honeycrisp opens the workspace database at `.honeycrisp/memory/memory.sqlite`, exposes configured research tools plus a small durable knowledge graph, and processes the loop with a Pi-backed executor. Run state, transcripts, and tool traces are operational data; they are not automatically promoted into durable knowledge. The model explicitly searches and updates concise reusable nodes when the research warrants it.
 
 Run with stored auth. If no config is provided, Honeycrisp first checks `.honeycrisp/config.json` under `--workspace-root`, then falls back to the first authorized provider/model from the CLI auth store. A config file is only a model preference file; credentials still come from `honeycrisp auth login`.
 
@@ -92,13 +92,9 @@ packet view, loop result, and visible research trace. It preserves reasoning
 consequences such as observations, inferences, hypotheses, assumptions, and
 uncertainty, not private model thought traces.
 
-Storage lives beside durable memory under `.honeycrisp/memory/`. The runtime creates `events/`, `episodes/`, `claims/`, `procedures/`, `hypotheses/`, `prospective/`, `artifacts/`, and `scratch/`; large raw outputs and generated artifacts are recorded in `.honeycrisp/memory/artifacts/manifest.json` with hashes and event provenance. Memory should store recallable facts and pointers to files; storage should hold full files, blobs, binaries, logs, and generated artifacts.
+Durable knowledge uses typed nodes (`asset`, `bug`, `invariant`, `mitigation`, `source`, `sink`, `hypothesis`, `finding`, `primitive`, `chain`, `procedure`, and `trajectory`), directed relationships, tags, asset links, and lightweight evidence references. Saves are additive; exact corrections require the current node revision. Transcripts, task narration, goals, and bulk tool output do not belong in the graph.
 
-External interfaces such as Beale should treat Honeycrisp as the source of truth for general agent state: goals, subgoals, memory records, findings, proof state, storage refs, context usage, and tool traces. Interface-specific program setup, visualization, disclosure/export/report flows, and domain overlays can stay outside Honeycrisp. Legacy interface records can be migrated by exporting Honeycrisp event JSON/JSONL and importing it with:
-
-```sh
-pnpm start memory import-events legacy-events.jsonl --workspace-root /path/to/workspace --json
-```
+Large raw outputs and generated artifacts remain files under `.honeycrisp/memory/artifacts/`; graph evidence stores relative pointers and locators rather than copying file contents into SQLite. Host interfaces such as Beale use the same SQLite file for compatible headless and desktop operation. Honeycrisp owns this database contract; interface-specific visualization and disclosure/export flows can add operational tables without creating a second workspace database.
 
 An end-to-end real health check should use the same integrated path users rely on:
 
