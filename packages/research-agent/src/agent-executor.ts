@@ -79,6 +79,7 @@ export function createPiAgentExecutor(
       const capturedToolCalls = new Set<string>();
       const reservations = new Map<string, number>();
       let toolCallCount = 0;
+      let currentTurn = 0;
       const reserveToolCall = (toolCallId: string): number => {
         const reserved = reservations.get(toolCallId);
         if (reserved !== undefined) return reserved;
@@ -145,6 +146,7 @@ export function createPiAgentExecutor(
               : undefined;
           },
           prepareNextTurn: ({ context }) =>
+            typeof input.modelInput.toolBudget.maxToolCalls === "number" &&
             toolCallCount >= input.modelInput.toolBudget.maxToolCalls &&
             context.tools?.length
               ? { context: { ...context, tools: [] } }
@@ -153,8 +155,9 @@ export function createPiAgentExecutor(
           getFollowUpMessages: async () => [],
         },
         async (event) => {
-          agentEvents.push(captureAgentEvent(event));
-          await emitAgentEvent(input.eventSink, event);
+          if (event.type === "turn_start") currentTurn += 1;
+          agentEvents.push(captureAgentEvent(event, currentTurn));
+          await emitAgentEvent(input.eventSink, event, currentTurn);
         },
         input.signal,
         models.streamSimple.bind(models),
@@ -347,7 +350,10 @@ function modelCallMetadata(
   };
 }
 
-function captureAgentEvent(event: AgentEvent): Record<string, unknown> {
+function captureAgentEvent(
+  event: AgentEvent,
+  turn: number,
+): Record<string, unknown> {
   if (event.type === "agent_start" || event.type === "agent_end") {
     return {
       type: event.type,
@@ -356,10 +362,11 @@ function captureAgentEvent(event: AgentEvent): Record<string, unknown> {
         : {}),
     };
   }
-  if (event.type === "turn_start") return { type: event.type };
+  if (event.type === "turn_start") return { type: event.type, turn };
   if (event.type === "turn_end") {
     return {
       type: event.type,
+      turn,
       messageRole: event.message.role,
       toolResultCount: event.toolResults.length,
     };
@@ -371,6 +378,7 @@ function captureAgentEvent(event: AgentEvent): Record<string, unknown> {
   ) {
     return {
       type: event.type,
+      turn,
       messageRole: event.message.role,
       ...(event.type === "message_update"
         ? { updateType: event.assistantMessageEvent.type }
@@ -384,6 +392,7 @@ function captureAgentEvent(event: AgentEvent): Record<string, unknown> {
   ) {
     return {
       type: event.type,
+      turn,
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       ...(event.type === "tool_execution_end" ? { isError: event.isError } : {}),
@@ -410,14 +419,16 @@ function emitResearchEvents(
 async function emitAgentEvent(
   sink: ResearchLiveEventSink | undefined,
   event: AgentEvent,
+  turn: number,
 ): Promise<void> {
   if (!sink) return;
-  const liveEvent = agentLiveEvent(event);
+  const liveEvent = agentLiveEvent(event, turn);
   if (liveEvent) await emitLiveEvent(sink, liveEvent);
 }
 
 function agentLiveEvent(
   event: AgentEvent,
+  turn: number,
 ): Parameters<ResearchLiveEventSink>[0] | undefined {
   if (event.type === "message_update") {
     const update = event.assistantMessageEvent;
@@ -432,6 +443,7 @@ function agentLiveEvent(
         kind: "model.thought",
         timestamp: nowIso(),
         payload: {
+          turn,
           eventType: update.type,
           phase:
             update.type === "thinking_start"
@@ -467,6 +479,7 @@ function agentLiveEvent(
         kind: "model.output",
         timestamp: nowIso(),
         payload: {
+          turn,
           eventType: update.type,
           phase:
             update.type === "text_start"
@@ -491,45 +504,19 @@ function agentLiveEvent(
       };
     }
   }
-  if (
-    event.type === "tool_execution_start" ||
-    event.type === "tool_execution_update" ||
-    event.type === "tool_execution_end"
-  ) {
-    return {
-      schemaVersion: 1,
-      kind: "tool.progress",
-      timestamp: nowIso(),
-      payload: {
-        eventType: event.type,
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        ...(event.type === "tool_execution_start" ||
-        event.type === "tool_execution_update"
-          ? { args: event.args }
-          : {}),
-        ...(event.type === "tool_execution_update"
-          ? { partialResult: event.partialResult }
-          : {}),
-        ...(event.type === "tool_execution_end"
-          ? { result: event.result, isError: event.isError }
-          : {}),
-      },
-    };
-  }
-  if (
-    event.type === "agent_start" ||
-    event.type === "agent_end" ||
-    event.type === "turn_start" ||
-    event.type === "turn_end" ||
-    event.type === "message_start" ||
-    event.type === "message_end"
-  ) {
+  if (event.type === "message_end" && isAssistantMessage(event.message)) {
     return {
       schemaVersion: 1,
       kind: "agent.event",
       timestamp: nowIso(),
-      payload: captureAgentEvent(event),
+      payload: {
+        type: "turn_completed",
+        turn,
+        responseId: event.message.responseId,
+        stopReason: event.message.stopReason,
+        usage: event.message.usage,
+        contentTypes: event.message.content.map((item) => item.type),
+      },
     };
   }
   return undefined;

@@ -3,6 +3,8 @@ export {
   MEMORY_TIERS,
   MEMORY_NODE_STATUSES,
   MEMORY_NODE_TYPES,
+  MEMORY_EVIDENCE_KINDS,
+  MEMORY_EVIDENCE_PATH_BASES,
 } from "./memory-graph.js";
 export type {
   MemoryEdge,

@@ -59,7 +59,13 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
   const store = new MemoryGraphStore({ workspaceRoot });
   const registry = createResearchToolRegistry(createMemoryGraphTools(store));
   try {
-    assert.deepEqual(registry.listDescriptors().map((tool) => tool.name), ["memory.search", "memory.get", "memory.save", "memory.correct", "memory.link"]);
+    const descriptors = registry.listDescriptors();
+    assert.deepEqual(descriptors.map((tool) => tool.name), ["memory.search", "memory.get", "memory.save", "memory.correct", "memory.link"]);
+    const saveSchema = descriptors.find((tool) => tool.name === "memory.save").inputSchema;
+    assert.deepEqual(saveSchema.properties.type.enum, ["asset", "bug", "invariant", "mitigation", "source", "sink", "hypothesis", "finding", "primitive", "chain", "procedure", "trajectory"]);
+    assert.deepEqual(saveSchema.properties.status.enum, ["draft", "suspected", "confirmed", "rejected", "stale"]);
+    assert.deepEqual(saveSchema.properties.evidence.items.properties.kind.enum, ["code", "artifact", "command", "url", "human_note"]);
+    assert.deepEqual(saveSchema.properties.evidence.items.properties.pathBase.enum, ["workspace", "repository", "asset_root", "external"]);
     const source = await registry.execute({ id: "save_source", actionClass: "synthesize", toolName: "memory.save", input: { type: "source", title: "Request body" } });
     const sink = await registry.execute({ id: "save_sink", actionClass: "synthesize", toolName: "memory.save", input: { type: "sink", title: "Template renderer" } });
     assert.equal(source.result.status, "complete");

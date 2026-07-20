@@ -23,6 +23,8 @@ export const MEMORY_NODE_TYPES = [
 ] as const;
 export const MEMORY_NODE_STATUSES = ["draft", "suspected", "confirmed", "rejected", "stale"] as const;
 export const MEMORY_TIERS = ["session", "workspace", "subject"] as const;
+export const MEMORY_EVIDENCE_KINDS = ["code", "artifact", "command", "url", "human_note"] as const;
+export const MEMORY_EVIDENCE_PATH_BASES = ["workspace", "repository", "asset_root", "external"] as const;
 
 export type MemoryNodeType = (typeof MEMORY_NODE_TYPES)[number];
 export type MemoryNodeStatus = (typeof MEMORY_NODE_STATUSES)[number];
@@ -42,8 +44,8 @@ export interface MemoryPeerDatabase extends Omit<MemoryTierContext, "sessionId">
 
 export interface MemoryEvidenceRef {
   id: string;
-  kind: "code" | "artifact" | "command" | "url" | "human_note";
-  pathBase?: "workspace" | "repository" | "asset_root" | "external";
+  kind: (typeof MEMORY_EVIDENCE_KINDS)[number];
+  pathBase?: (typeof MEMORY_EVIDENCE_PATH_BASES)[number];
   path?: string;
   locator: Record<string, unknown>;
   summary: string;

@@ -1,5 +1,9 @@
 import { nowIso } from "./ids.js";
 import {
+  MEMORY_EVIDENCE_KINDS,
+  MEMORY_EVIDENCE_PATH_BASES,
+  MEMORY_NODE_STATUSES,
+  MEMORY_NODE_TYPES,
   MemoryGraphStore,
   type MemoryEvidenceRef,
   type MemoryNodeStatus,
@@ -15,11 +19,22 @@ const SEARCH_PARAMETERS = {
   properties: {
     query: { type: "string" },
     tiers: { type: "array", items: { type: "string", enum: ["session", "workspace", "subject"] } },
-    types: { type: "array", items: { type: "string" } },
-    statuses: { type: "array", items: { type: "string" } },
+    types: { type: "array", items: { type: "string", enum: [...MEMORY_NODE_TYPES] } },
+    statuses: { type: "array", items: { type: "string", enum: [...MEMORY_NODE_STATUSES] } },
     assetIds: { type: "array", items: { type: "string" } },
     tags: { type: "array", items: { type: "string" } },
     limit: { type: "number" },
+  },
+};
+const EVIDENCE_ITEM_PARAMETERS = {
+  type: "object",
+  required: ["kind", "summary"],
+  properties: {
+    kind: { type: "string", enum: [...MEMORY_EVIDENCE_KINDS] },
+    pathBase: { type: "string", enum: [...MEMORY_EVIDENCE_PATH_BASES] },
+    path: { type: "string" },
+    locator: { type: "object" },
+    summary: { type: "string" },
   },
 };
 const GET_PARAMETERS = { type: "object", required: ["id"], properties: { id: { type: "string" } } };
@@ -27,9 +42,9 @@ const SAVE_PARAMETERS = {
   type: "object",
   required: ["type", "title"],
   properties: {
-    id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
-    status: { type: "string" }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
-    tags: { type: "array", items: { type: "string" } }, attributes: { type: "object" }, evidence: { type: "array", items: { type: "object" } },
+    id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string", enum: [...MEMORY_NODE_TYPES] }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
+    status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
+    tags: { type: "array", items: { type: "string" } }, attributes: { type: "object" }, evidence: { type: "array", items: EVIDENCE_ITEM_PARAMETERS },
   },
 };
 const CORRECT_PARAMETERS = {
@@ -37,8 +52,8 @@ const CORRECT_PARAMETERS = {
   required: ["id", "expectedRevision"],
   properties: {
     id: { type: "string" }, expectedRevision: { type: "number" }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
-    status: { type: "string" }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
-    tags: { type: "array", items: { type: "string" } }, attributes: { type: "object" }, evidence: { type: "array", items: { type: "object" } },
+    status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
+    tags: { type: "array", items: { type: "string" } }, attributes: { type: "object" }, evidence: { type: "array", items: EVIDENCE_ITEM_PARAMETERS },
   },
 };
 const LINK_PARAMETERS = {

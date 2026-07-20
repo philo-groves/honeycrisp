@@ -84,6 +84,35 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   assert.deepEqual(contexts[1].toolNames, []);
 });
 
+test("Pi Agent keeps tools available without an explicit governance call limit", async () => {
+  const calls = [];
+  const contexts = [];
+  const tool = createFixtureInspectTool(calls);
+  const result = await runResearchAgent({
+    prompt: "Inspect four fixture paths before reporting.",
+    tools: [tool.descriptor],
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels(
+        [
+          assistant(toolCall("fixture_inspect", { path: "one.c" }, "tool_1"), "toolUse"),
+          assistant(toolCall("fixture_inspect", { path: "two.c" }, "tool_2"), "toolUse"),
+          assistant(toolCall("fixture_inspect", { path: "three.c" }, "tool_3"), "toolUse"),
+          assistant(toolCall("fixture_inspect", { path: "four.c" }, "tool_4"), "toolUse"),
+          assistant("## Result\nInspected all four paths."),
+        ],
+        contexts,
+      ),
+      toolRegistry: createResearchToolRegistry([tool]),
+    }),
+  });
+
+  assert.equal(result.agentRun.output.raw.toolCallCount, 4);
+  assert.deepEqual(calls.map((call) => call.path), ["one.c", "two.c", "three.c", "four.c"]);
+  assert.ok(contexts.slice(0, 5).every((context) => context.toolNames.includes("fixture_inspect")));
+});
+
 test("Pi Agent beforeToolCall preflight preserves blocked tool events", async () => {
   const calls = [];
   const contexts = [];
@@ -141,11 +170,16 @@ test("Pi Agent executor streams live thought events", async () => {
     }),
   });
   const thoughtEvents = liveEvents.filter((event) => event.kind === "model.thought");
+  const agentEvents = liveEvents.filter((event) => event.kind === "agent.event");
 
   assert.equal(result.agentRun.status, "complete");
   assert.ok(thoughtEvents.length >= 2);
   assert.equal(thoughtEvents.at(-1).payload.phase, "completed");
   assert.equal(thoughtEvents.at(-1).payload.text, "Inspect parser entrypoints first.");
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0].payload.type, "turn_completed");
+  assert.equal(agentEvents[0].payload.turn, 1);
+  assert.deepEqual(agentEvents[0].payload.usage, ZERO_USAGE);
 });
 
 test("Pi Agent executor injects live steering into the next model turn", async () => {

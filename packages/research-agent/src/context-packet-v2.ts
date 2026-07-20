@@ -712,7 +712,11 @@ function createToolBudget(
   tools: readonly ResearchToolDescriptor[],
 ): ResearchToolBudget {
   return {
-    maxToolCalls: governance?.maxToolCalls ?? (tools.length > 0 ? 3 : 0),
+    ...(governance?.maxToolCalls !== undefined
+      ? { maxToolCalls: governance.maxToolCalls }
+      : tools.length === 0
+        ? { maxToolCalls: 0 }
+        : {}),
     ...(governance?.maxRuntimeMs
       ? { maxRuntimeMs: governance.maxRuntimeMs }
       : {}),

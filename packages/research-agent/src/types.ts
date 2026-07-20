@@ -615,7 +615,7 @@ export interface ResearchToolPermission {
 }
 
 export interface ResearchToolBudget {
-  maxToolCalls: number;
+  maxToolCalls?: number;
   maxRuntimeMs?: number;
   maxFiles?: number;
   maxBytes?: number;

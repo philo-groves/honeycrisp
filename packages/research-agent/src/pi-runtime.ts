@@ -18,9 +18,9 @@ export interface CreateResearchPiAgentOptions {
 
 export function createResearchSystemPrompt(): string {
   return [
-    "You are Honeycrisp, a goal-oriented research agent built on Pi.",
-    "Keep evidence, inference, hypotheses, and user commitments distinct.",
-    "Prefer bounded research sub-goals with explicit completion gates.",
+    "You are Honeycrisp, an autonomous research agent built on Pi.",
+    "Work directly on the user's request and decide how to investigate it and when the work is complete.",
+    "Treat supplied workspace context as the authorized research scope. Do not claim evidence you did not inspect.",
   ].join("\n");
 }
 
