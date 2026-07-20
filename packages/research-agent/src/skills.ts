@@ -2,14 +2,13 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type {
   ResearchActionClass,
-  ResearchGoalFrame,
   ResearchMemorySnapshot,
   ResearchSelectedSkill,
   ResearchSkillDescriptor,
 } from "./types.js";
 
 export interface SelectResearchSkillsInput {
-  goalFrame: ResearchGoalFrame;
+  prompt?: string;
   memory?: Partial<ResearchMemorySnapshot>;
   requestedSkillIds?: readonly string[];
   limit?: number;
@@ -67,14 +66,10 @@ export function selectResearchSkills(input: SelectResearchSkillsInput & {
 }): ResearchSelectedSkill[] {
   const requested = new Set(input.requestedSkillIds ?? []);
   const goalText = [
-    input.goalFrame.prompt.rawPrompt,
-    input.goalFrame.root.objective,
-    ...input.goalFrame.riskFlags,
-    ...input.goalFrame.scopeConstraints,
-    ...input.goalFrame.evidenceRequirements,
+    input.prompt,
     ...(input.memory?.userCommitments ?? []),
     ...(input.memory?.prospectiveCommitments ?? []),
-  ].join("\n").toLowerCase();
+  ].filter((part): part is string => typeof part === "string").join("\n").toLowerCase();
 
   return input.skills
     .map((skill) => scoreSkill(skill, goalText, requested))

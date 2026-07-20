@@ -8,34 +8,28 @@ import {
   createDeterministicMemoryRetriever,
   createDeterministicMemoryWritePipeline,
   createResearchEventId,
-  createResearchGoalFrame,
   createSqliteMemoryRecordStore,
 } from "../packages/research-agent/dist/index.js";
 
 test("memory retriever ranks relevant direct evidence above stale weak evidence", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
   const retriever = createDeterministicMemoryRetriever();
-  const goalFrame = createResearchGoalFrame(
-    "Goal: Determine parser normalization order",
-  );
   const staleEvent = createEvent("tool.observed", {
     summary: "Parser normalization order might involve expansion first.",
     confidence: 0.1,
   }, {
     timestamp: "2020-01-01T00:00:00.000Z",
-    goalId: goalFrame.root.id,
   });
   const recentEvent = createEvent("tool.observed", {
     summary: "Parser normalization source confirms normalization before expansion.",
     confidence: 0.95,
   }, {
     timestamp: "2026-06-24T00:00:00.000Z",
-    goalId: goalFrame.root.id,
   });
   const records = pipeline.deriveMany([staleEvent, recentEvent]);
 
   const result = retriever.retrieve({
-    activeGoal: goalFrame.root,
+    query: "Determine parser normalization order",
     records,
     recentEvents: [recentEvent],
     openQuestions: ["What is the parser normalization order?"],
@@ -52,22 +46,17 @@ test("memory retriever ranks relevant direct evidence above stale weak evidence"
 test("memory retriever includes contradictions that affect active claims", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
   const retriever = createDeterministicMemoryRetriever();
-  const goalFrame = createResearchGoalFrame(
-    "Goal: Check parser branch reachability",
-  );
   const [claim] = pipeline.derive(
     createEvent("model.claim", {
       claim: "The parser branch is reachable.",
       evidenceRefIds: ["static_branch_reference"],
       evidenceAgainstRefIds: ["negative_fixture_run"],
       confidence: 0.45,
-    }, {
-      goalId: goalFrame.root.id,
     }),
   );
 
   const result = retriever.retrieve({
-    activeGoal: goalFrame.root,
+    query: "Check parser branch reachability",
     records: [claim],
     openQuestions: ["Is the parser branch reachable?"],
   });
@@ -84,14 +73,11 @@ test("memory retriever includes contradictions that affect active claims", () =>
 test("memory retriever ranks supported findings above weak hypotheses and omits rejected findings", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
   const retriever = createDeterministicMemoryRetriever();
-  const goalFrame = createResearchGoalFrame("Goal: Review parser finding state");
   const [weakHypothesis] = pipeline.derive(
     createEvent("model.hypothesis", {
       hypothesis: "Parser normalization may happen before expansion.",
       confidence: 0.25,
       evidenceRefIds: ["parser_source"],
-    }, {
-      goalId: goalFrame.root.id,
     }),
   );
   const [supportedFinding] = pipeline.derive(
@@ -100,8 +86,6 @@ test("memory retriever ranks supported findings above weak hypotheses and omits 
       findingStatus: "supported",
       confidence: 0.8,
       evidenceRefIds: ["parser_source"],
-    }, {
-      goalId: goalFrame.root.id,
     }),
   );
   const [rejectedFinding] = pipeline.derive(
@@ -110,13 +94,11 @@ test("memory retriever ranks supported findings above weak hypotheses and omits 
       findingStatus: "rejected",
       confidence: 0.8,
       evidenceRefIds: ["parser_source"],
-    }, {
-      goalId: goalFrame.root.id,
     }),
   );
 
   const result = retriever.retrieve({
-    activeGoal: goalFrame.root,
+    query: "Review parser finding state",
     records: [weakHypothesis, supportedFinding, rejectedFinding],
     openQuestions: ["What parser finding state is supported?"],
   });
@@ -135,7 +117,6 @@ test("memory retriever ranks supported findings above weak hypotheses and omits 
 test("memory retriever returns procedures only for applicable action classes", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
   const retriever = createDeterministicMemoryRetriever();
-  const goalFrame = createResearchGoalFrame("Goal: Inspect parser code");
   const records = pipeline.derive(
     createEvent("model.visible_note", {
       summary: "Parser inspection pattern.",
@@ -150,12 +131,12 @@ test("memory retriever returns procedures only for applicable action classes", (
   };
 
   const inspectResult = retriever.retrieve({
-    activeGoal: goalFrame.root,
+    query: "Inspect parser code",
     actionClass: "inspect",
     records: [inspectProcedure],
   });
   const searchResult = retriever.retrieve({
-    activeGoal: goalFrame.root,
+    query: "Inspect parser code",
     actionClass: "search",
     records: [inspectProcedure],
   });
@@ -167,9 +148,6 @@ test("memory retriever returns procedures only for applicable action classes", (
 test("memory retriever surfaces prospective checks when trigger conditions are met", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
   const retriever = createDeterministicMemoryRetriever();
-  const goalFrame = createResearchGoalFrame(
-    "Goal: Decide whether search is allowed",
-  );
   const [prospective] = pipeline.derive(
     createEvent("user.commitment", {
       commitment: "Do not use external search for this run.",
@@ -178,7 +156,7 @@ test("memory retriever surfaces prospective checks when trigger conditions are m
   );
 
   const result = retriever.retrieve({
-    activeGoal: goalFrame.root,
+    query: "Decide whether search is allowed",
     actionClass: "search",
     records: [prospective],
     openQuestions: ["Can search be used?"],
@@ -198,20 +176,15 @@ test("memory retriever can score records from the sqlite record store with graph
   const store = createSqliteMemoryRecordStore({ workspaceRoot });
   const pipeline = createDeterministicMemoryWritePipeline();
   const retriever = createDeterministicMemoryRetriever();
-  const goalFrame = createResearchGoalFrame("Goal: Analyze parser claims");
   const [claim] = pipeline.derive(
     createEvent("model.claim", {
       claim: "Parser claim with graph links.",
       evidenceRefIds: ["supporting_evidence"],
-    }, {
-      goalId: goalFrame.root.id,
     }),
   );
   const [hypothesis] = pipeline.derive(
     createEvent("model.hypothesis", {
       hypothesis: "Parser hypothesis depending on claim.",
-    }, {
-      goalId: goalFrame.root.id,
     }),
   );
 
@@ -224,7 +197,7 @@ test("memory retriever can score records from the sqlite record store with graph
   });
 
   const result = retriever.retrieve({
-    activeGoal: goalFrame.root,
+    query: "Analyze parser claims",
     recordStore: store,
   });
 

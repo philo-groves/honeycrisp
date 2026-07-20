@@ -1,7 +1,4 @@
 import type { ResearchContextPacketV2 } from "./context-packet-v2.js";
-import type {
-  MemoryDrivenControllerDecision,
-} from "./memory-controller-v2.js";
 import {
   createDeterministicMemoryRetriever,
   type MemoryRetrievalInput,
@@ -39,7 +36,6 @@ export interface MemoryDebugCaptureInput {
   candidateWrites?: readonly ResearchDerivedMemoryRecord[];
   retrieval?: MemoryRetrievalResult;
   contextPacketV2?: ResearchContextPacketV2;
-  decision?: MemoryDrivenControllerDecision;
 }
 
 export interface MemoryDebugCapture {
@@ -59,7 +55,6 @@ export interface MemoryDebugCapture {
   }[];
   retrievalResults?: ReturnType<MemoryInspector["showPreconsciousPacket"]>;
   contextSelections?: ReturnType<MemoryInspector["showCompiledContextPacket"]>;
-  controllerDecision?: ReturnType<MemoryInspector["explainSelectedAction"]>;
 }
 
 export interface MemoryInspectorOptions {
@@ -148,19 +143,6 @@ export class MemoryInspector {
           warnings: item.warnings,
         })),
       })),
-    };
-  }
-
-  explainSelectedAction(decision: MemoryDrivenControllerDecision) {
-    return {
-      actionClass: decision.actionClass,
-      subGoalId: decision.subGoal.id,
-      subGoalObjective: decision.subGoal.objective,
-      rationale: decision.rationale,
-      supportingRecordIds: decision.supportingRecordIds,
-      warnings: decision.warnings,
-      usedFirstRunFallback: decision.usedFirstRunFallback,
-      actionScores: decision.actionScores,
     };
   }
 
@@ -253,7 +235,6 @@ export class MemoryInspector {
       : undefined;
 
     return {
-      ...readGoalState(latestContextEvent),
       ...(latestContext ? { latestContext } : {}),
       memory: this.showMemoryState(),
       proof: this.showProofState(),
@@ -311,9 +292,6 @@ export class MemoryInspector {
               input.contextPacketV2,
             ),
           }
-        : {}),
-      ...(input.decision
-        ? { controllerDecision: this.explainSelectedAction(input.decision) }
         : {}),
     };
   }
@@ -379,29 +357,6 @@ function summarizeEvent(event: ResearchEvent): string {
   }
 
   return event.kind;
-}
-
-function readGoalState(
-  event: ResearchEvent | undefined,
-): Pick<ResearchAgentStateReadModel, "goal" | "subGoals"> {
-  const payload = isRecord(event?.payload) ? event.payload : {};
-  const activeGoal = isRecord(payload.activeGoal)
-    ? payload.activeGoal
-    : undefined;
-  const activeSubGoal = isRecord(payload.activeSubGoal)
-    ? payload.activeSubGoal
-    : undefined;
-  const state: Pick<ResearchAgentStateReadModel, "goal" | "subGoals"> = {
-    subGoals: activeSubGoal
-      ? [activeSubGoal as unknown as ResearchAgentStateReadModel["subGoals"][number]]
-      : [],
-  };
-  if (activeGoal) {
-    state.goal = activeGoal as unknown as NonNullable<
-      ResearchAgentStateReadModel["goal"]
-    >;
-  }
-  return state;
 }
 
 function createContextUsageReadModel(

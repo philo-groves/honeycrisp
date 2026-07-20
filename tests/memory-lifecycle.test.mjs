@@ -12,7 +12,6 @@ import {
   createMemorySnapshotFromRecordStore,
   createResearchEventId,
   createSqliteMemoryEventLog,
-  createResearchGoalFrame,
   createSqliteMemoryRecordStore,
   deleteFindingUnderPolicy,
   deleteMemoryRecordUnderPolicy,
@@ -95,12 +94,9 @@ test("memory lifecycle expires records out of ordinary retrieval", async () => {
   const store = createSqliteMemoryRecordStore({
     workspaceRoot: await createTempWorkspace(),
   });
-  const goalFrame = createResearchGoalFrame("Goal: Retrieve fresh records");
   const [evidence] = createRecords([
     createEvent("tool.observed", {
       summary: "Fresh evidence before expiration.",
-    }, {
-      goalId: goalFrame.root.id,
     }),
   ]);
   store.write(evidence);
@@ -112,7 +108,7 @@ test("memory lifecycle expires records out of ordinary retrieval", async () => {
   });
 
   const retrieval = createDeterministicMemoryRetriever().retrieve({
-    activeGoal: goalFrame.root,
+    query: "Retrieve fresh records",
     recordStore: store,
   });
 

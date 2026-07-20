@@ -2,18 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  bootstrapResearchRun,
   compileContextPacketV2,
   createDeterministicMemoryRetriever,
   createDeterministicMemoryWritePipeline,
-  createFirstRunMemoryController,
   createResearchEventId,
-  createResearchFlowCapture,
-  createResearchGoalFrame,
 } from "../packages/research-agent/dist/index.js";
 
 test("context packet v2 respects section token budgets", () => {
-  const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
+  const { retrieval } = createRetrievalFixture([
     createEvent("tool.observed", {
       summary: [
         "Parser normalization source evidence.",
@@ -25,9 +21,6 @@ test("context packet v2 respects section token budgets", () => {
   ]);
 
   const packet = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: subGoal,
     retrieval,
     tools: [],
     sectionTokenBudgets: {
@@ -45,7 +38,7 @@ test("context packet v2 respects section token budgets", () => {
 });
 
 test("context packet v2 prunes lowest-ranked items when the total packet exceeds budget", () => {
-  const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
+  const { retrieval } = createRetrievalFixture([
     createEvent("tool.observed", {
       summary: [
         "Parser normalization source evidence confirms parser normalization behavior.",
@@ -76,9 +69,6 @@ test("context packet v2 prunes lowest-ranked items when the total packet exceeds
   assert.ok(rankedEvidenceIds.length >= 3);
 
   const packet = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: subGoal,
     retrieval,
     tools: [],
     contextTokenBudget: 70,
@@ -102,7 +92,7 @@ test("context packet v2 prunes lowest-ranked items when the total packet exceeds
 });
 
 test("context packet v2 keeps evidence and inference labels separate", () => {
-  const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
+  const { retrieval } = createRetrievalFixture([
     createEvent("tool.observed", {
       summary: "Parser normalization source was inspected.",
     }),
@@ -122,9 +112,6 @@ test("context packet v2 keeps evidence and inference labels separate", () => {
   ]);
 
   const packet = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: subGoal,
     retrieval,
     tools: [],
   });
@@ -154,7 +141,7 @@ test("context packet v2 keeps evidence and inference labels separate", () => {
 });
 
 test("context packet v2 keeps relevant contradictions within bounded context", () => {
-  const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
+  const { retrieval } = createRetrievalFixture([
     createEvent("model.claim", {
       claim: "The parser branch is reachable.",
       evidenceRefIds: ["static_reference"],
@@ -164,9 +151,6 @@ test("context packet v2 keeps relevant contradictions within bounded context", (
   ]);
 
   const packet = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: subGoal,
     retrieval,
     tools: [],
     sectionTokenBudgets: {
@@ -187,7 +171,7 @@ test("context packet v2 keeps relevant contradictions within bounded context", (
 });
 
 test("context packet v2 includes proof obligations and attempts separately", () => {
-  const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
+  const { retrieval } = createRetrievalFixture([
     createEvent("finding.proposed", {
       finding: "Parser ordering finding.",
       findingStatus: "supported",
@@ -196,9 +180,6 @@ test("context packet v2 includes proof obligations and attempts separately", () 
   ]);
 
   const packet = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: subGoal,
     retrieval,
     proofState: {
       obligations: [
@@ -257,68 +238,18 @@ test("context packet v2 includes proof obligations and attempts separately", () 
   assert.ok(proofState.items.some((item) => item.label === "proof_attempt"));
 });
 
-test("flow capture exposes context packet v2 selection reasons", async () => {
-  const result = await bootstrapResearchRun({
-    prompt: "Goal: Capture v2 context reasons\nScope constraints: no external search",
-  });
-  const { goalFrame, subGoal, retrieval } = createRetrievalFixture([
-    createEvent("tool.observed", {
-      summary: "Direct evidence for flow capture.",
-      confidence: 0.9,
-    }, {
-      goalId: result.goalFrame.root.id,
-    }),
-  ], result.goalFrame);
-  const packet = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: subGoal,
-    retrieval,
-    tools: [],
-  });
-  const capture = createResearchFlowCapture(result, {
-    capturedAt: "2026-06-24T00:00:00.000Z",
-    contextPacketV2: packet,
-  });
-
-  assert.ok(capture.contextV2);
-  assert.ok(capture.contextV2.preconsciousCandidateCount > 0);
-  assert.equal(capture.contextV2.tokenBudget, packet.tokenBudget);
-  assert.equal(capture.contextV2.estimatedTokens, packet.estimatedTokens);
-  assert.equal(capture.contextV2.compaction.reason, packet.compaction.reason);
-  assert.ok(
-    capture.contextV2.sections.some((section) =>
-      section.selectionReasons.some((selection) => selection.reasons.length > 0),
-    ),
-  );
-});
-
-function createRetrievalFixture(events, existingGoalFrame) {
-  const goalFrame =
-    existingGoalFrame ??
-    createResearchGoalFrame("Goal: Review parser normalization behavior");
-  const decision = createFirstRunMemoryController().decide({ goalFrame });
+function createRetrievalFixture(events) {
   const pipeline = createDeterministicMemoryWritePipeline();
   const retriever = createDeterministicMemoryRetriever();
-  const records = pipeline.deriveMany(
-    events.map((event) => ({
-      ...event,
-      goalId: event.goalId ?? goalFrame.root.id,
-    })),
-  );
+  const records = pipeline.deriveMany(events);
   const retrieval = retriever.retrieve({
-    activeGoal: goalFrame.root,
-    activeSubGoal: decision.subGoal,
+    query: "Review parser normalization behavior",
     records,
     openQuestions: ["What evidence explains parser normalization behavior?"],
     recentEvents: events,
   });
 
-  return {
-    goalFrame,
-    subGoal: decision.subGoal,
-    retrieval,
-  };
+  return { retrieval };
 }
 
 function createEvent(kind, payload, options = {}) {

@@ -2,21 +2,15 @@ import type { MemoryRecordStore } from "./memory-record-store.js";
 import type {
   ResearchActionClass,
   ResearchClaimGraphEdge,
-  ResearchCompletionGate,
   ResearchDerivedMemoryRecord,
   ResearchEvent,
   ResearchFindingStatus,
-  ResearchGoalNode,
   ResearchGovernancePolicy,
-  ResearchSubGoal,
   ResearchToolDescriptor,
 } from "./types.js";
 
 export interface MemoryRetrievalInput {
-  activeGoal: ResearchGoalNode;
-  activeSubGoal?: ResearchSubGoal;
-  completionGates?: readonly ResearchCompletionGate[];
-  stopGates?: readonly ResearchCompletionGate[];
+  query?: string;
   recentEvents?: readonly ResearchEvent[];
   openQuestions?: readonly string[];
   actionClass?: ResearchActionClass;
@@ -108,22 +102,6 @@ function scoreRecord(input: {
   if (relevance > 0) {
     score += relevance;
     reasons.push(`Relevant to active query tokens (+${relevance}).`);
-  }
-
-  if (input.record.goalId && input.record.goalId === input.input.activeGoal.id) {
-    score += 15;
-    reasons.push("Matches the active goal id (+15).");
-  } else if (input.record.goalId) {
-    warnings.push(
-      "From a different goal; use as prior context only, not current completion proof.",
-    );
-  }
-  if (
-    input.input.activeSubGoal?.id &&
-    input.record.subGoalId === input.input.activeSubGoal.id
-  ) {
-    score += 10;
-    reasons.push("Matches the active subgoal id (+10).");
   }
 
   const recentOverlap = input.record.sourceEventIds.some((eventId) =>
@@ -270,10 +248,7 @@ function isApplicableRecord(
 
 function createQueryTokens(input: MemoryRetrievalInput): ReadonlySet<string> {
   const parts = [
-    input.activeGoal.objective,
-    input.activeSubGoal?.objective,
-    ...(input.completionGates ?? []).map((gate) => gate.description),
-    ...(input.stopGates ?? []).map((gate) => gate.description),
+    input.query,
     ...(input.openQuestions ?? []),
     input.actionClass,
   ].filter((part): part is string => typeof part === "string");

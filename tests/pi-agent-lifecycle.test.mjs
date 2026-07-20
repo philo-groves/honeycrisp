@@ -2,13 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  bootstrapResearchRun,
-  createFirstRunMemoryController,
-  createPiAgentLoopExecutor,
-  createResearchGoalFrame,
+  createPiAgentExecutor,
   createResearchToolRegistry,
-  planResearchLoop,
-  processResearchLoop,
+  runResearchAgent,
 } from "../packages/research-agent/dist/index.js";
 
 const ZERO_USAGE = {
@@ -43,7 +39,7 @@ const FAUX_MODEL = {
   maxTokens: 4096,
 };
 
-test("Pi Agent executor runs Honeycrisp tools through lifecycle hooks", async () => {
+test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", async () => {
   const calls = [];
   const contexts = [];
   const tool = createFixtureInspectTool(calls);
@@ -54,7 +50,7 @@ test("Pi Agent executor runs Honeycrisp tools through lifecycle hooks", async ()
     ],
     contexts,
   );
-  const result = await bootstrapResearchRun({
+  const result = await runResearchAgent({
     prompt: "Inspect parse.c with the fixture tool.",
     tools: [tool.descriptor],
     governance: {
@@ -63,23 +59,20 @@ test("Pi Agent executor runs Honeycrisp tools through lifecycle hooks", async ()
       allowedPermissions: ["filesystem:read"],
       maxToolCalls: 1,
     },
-    loopExecutor: createPiAgentLoopExecutor({
+    executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
       models,
       toolRegistry: createResearchToolRegistry([tool]),
       toolExecution: "sequential",
     }),
-    goalRun: {
-      maxLoops: 1,
-    },
   });
-  const raw = result.loopResult.output.raw;
-  const observed = result.loopResult.output.toolEvents.find(
+  const raw = result.agentRun.output.raw;
+  const observed = result.agentRun.output.toolEvents.find(
     (event) => event.kind === "tool.observed",
   );
 
-  assert.equal(result.loopResult.executorName, "pi:faux/faux-model:agent");
+  assert.equal(result.agentRun.executorName, "pi:faux/faux-model:agent");
   assert.equal(raw.lifecycle, "pi-agent");
   assert.equal(raw.toolExecutionMode, "sequential");
   assert.equal(raw.toolCallCount, 1);
@@ -95,36 +88,17 @@ test("Pi Agent beforeToolCall preflight preserves blocked tool events", async ()
   const calls = [];
   const contexts = [];
   const tool = createFixtureInspectTool(calls);
-  const goalFrame = createResearchGoalFrame("Inspect parse.c with a denied tool.");
-  const decision = createFirstRunMemoryController().decide({
-    goalFrame,
-    tools: [tool.descriptor],
-  });
-  const loopPlan = planResearchLoop({ decision });
   const deniedGovernance = {
     allowedActionClasses: ["inspect"],
     allowedSideEffects: ["none"],
     allowedPermissions: ["filesystem:read"],
     maxToolCalls: 1,
   };
-  const result = await processResearchLoop({
-    loopPlan: {
-      ...loopPlan,
-      actionBudget: {
-        ...loopPlan.actionBudget,
-        maxToolCalls: 1,
-      },
-      governancePolicy: deniedGovernance,
-      contextPacket: {
-        ...loopPlan.contextPacket,
-        toolBudget: {
-          ...loopPlan.contextPacket.toolBudget,
-          maxToolCalls: 1,
-        },
-        governancePolicy: deniedGovernance,
-      },
-    },
-    executor: createPiAgentLoopExecutor({
+  const result = await runResearchAgent({
+    prompt: "Inspect parse.c with a denied tool.",
+    tools: [tool.descriptor],
+    governance: deniedGovernance,
+    executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
       models: createScriptedModels(
@@ -137,16 +111,16 @@ test("Pi Agent beforeToolCall preflight preserves blocked tool events", async ()
       toolRegistry: createResearchToolRegistry([tool]),
     }),
   });
-  const observed = result.output.toolEvents.find(
+  const observed = result.agentRun.output.toolEvents.find(
     (event) => event.kind === "tool.observed",
   );
 
   assert.equal(calls.length, 0);
-  assert.equal(result.output.raw.toolCallCount, 1);
+  assert.equal(result.agentRun.output.raw.toolCallCount, 1);
   assert.equal(observed.payload.status, "blocked");
   assert.match(observed.payload.summary, /side effect read is not allowed/);
   assert.ok(
-    result.output.raw.agentEvents.some(
+    result.agentRun.output.raw.agentEvents.some(
       (event) => event.type === "tool_execution_end" && event.isError === true,
     ),
   );
@@ -154,16 +128,13 @@ test("Pi Agent beforeToolCall preflight preserves blocked tool events", async ()
 });
 
 test("Pi Agent executor streams live thought events", async () => {
-  const goalFrame = createResearchGoalFrame("Prepare a concise parser inspection plan.");
-  const decision = createFirstRunMemoryController().decide({ goalFrame });
-  const loopPlan = planResearchLoop({ decision });
   const liveEvents = [];
-  const result = await processResearchLoop({
-    loopPlan,
+  const result = await runResearchAgent({
+    prompt: "Prepare a concise parser inspection plan.",
     eventSink(event) {
       liveEvents.push(event);
     },
-    executor: createPiAgentLoopExecutor({
+    executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
       models: createThoughtStreamingModels(),
@@ -171,21 +142,18 @@ test("Pi Agent executor streams live thought events", async () => {
   });
   const thoughtEvents = liveEvents.filter((event) => event.kind === "model.thought");
 
-  assert.equal(result.status, "complete");
+  assert.equal(result.agentRun.status, "complete");
   assert.ok(thoughtEvents.length >= 2);
   assert.equal(thoughtEvents.at(-1).payload.phase, "completed");
   assert.equal(thoughtEvents.at(-1).payload.text, "Inspect parser entrypoints first.");
 });
 
 test("Pi Agent executor injects live steering into the next model turn", async () => {
-  const goalFrame = createResearchGoalFrame("Inspect the parser boundary.");
-  const decision = createFirstRunMemoryController().decide({ goalFrame });
-  const loopPlan = planResearchLoop({ decision });
   const contexts = [];
   let steeringPoll = 0;
-  const result = await processResearchLoop({
-    loopPlan,
-    executor: createPiAgentLoopExecutor({
+  const result = await runResearchAgent({
+    prompt: "Inspect the parser boundary.",
+    executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
       models: createScriptedModels(
@@ -210,7 +178,7 @@ test("Pi Agent executor injects live steering into the next model turn", async (
     }),
   });
 
-  assert.equal(result.status, "complete");
+  assert.equal(result.agentRun.status, "complete");
   assert.equal(contexts.length, 2);
   assert.ok(
     contexts[1].messageContents.some((content) =>
@@ -222,7 +190,7 @@ test("Pi Agent executor injects live steering into the next model turn", async (
 test("Pi Agent executor supports parallel same-turn tool execution", async () => {
   const calls = [];
   const tool = createFixtureInspectTool(calls);
-  const result = await bootstrapResearchRun({
+  const result = await runResearchAgent({
     prompt: "Inspect two fixture paths.",
     tools: [tool.descriptor],
     governance: {
@@ -231,7 +199,7 @@ test("Pi Agent executor supports parallel same-turn tool execution", async () =>
       allowedPermissions: ["filesystem:read"],
       maxToolCalls: 2,
     },
-    loopExecutor: createPiAgentLoopExecutor({
+    executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
       models: createScriptedModels([
@@ -247,16 +215,13 @@ test("Pi Agent executor supports parallel same-turn tool execution", async () =>
       toolRegistry: createResearchToolRegistry([tool]),
       toolExecution: "parallel",
     }),
-    goalRun: {
-      maxLoops: 1,
-    },
   });
-  const observedEvents = result.loopResult.output.toolEvents.filter(
+  const observedEvents = result.agentRun.output.toolEvents.filter(
     (event) => event.kind === "tool.observed",
   );
 
-  assert.equal(result.loopResult.output.raw.toolExecutionMode, "parallel");
-  assert.equal(result.loopResult.output.raw.toolCallCount, 2);
+  assert.equal(result.agentRun.output.raw.toolExecutionMode, "parallel");
+  assert.equal(result.agentRun.output.raw.toolCallCount, 2);
   assert.deepEqual(calls.map((call) => call.path).sort(), ["context.c", "parse.c"]);
   assert.equal(observedEvents.length, 2);
 });

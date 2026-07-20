@@ -22,19 +22,13 @@ test("sqlite memory event log appends accepted events in deterministic sequence 
     getDefaultMemoryArtifactDirectoryPath(workspaceRoot);
   const log = createSqliteMemoryEventLog({ workspaceRoot });
 
-  const goalEvent = createEvent("goal.created", {
-    objective: "Persist events",
-    status: "active",
-  }, {
-    goalId: "goal_phase2",
+  const contextEvent = createEvent("context.compiled", {
+    summary: "Compiled request context for persistence testing.",
   });
   const observationEvent = createEvent("tool.observed", {
     summary: "Read the memory plan.",
     path: "/tmp/MEMORY_PLAN.md",
   }, {
-    goalId: "goal_phase2",
-    loopId: "loop_phase2",
-    subGoalId: "subgoal_phase2",
     artifactRefs: [
       {
         id: "artifact_memory_plan",
@@ -46,7 +40,7 @@ test("sqlite memory event log appends accepted events in deterministic sequence 
     ],
   });
 
-  const appended = log.appendMany([goalEvent, observationEvent]);
+  const appended = log.appendMany([contextEvent, observationEvent]);
 
   assert.equal(existsSync(databasePath), true);
   assert.equal(existsSync(artifactDirectoryPath), true);
@@ -69,25 +63,13 @@ test("sqlite memory event log appends accepted events in deterministic sequence 
   assert.deepEqual(appended.map((event) => event.sequence), [1, 2]);
   assert.equal(
     appended[0]?.payloadHash,
-    computeMemoryEventPayloadHash(goalEvent.payload),
+    computeMemoryEventPayloadHash(contextEvent.payload),
   );
   assert.equal(log.getById(observationEvent.id)?.sequence, 2);
   assert.deepEqual(
     log.listBySequenceRange({ fromSequence: 2, toSequence: 2 }).map(
       (event) => event.id,
     ),
-    [observationEvent.id],
-  );
-  assert.deepEqual(
-    log.listByGoalId("goal_phase2").map((event) => event.id),
-    [goalEvent.id, observationEvent.id],
-  );
-  assert.deepEqual(
-    log.listByLoopId("loop_phase2").map((event) => event.id),
-    [observationEvent.id],
-  );
-  assert.deepEqual(
-    log.listBySubGoalId("subgoal_phase2").map((event) => event.id),
     [observationEvent.id],
   );
   assert.deepEqual(
@@ -110,11 +92,8 @@ test("sqlite memory event log appends accepted events in deterministic sequence 
 test("sqlite memory event log reloads from disk and rejects duplicate event ids without mutation", async () => {
   const workspaceRoot = await createTempWorkspace();
   const firstLog = createSqliteMemoryEventLog({ workspaceRoot });
-  const firstEvent = createEvent("goal.created", {
-    objective: "Reload event log",
-    status: "active",
-  }, {
-    goalId: "goal_reload",
+  const firstEvent = createEvent("context.compiled", {
+    summary: "Reload event log context.",
   });
   const appendedFirst = firstLog.append(firstEvent);
   firstLog.close();
@@ -122,8 +101,6 @@ test("sqlite memory event log reloads from disk and rejects duplicate event ids 
   const reloadedLog = createSqliteMemoryEventLog({ workspaceRoot });
   const secondEvent = createEvent("model.visible_note", {
     summary: "Reload preserved the first row.",
-  }, {
-    goalId: "goal_reload",
   });
   const beforeDuplicate = reloadedLog.getById(firstEvent.id);
 

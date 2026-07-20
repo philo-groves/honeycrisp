@@ -157,34 +157,18 @@ test("memory write pipeline records proof events as audit episodes", () => {
   assert.ok(observed.tags.includes("proof.observed"));
 });
 
-test("memory write pipeline creates episodic summaries for terminal goal transitions", () => {
+test("memory write pipeline creates episodic summaries for memory reviews", () => {
   const pipeline = createDeterministicMemoryWritePipeline();
-  const completeEvent = createEvent("goal.updated", {
-    statusBefore: "active",
-    statusAfter: "complete",
-    summary: "Goal active -> complete: all root gates were satisfied.",
-  }, {
-    goalId: "goal_complete",
-  });
-  const stoppedEvent = createEvent("goal.updated", {
-    statusBefore: "active",
-    statusAfter: "stopped",
-    summary: "Goal active -> stopped: stop gate reached.",
-  }, {
-    goalId: "goal_stopped",
+  const reviewEvent = createEvent("memory.reviewed", {
+    summary: "Reviewed the parser claim against current evidence.",
   });
 
-  const [completeRecord] = pipeline.derive(completeEvent);
-  const [stoppedRecord] = pipeline.derive(stoppedEvent);
+  const [reviewRecord] = pipeline.derive(reviewEvent);
 
-  assert.equal(completeRecord.kind, "episodic");
-  assert.equal(completeRecord.episodeKind, "goal_transition");
-  assert.equal(completeRecord.status, "confirmed");
-  assert.match(completeRecord.summary, /all root gates/);
-  assert.equal(stoppedRecord.kind, "episodic");
-  assert.equal(stoppedRecord.episodeKind, "goal_transition");
-  assert.equal(stoppedRecord.status, "confirmed");
-  assert.match(stoppedRecord.summary, /stop gate/);
+  assert.equal(reviewRecord.kind, "episodic");
+  assert.equal(reviewRecord.episodeKind, "memory_decision");
+  assert.equal(reviewRecord.status, "confirmed");
+  assert.match(reviewRecord.summary, /current evidence/);
 });
 
 test("memory write pipeline keeps procedures as candidates until promotion", () => {

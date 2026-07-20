@@ -1,29 +1,21 @@
-import type { BootstrapResearchRunResult } from "./bootstrap.js";
+import type { RunResearchAgentResult } from "./bootstrap.js";
 import type {
   ResearchContextPacketV2,
   ResearchContextPacketV2SectionLabel,
 } from "./context-packet-v2.js";
 import { nowIso } from "./ids.js";
-import { inferResearchLoopExecutionMode } from "./loop-processor.js";
 import {
   getResearchStorageManifestPath,
   loadResearchStorageManifest,
   type ResearchStorageArtifactManifestEntry,
 } from "./storage.js";
 import type {
-  ResearchContextPacket,
   ResearchEvent,
-  ResearchGovernancePolicy,
-  ResearchLoopExecutionMode,
-  ResearchLoopProcessingResult,
   ResearchMemoryRef,
-  ResearchMemorySnapshot,
   ResearchNextPromptSuggestion,
   ResearchSelectedSkill,
-  ResearchSkippedToolAction,
   ResearchStorageLayout,
   ResearchToolBudget,
-  ResearchToolAction,
   ResearchToolPermission,
   ResearchTrace,
   ResearchWorkspaceContext,
@@ -33,95 +25,77 @@ export interface ResearchFlowEventCapture {
   id: string;
   kind: ResearchEvent["kind"];
   timestamp: string;
-  goalId?: string;
   summary: string;
   payload: unknown;
 }
 
-export interface ResearchFlowCapture {
-  schemaVersion: 1;
+interface ResearchContextCapture {
+  preconsciousCandidateCount: number;
+  tokenBudget: number;
+  estimatedTokens: number;
+  compaction: ResearchContextPacketV2["compaction"];
+  sections: readonly {
+    label: ResearchContextPacketV2SectionLabel;
+    itemCount: number;
+    tokenBudget: number;
+    estimatedTokens: number;
+    selectedRecordIds: readonly string[];
+    droppedRecordIds: readonly string[];
+    selectionReasons: readonly {
+      recordId: string;
+      reasons: readonly string[];
+      warnings: readonly string[];
+    }[];
+  }[];
+}
+
+interface ResearchMemoryCapture {
+  counts: {
+    eventLog: number;
+    directEvidence: number;
+    priorEpisodes: number;
+    candidateProcedures: number;
+    currentHypotheses: number;
+    currentFindings: number;
+    contradictions: number;
+    prospectiveCommitments: number;
+    userCommitments: number;
+  };
+  directEvidence: readonly ResearchMemoryRef[];
+  priorEpisodes: readonly ResearchMemoryRef[];
+  currentHypotheses: readonly ResearchMemoryRef[];
+  currentFindings: readonly ResearchMemoryRef[];
+  contradictions: readonly ResearchMemoryRef[];
+  prospectiveCommitments: readonly string[];
+  userCommitments: readonly string[];
+}
+
+export interface ResearchAgentFlowCapture {
+  schemaVersion: 2;
   capturedAt: string;
-  goal: {
+  request: { prompt: string };
+  agent: {
     id: string;
-    objective: string;
-    scopeConstraints: readonly string[];
-    evidenceRequirements: readonly string[];
-    riskFlags: readonly string[];
-  };
-  decision: {
-    actionClass: string;
-    subGoalId: string;
-    subGoalObjective: string;
-    rationale: string;
-  };
-  goalRun: {
-    status: string;
-    terminalReason?: string;
-    loopsUsed: number;
-    maxLoops: number | null;
-    safetyMaxLoops: number;
-    blockedThreshold: number;
-    consecutiveBlockedCount: number;
-    statusReason?: string;
-  };
-  loop: {
-    planId: string;
-    resultId: string;
-    status: ResearchLoopProcessingResult["status"];
+    status: "complete" | "error";
     executorName: string;
-    executionMode: ResearchLoopExecutionMode;
+    startedAt: string;
+    completedAt: string;
     outputText: string;
-    followUpRecommendation: string;
-    followUpRationale: string;
     nextPromptSuggestions?: readonly ResearchNextPromptSuggestion[];
     researchTrace?: ResearchTrace;
     raw?: unknown;
   };
   context: {
-    directEvidence: readonly ResearchMemoryRef[];
-    priorObservations: readonly ResearchMemoryRef[];
-    currentHypotheses: readonly ResearchMemoryRef[];
-    currentFindings: readonly ResearchMemoryRef[];
-    openQuestions: readonly string[];
-    userCommitments: readonly string[];
+    workspaceContext: ResearchWorkspaceContext;
+    selectedSkills: readonly ResearchSelectedSkill[];
     toolPermissions: readonly ResearchToolPermission[];
     toolBudget: ResearchToolBudget;
-    governancePolicy?: ResearchGovernancePolicy;
-    selectedSkills: readonly ResearchSelectedSkill[];
-    candidateToolActions: readonly ResearchToolAction[];
-    skippedToolActions: readonly ResearchSkippedToolAction[];
-    workspaceContext?: ResearchWorkspaceContext;
   };
   workspaceContext: ResearchWorkspaceContext;
   storage: ResearchStorageLayout;
-  contextV2?: {
-    preconsciousCandidateCount: number;
-    tokenBudget: number;
-    estimatedTokens: number;
-    compaction: {
-      reason: "context_token_budget_exceeded" | "not_needed";
-      acceptedTokenBudget: number;
-      estimatedTokensBeforeCompaction: number;
-      estimatedTokensAfterCompaction: number;
-      removedRecordIds: readonly string[];
-      removedTokenCount: number;
-    };
-    sections: readonly {
-      label: ResearchContextPacketV2SectionLabel;
-      itemCount: number;
-      tokenBudget: number;
-      estimatedTokens: number;
-      selectedRecordIds: readonly string[];
-      droppedRecordIds: readonly string[];
-      selectionReasons: readonly {
-        recordId: string;
-        reasons: readonly string[];
-        warnings: readonly string[];
-      }[];
-    }[];
-  };
+  contextV2?: ResearchContextCapture;
   memoryIntegration?: {
-    enabled: boolean;
+    enabled: true;
     databasePath?: string;
     eventLogCount: number;
     recordCount: number;
@@ -130,8 +104,6 @@ export interface ResearchFlowCapture {
     eventsAppended: number;
     recordsWritten: number;
     latestRetrievalCandidateCount: number;
-    usedMemoryDrivenController: boolean;
-    usedFirstRunFallback: boolean;
   };
   storageManifest: {
     path: string;
@@ -147,180 +119,76 @@ export interface ResearchFlowCapture {
       | "sourceEventIds"
     >[];
   };
-  memory: {
-    counts: {
-      eventLog: number;
-      directEvidence: number;
-      priorEpisodes: number;
-      candidateProcedures: number;
-      currentHypotheses: number;
-      currentFindings: number;
-      contradictions: number;
-      prospectiveCommitments: number;
-      userCommitments: number;
-    };
-    directEvidence: readonly ResearchMemoryRef[];
-    priorEpisodes: readonly ResearchMemoryRef[];
-    currentHypotheses: readonly ResearchMemoryRef[];
-    currentFindings: readonly ResearchMemoryRef[];
-    contradictions: readonly ResearchMemoryRef[];
-    prospectiveCommitments: readonly string[];
-    userCommitments: readonly string[];
-  };
+  memory: ResearchMemoryCapture;
   eventTimeline: readonly ResearchFlowEventCapture[];
 }
 
-export function createResearchFlowCapture(
-  result: BootstrapResearchRunResult,
-  options: {
-    capturedAt?: string;
-    contextPacketV2?: ResearchContextPacketV2;
-  } = {},
-): ResearchFlowCapture {
-  const contextPacketV2 =
-    options.contextPacketV2 ?? result.durableMemory?.latestContextPacketV2;
-
+export function createResearchAgentFlowCapture(
+  result: RunResearchAgentResult,
+  options: { capturedAt?: string } = {},
+): ResearchAgentFlowCapture {
+  const contextPacket = result.durableMemory?.latestContextPacketV2;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     capturedAt: options.capturedAt ?? nowIso(),
-    goal: {
-      id: result.goalFrame.root.id,
-      objective: result.goalFrame.root.objective,
-      scopeConstraints: result.goalFrame.scopeConstraints,
-      evidenceRequirements: result.goalFrame.evidenceRequirements,
-      riskFlags: result.goalFrame.riskFlags,
-    },
-    decision: {
-      actionClass: result.decision.actionClass,
-      subGoalId: result.decision.subGoal.id,
-      subGoalObjective: result.decision.subGoal.objective,
-      rationale: result.decision.rationale,
-    },
-    goalRun: {
-      status: result.goalRun.state.status,
-      ...(result.goalRun.state.terminalReason
-        ? { terminalReason: result.goalRun.state.terminalReason }
+    request: { prompt: result.prompt },
+    agent: {
+      id: result.agentRun.id,
+      status: result.agentRun.status,
+      executorName: result.agentRun.executorName,
+      startedAt: result.agentRun.startedAt,
+      completedAt: result.agentRun.completedAt,
+      outputText: result.agentRun.output.text,
+      ...(result.agentRun.output.nextPromptSuggestions
+        ? { nextPromptSuggestions: result.agentRun.output.nextPromptSuggestions }
         : {}),
-      loopsUsed: result.goalRun.state.loopsUsed,
-      maxLoops: result.goalRun.state.maxLoops,
-      safetyMaxLoops: result.goalRun.state.safetyMaxLoops,
-      blockedThreshold: result.goalRun.state.blockedThreshold,
-      consecutiveBlockedCount: result.goalRun.state.consecutiveBlockedCount,
-      ...(result.goalRun.state.statusReason
-        ? { statusReason: result.goalRun.state.statusReason }
+      ...(result.agentRun.output.researchTrace
+        ? { researchTrace: result.agentRun.output.researchTrace }
+        : {}),
+      ...(result.agentRun.output.raw !== undefined
+        ? { raw: result.agentRun.output.raw }
         : {}),
     },
-    loop: createLoopCapture(result.loopResult),
-    context: createContextCapture(result.decision.contextPacket),
+    context: {
+      workspaceContext: result.workspaceContext,
+      selectedSkills: result.selectedSkills,
+      toolPermissions: result.toolPermissions,
+      toolBudget: result.agentRun.modelInput.toolBudget,
+    },
     workspaceContext: result.workspaceContext,
     storage: result.storageLayout,
-    ...(contextPacketV2
-      ? { contextV2: createContextV2Capture(contextPacketV2) }
-      : {}),
+    ...(contextPacket ? { contextV2: captureContext(contextPacket) } : {}),
     ...(result.durableMemory
-      ? { memoryIntegration: createMemoryIntegrationCapture(result.durableMemory) }
+      ? {
+          memoryIntegration: {
+            enabled: true,
+            ...(result.durableMemory.databasePath
+              ? { databasePath: result.durableMemory.databasePath }
+              : {}),
+            eventLogCount: result.durableMemory.eventLogCount,
+            recordCount: result.durableMemory.recordCount,
+            proofObligationCount: result.durableMemory.proofObligationCount,
+            proofAttemptCount: result.durableMemory.proofAttemptCount,
+            eventsAppended: result.durableMemory.eventsAppended,
+            recordsWritten: result.durableMemory.recordsWritten,
+            latestRetrievalCandidateCount:
+              result.durableMemory.latestRetrievalCandidateCount,
+          },
+        }
       : {}),
-    storageManifest: createStorageManifestCapture(result.storageLayout),
-    memory: createMemoryCapture(result.memory),
+    storageManifest: captureStorage(result.storageLayout),
+    memory: captureMemory(result),
     eventTimeline: result.events.map(captureEvent),
   };
 }
 
-function createMemoryIntegrationCapture(
-  durableMemory: NonNullable<BootstrapResearchRunResult["durableMemory"]>,
-): NonNullable<ResearchFlowCapture["memoryIntegration"]> {
+function captureContext(packet: ResearchContextPacketV2): ResearchContextCapture {
   return {
-    enabled: durableMemory.enabled,
-    ...(durableMemory.databasePath
-      ? { databasePath: durableMemory.databasePath }
-      : {}),
-    eventLogCount: durableMemory.eventLogCount,
-    recordCount: durableMemory.recordCount,
-    proofObligationCount: durableMemory.proofObligationCount,
-    proofAttemptCount: durableMemory.proofAttemptCount,
-    eventsAppended: durableMemory.eventsAppended,
-    recordsWritten: durableMemory.recordsWritten,
-    latestRetrievalCandidateCount: durableMemory.latestRetrievalCandidateCount,
-    usedMemoryDrivenController: durableMemory.usedMemoryDrivenController,
-    usedFirstRunFallback: durableMemory.usedFirstRunFallback,
-  };
-}
-
-function createStorageManifestCapture(
-  storageLayout: ResearchStorageLayout,
-): ResearchFlowCapture["storageManifest"] {
-  const manifest = loadResearchStorageManifest(storageLayout);
-
-  return {
-    path: getResearchStorageManifestPath(storageLayout),
-    artifactCount: manifest.artifacts.length,
-    artifacts: manifest.artifacts.map((artifact) => ({
-      id: artifact.id,
-      kind: artifact.kind,
-      purpose: artifact.purpose,
-      relativePath: artifact.relativePath,
-      sizeBytes: artifact.sizeBytes,
-      contentHash: artifact.contentHash,
-      sourceEventIds: artifact.sourceEventIds,
-    })),
-  };
-}
-
-function createLoopCapture(
-  loopResult: ResearchLoopProcessingResult,
-): ResearchFlowCapture["loop"] {
-  return {
-    planId: loopResult.loopPlanId,
-    resultId: loopResult.id,
-    status: loopResult.status,
-    executorName: loopResult.executorName,
-    executionMode: inferResearchLoopExecutionMode(loopResult),
-    outputText: loopResult.output.text,
-    followUpRecommendation: loopResult.followUpRecommendation,
-    followUpRationale: loopResult.followUpRationale,
-    ...(loopResult.output.nextPromptSuggestions
-      ? { nextPromptSuggestions: loopResult.output.nextPromptSuggestions }
-      : {}),
-    ...(loopResult.output.researchTrace
-      ? { researchTrace: loopResult.output.researchTrace }
-      : {}),
-    ...(loopResult.output.raw ? { raw: loopResult.output.raw } : {}),
-  };
-}
-
-function createContextCapture(
-  contextPacket: ResearchContextPacket,
-): ResearchFlowCapture["context"] {
-  return {
-    directEvidence: contextPacket.directEvidence,
-    priorObservations: contextPacket.priorObservations,
-    currentHypotheses: contextPacket.currentHypotheses,
-    currentFindings: contextPacket.currentFindings,
-    openQuestions: contextPacket.openQuestions,
-    userCommitments: contextPacket.userCommitments,
-    toolPermissions: contextPacket.toolPermissions,
-    toolBudget: contextPacket.toolBudget,
-    ...(contextPacket.governancePolicy
-      ? { governancePolicy: contextPacket.governancePolicy }
-      : {}),
-    selectedSkills: contextPacket.selectedSkills,
-    candidateToolActions: contextPacket.candidateToolActions,
-    skippedToolActions: contextPacket.skippedToolActions,
-    ...(contextPacket.workspaceContext
-      ? { workspaceContext: contextPacket.workspaceContext }
-      : {}),
-  };
-}
-
-function createContextV2Capture(
-  contextPacket: ResearchContextPacketV2,
-): NonNullable<ResearchFlowCapture["contextV2"]> {
-  return {
-    preconsciousCandidateCount: contextPacket.preconsciousCandidateCount,
-    tokenBudget: contextPacket.tokenBudget,
-    estimatedTokens: contextPacket.estimatedTokens,
-    compaction: contextPacket.compaction,
-    sections: contextPacket.sections.map((section) => ({
+    preconsciousCandidateCount: packet.preconsciousCandidateCount,
+    tokenBudget: packet.tokenBudget,
+    estimatedTokens: packet.estimatedTokens,
+    compaction: packet.compaction,
+    sections: packet.sections.map((section) => ({
       label: section.label,
       itemCount: section.items.length,
       tokenBudget: section.tokenBudget,
@@ -336,9 +204,27 @@ function createContextV2Capture(
   };
 }
 
-function createMemoryCapture(
-  memory: ResearchMemorySnapshot,
-): ResearchFlowCapture["memory"] {
+function captureStorage(
+  layout: ResearchStorageLayout,
+): ResearchAgentFlowCapture["storageManifest"] {
+  const manifest = loadResearchStorageManifest(layout);
+  return {
+    path: getResearchStorageManifestPath(layout),
+    artifactCount: manifest.artifacts.length,
+    artifacts: manifest.artifacts.map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      purpose: artifact.purpose,
+      relativePath: artifact.relativePath,
+      sizeBytes: artifact.sizeBytes,
+      contentHash: artifact.contentHash,
+      sourceEventIds: artifact.sourceEventIds,
+    })),
+  };
+}
+
+function captureMemory(result: RunResearchAgentResult): ResearchMemoryCapture {
+  const memory = result.memory;
   return {
     counts: {
       eventLog: memory.eventLog.length,
@@ -362,57 +248,13 @@ function createMemoryCapture(
 }
 
 function captureEvent(event: ResearchEvent): ResearchFlowEventCapture {
+  const payload = event.payload as Record<string, unknown>;
   return {
     id: event.id,
     kind: event.kind,
     timestamp: event.timestamp,
-    ...(event.goalId ? { goalId: event.goalId } : {}),
-    summary: summarizeEvent(event),
+    summary:
+      typeof payload.summary === "string" ? payload.summary : event.kind,
     payload: event.payload,
   };
-}
-
-function summarizeEvent(event: ResearchEvent): string {
-  const payload = event.payload;
-  if (isRecord(payload)) {
-    const summary = readString(payload, "summary");
-    if (summary) {
-      return truncate(summary, 700);
-    }
-
-    const text = readString(payload, "text");
-    if (text) {
-      return truncate(text, 700);
-    }
-
-    const objective = readString(payload, "objective");
-    if (objective) {
-      return truncate(objective, 700);
-    }
-  }
-
-  return truncate(event.kind, 700);
-}
-
-function readString(
-  payload: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = payload[key];
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function truncate(value: string, maxLength: number): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  if (compact.length <= maxLength) {
-    return compact;
-  }
-
-  return `${compact.slice(0, maxLength - 1)}...`;
 }

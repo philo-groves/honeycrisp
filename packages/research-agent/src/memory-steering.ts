@@ -182,7 +182,7 @@ export class MemorySteeringController {
       requireFindingStatus(input.findingStatus);
     }
     const event = this.appendEvent(
-      existing.kind === "finding" ? "finding.reviewed" : "memory.decision",
+      existing.kind === "finding" ? "finding.reviewed" : "memory.reviewed",
       {
         ...eventContext(input),
         payload: {

@@ -38,10 +38,10 @@ export type {
   AuthVerifyResult,
   FileCredentialStoreOptions,
 } from "./auth.js";
-export { bootstrapResearchRun } from "./bootstrap.js";
+export { runResearchAgent } from "./bootstrap.js";
 export type {
-  BootstrapResearchRunInput,
-  BootstrapResearchRunResult,
+  RunResearchAgentInput,
+  RunResearchAgentResult,
   ResearchDurableMemoryIntegrationOptions,
   ResearchDurableMemoryRunSummary,
 } from "./bootstrap.js";
@@ -92,11 +92,9 @@ export type {
   DefaultBuiltInToolFamilyOptions,
 } from "./built-in-tools.js";
 export {
-  compileContextPacket,
   createEmptyMemorySnapshot,
   normalizeMemorySnapshot,
 } from "./context-packet.js";
-export type { CompileContextPacketInput } from "./context-packet.js";
 export { compileContextPacketV2 } from "./context-packet-v2.js";
 export type {
   CompileContextPacketV2Input,
@@ -113,9 +111,11 @@ export {
   isResearchEventId,
   normalizeResearchEventSequence,
 } from "./ids.js";
-export { createResearchFlowCapture } from "./flow-capture.js";
+export {
+  createResearchAgentFlowCapture,
+} from "./flow-capture.js";
 export type {
-  ResearchFlowCapture,
+  ResearchAgentFlowCapture,
   ResearchFlowEventCapture,
 } from "./flow-capture.js";
 export {
@@ -130,7 +130,6 @@ export type {
   ResearchWorkspaceContextOverlay,
   WorkspaceRepositoryInput,
 } from "./workspace-context.js";
-export { createResearchGoalFrame } from "./goal.js";
 export {
   createResearchStorageLayout,
   ensureResearchStorageLayout,
@@ -150,15 +149,6 @@ export type {
   ResearchStorageArtifactManifest,
   ResearchStorageArtifactManifestEntry,
 } from "./storage.js";
-export {
-  advanceGoalRunState,
-  appendGoalContinuationToLoopPlan,
-  createGoalIteration,
-  createGoalRunState,
-  renderGoalContinuationPrompt,
-  shouldContinueGoal,
-  updateGoalFrameFromRunState,
-} from "./goal-runtime.js";
 export {
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
@@ -263,34 +253,13 @@ export type {
   MemoryInspectorOptions,
   RejectedMemoryEventInspection,
 } from "./memory-inspector.js";
-export { planResearchLoop } from "./loop-planner.js";
-export type { PlanResearchLoopInput } from "./loop-planner.js";
 export {
-  compileLoopModelInput,
-  createDeterministicLoopExecutor,
-  createPiAgentLoopExecutor,
-  createPiLoopExecutor,
-  inferResearchLoopExecutionMode,
-  processResearchLoop,
-} from "./loop-processor.js";
+  createDeterministicAgentExecutor,
+  createPiAgentExecutor,
+} from "./agent-executor.js";
 export type {
-  CreateDeterministicLoopExecutorOptions,
-  CreatePiAgentLoopExecutorOptions,
-  CreatePiLoopExecutorOptions,
-  ProcessResearchLoopInput,
-} from "./loop-processor.js";
-export {
-  createFirstRunMemoryController,
-  FirstRunMemoryController,
-} from "./memory-controller.js";
-export {
-  createMemoryDrivenController,
-  MemoryDrivenController,
-} from "./memory-controller-v2.js";
-export type {
-  MemoryDrivenControllerDecision,
-  MemoryDrivenControllerInput,
-} from "./memory-controller-v2.js";
+  CreatePiAgentExecutorOptions,
+} from "./agent-executor.js";
 export {
   computeMemoryEventPayloadHash,
   createMemorySnapshotFromEventLog,
@@ -329,15 +298,6 @@ export type {
   MemoryRetrievalResult,
   MemoryRetriever,
 } from "./memory-retriever.js";
-export {
-  applyMemoryReflection,
-  reflectOnLoopBoundary,
-  shouldReflectOnLoop,
-} from "./memory-reflection.js";
-export type {
-  MemoryReflectionInput,
-  MemoryReflectionResult,
-} from "./memory-reflection.js";
 export {
   createResearchMemoryProvenance,
   isResearchFindingStatus,
@@ -392,15 +352,9 @@ export {
   routeEventsToMemorySnapshot,
   routeEventToMemory,
 } from "./memory-routing.js";
-export { parseResearchPrompt } from "./prompt.js";
 export {
   createEmptyResearchTrace,
   createResearchTraceEvents,
-  createResearchTraceEventsFromLoopResult,
-  extractResearchTraceFromText,
-  normalizeResearchTrace,
-  renderResearchTraceContract,
-  stripResearchTraceFromText,
 } from "./research-trace.js";
 export {
   createResearchPiAgent,
@@ -422,15 +376,17 @@ export type {
 export type {
   ResearchAcceptedRawEventKind,
   ResearchActionClass,
-  ResearchActionScore,
+  ResearchAgentContextSection,
+  ResearchAgentExecutionInput,
+  ResearchAgentExecutionOutput,
+  ResearchAgentExecutor,
+  ResearchAgentModelInput,
+  ResearchAgentRunResult,
   ResearchArtifactRef,
   ResearchBaseMemoryRecord,
   ResearchBeliefMemoryRecord,
   ResearchClaimGraphEdge,
   ResearchClaimGraphRelationship,
-  ResearchCompletionGate,
-  ResearchContextPacketRef,
-  ResearchContextPacket,
   ResearchAgentStateReadModel,
   ResearchDerivedMemoryRecord,
   ResearchDerivedMemoryStatus,
@@ -442,22 +398,8 @@ export type {
   ResearchEvidenceLink,
   ResearchFindingMemoryRecord,
   ResearchFindingStatus,
-  ResearchGatePolarity,
   ResearchGovernancePolicy,
-  ResearchGoalFrame,
-  ResearchGoalFrameOptions,
-  ResearchGoalNode,
-  ResearchGoalAssessment,
-  ResearchGoalAssessmentStatus,
-  ResearchGoalRunIteration,
-  ResearchGoalRunOptions,
-  ResearchGoalRunResult,
-  ResearchGoalRunState,
-  ResearchGoalRunTerminalReason,
-  ResearchGoalStatus,
   ResearchHypothesisMemoryRecord,
-  ResearchMemoryControllerDecision,
-  ResearchMemoryControllerInput,
   ResearchMemoryDerivationKind,
   ResearchMemoryEvidenceRef,
   ResearchMemoryEvidenceRelationship,
@@ -484,7 +426,6 @@ export type {
   ResearchProofStateReadModel,
   ResearchProofSubjectKind,
   ResearchProofSubjectRef,
-  ResearchPromptFrame,
   ResearchProspectiveMemoryRecord,
   ResearchRawEventPayload,
   ResearchSemanticClaimRecord,
@@ -498,21 +439,9 @@ export type {
   ResearchWorkspaceRepositoryRole,
   ResearchWorkspaceStorageContext,
   ResearchContextUsageReadModel,
-  ResearchLoopPlan,
-  ResearchLoopContextSection,
-  ResearchLoopExecutionMode,
-  ResearchLoopExecutionInput,
-  ResearchLoopExecutionOutput,
-  ResearchLoopExecutor,
-  ResearchLoopFollowUpRecommendation,
   ResearchLiveEvent,
   ResearchLiveEventKind,
   ResearchLiveEventSink,
-  ResearchLoopModelInput,
-  ResearchLoopProcessingResult,
-  ResearchLoopProcessingStatus,
-  ResearchRequiredContextSection,
-  ResearchSubGoal,
   ResearchSkillDescriptor,
   ResearchToolBudget,
   ResearchToolAction,

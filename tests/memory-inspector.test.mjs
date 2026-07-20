@@ -5,12 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  compileContextPacketV2,
   createDeterministicMemoryWritePipeline,
-  createMemoryDrivenController,
   createMemoryInspector,
   createResearchEventId,
-  createResearchGoalFrame,
   createSqliteMemoryEventLog,
   createSqliteMemoryRecordStore,
   createSqliteProofStore,
@@ -112,91 +109,6 @@ test("memory inspector exposes a Beale-facing agent state read model", async () 
   assert.equal(state.proof.obligations.length, 1);
   assert.equal(state.proof.attempts[0]?.result, "pass");
   assert.equal(state.storage.artifacts[0]?.id, "artifact_state");
-
-  eventLog.close();
-  recordStore.close();
-  proofStore.close();
-});
-
-test("memory inspector exposes recall results, context selections, and controller explanations", async () => {
-  const { eventLog, recordStore, proofStore, inspector } =
-    await createInspectorFixture();
-  const goalFrame = createResearchGoalFrame(
-    "Goal: Inspect parser memory\nScope constraints: local only",
-  );
-  const retrieval = inspector.runRecallQuery({
-    activeGoal: goalFrame.root,
-    openQuestions: ["What parser memory is available?"],
-  });
-  const decision = createMemoryDrivenController().decide({
-    goalFrame,
-    retrieval,
-  });
-  const contextPacket = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: decision.subGoal,
-    retrieval,
-    tools: [],
-  });
-
-  assert.ok(inspector.showPreconsciousPacket(retrieval).candidateCount > 0);
-  assert.ok(
-    inspector
-      .showCompiledContextPacket(contextPacket)
-      .sections.some((section) => section.selectionReasons.length > 0),
-  );
-  assert.equal(
-    inspector.explainSelectedAction(decision).actionClass,
-    decision.actionClass,
-  );
-
-  eventLog.close();
-  recordStore.close();
-  proofStore.close();
-});
-
-test("memory inspector debug capture includes accepted, rejected, candidate, committed, retrieval, context, and decision data", async () => {
-  const { eventLog, recordStore, proofStore, inspector, records } =
-    await createInspectorFixture();
-  const goalFrame = createResearchGoalFrame(
-    "Goal: Capture inspectability debug output\nScope constraints: local only",
-  );
-  const retrieval = inspector.runRecallQuery({
-    activeGoal: goalFrame.root,
-    openQuestions: ["What should the debug output show?"],
-  });
-  const decision = createMemoryDrivenController().decide({
-    goalFrame,
-    retrieval,
-  });
-  const contextPacket = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: decision.subGoal,
-    retrieval,
-    tools: [],
-  });
-  const capture = inspector.captureDebug({
-    rejectedEvents: [
-      {
-        event: { kind: "model.private_thought" },
-        reason: "private thought-like event rejected",
-      },
-    ],
-    candidateWrites: records,
-    retrieval,
-    contextPacketV2: contextPacket,
-    decision,
-  });
-
-  assert.ok(capture.acceptedEvents.length > 0);
-  assert.equal(capture.rejectedEvents[0]?.reason, "private thought-like event rejected");
-  assert.ok(capture.candidateWrites.length > 0);
-  assert.ok(capture.committedWrites.length > 0);
-  assert.ok(capture.retrievalResults?.candidateCount);
-  assert.ok(capture.contextSelections?.sections.length);
-  assert.equal(capture.controllerDecision?.actionClass, decision.actionClass);
 
   eventLog.close();
   recordStore.close();

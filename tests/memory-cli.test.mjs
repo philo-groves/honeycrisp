@@ -37,8 +37,8 @@ test("main CLI supports deterministic mock mode without auth", async () => {
   );
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Loop result: complete via deterministic-first-run/);
-  assert.match(result.stdout, /Execution mode: deterministic/);
+  assert.match(result.stdout, /Deterministic agent fixture received:/);
+  assert.match(result.stdout, /Exercise deterministic mock mode/);
 });
 
 test("main CLI initializes the durable knowledge graph without treating run events as memory", async () => {

@@ -1,14 +1,3 @@
-export type ResearchGoalStatus =
-  | "pending"
-  | "active"
-  | "paused"
-  | "complete"
-  | "blocked"
-  | "stopped"
-  | "usage_limited"
-  | "budget_limited"
-  | "superseded";
-
 export type ResearchActionClass =
   | "recall"
   | "search"
@@ -19,8 +8,6 @@ export type ResearchActionClass =
   | "ask_user"
   | "respond"
   | "stop";
-
-export type ResearchGatePolarity = "success" | "failure" | "stop";
 
 export type ResearchMemoryStoreKind =
   | "event"
@@ -41,18 +28,15 @@ export type ResearchToolSideEffect =
   | "process";
 
 export type ResearchAcceptedRawEventKind =
-  | "goal.created"
-  | "goal.updated"
-  | "memory.decision"
   | "memory.routed"
+  | "memory.reviewed"
   | "context.compiled"
-  | "loop.planned"
-  | "loop.processed"
   | "artifact.updated"
   | "artifact.tombstoned"
   | "tool.requested"
   | "tool.observed"
   | "model.visible_note"
+  | "model.observation"
   | "model.claim"
   | "model.hypothesis"
   | "finding.proposed"
@@ -213,14 +197,6 @@ export interface ResearchMemoryProvenance {
 }
 
 export type ResearchRawEventPayload = unknown;
-
-export interface ResearchCompletionGate {
-  id: string;
-  description: string;
-  polarity: ResearchGatePolarity;
-  satisfied?: boolean;
-  evidenceEventIds?: readonly string[];
-}
 
 export interface ResearchMemoryRef {
   store: ResearchMemoryStoreKind;
@@ -492,8 +468,6 @@ export interface ResearchContextUsageReadModel {
 }
 
 export interface ResearchAgentStateReadModel {
-  goal?: ResearchGoalNode;
-  subGoals: readonly ResearchGoalNode[];
   latestContext?: ResearchContextPacketRef;
   memory: ResearchMemoryReadModel;
   proof: ResearchProofStateReadModel;
@@ -507,8 +481,6 @@ export interface ResearchContextPacketRef {
     | "event"
     | "memory_record"
     | "artifact"
-    | "goal"
-    | "sub_goal"
     | "context_section";
   summary: string;
   sourceEventIds?: readonly string[];
@@ -559,23 +531,6 @@ export interface ResearchEvidenceLink {
   note?: string;
 }
 
-export type ResearchGoalAssessmentStatus =
-  | "continue"
-  | "ready_to_respond"
-  | "complete"
-  | "blocked"
-  | "stopped";
-
-export interface ResearchGoalAssessment {
-  status: ResearchGoalAssessmentStatus;
-  rationale: string;
-  satisfiedGateIds?: readonly string[];
-  unsatisfiedGateIds?: readonly string[];
-  triggeredStopGateIds?: readonly string[];
-  blockerKey?: string;
-  evidenceRefIds?: readonly string[];
-}
-
 export interface ResearchTrace {
   observations: readonly ResearchTraceItem[];
   inferences: readonly ResearchTraceItem[];
@@ -585,55 +540,6 @@ export interface ResearchTrace {
   uncertainty: readonly ResearchTraceItem[];
   nextQuestions: readonly ResearchTraceItem[];
   evidenceLinks: readonly ResearchEvidenceLink[];
-  goalAssessment: ResearchGoalAssessment;
-}
-
-export interface ResearchGoalNode {
-  id: string;
-  parentId?: string;
-  status: ResearchGoalStatus;
-  objective: string;
-  rationale?: string;
-  completionGates: readonly ResearchCompletionGate[];
-  stopGates: readonly ResearchCompletionGate[];
-  actionClass?: ResearchActionClass;
-  memoryRefs: readonly ResearchMemoryRef[];
-  expectedArtifacts: readonly string[];
-  resultSummary?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ResearchPromptFrame {
-  rawPrompt: string;
-  normalizedPrompt: string;
-  rootGoal: string;
-  successGates: readonly string[];
-  failureOrStopGates: readonly string[];
-  scopeConstraints: readonly string[];
-  userPreferences: readonly string[];
-  evidenceRequirements: readonly string[];
-  initialRiskFlags: readonly string[];
-}
-
-export interface ResearchGoalFrame {
-  prompt: ResearchPromptFrame;
-  root: ResearchGoalNode;
-  nodes: readonly ResearchGoalNode[];
-  scopeConstraints: readonly string[];
-  evidenceRequirements: readonly string[];
-  riskFlags: readonly string[];
-  userPreferences: readonly string[];
-}
-
-export interface ResearchGoalFrameOptions {
-  rootGoal?: string;
-  successGates?: readonly string[];
-  failureOrStopGates?: readonly string[];
-  scopeConstraints?: readonly string[];
-  evidenceRequirements?: readonly string[];
-  initialRiskFlags?: readonly string[];
-  userPreferences?: readonly string[];
 }
 
 export interface ResearchToolDescriptor {
@@ -723,16 +629,6 @@ export interface ResearchSkippedToolAction {
   reason: string;
 }
 
-export interface ResearchSubGoal {
-  id: string;
-  parentGoalId: string;
-  objective: string;
-  rationale: string;
-  actionClass: ResearchActionClass;
-  completionGates: readonly ResearchCompletionGate[];
-  expectedArtifacts: readonly string[];
-}
-
 export interface ResearchMemorySnapshot {
   eventLog: readonly ResearchEvent[];
   directEvidence: readonly ResearchMemoryRef[];
@@ -757,84 +653,6 @@ export interface ResearchGovernancePolicy {
   maxFiles?: number;
   maxBytes?: number;
   maxTokens?: number;
-}
-
-export interface ResearchActionScore {
-  actionClass: ResearchActionClass;
-  score: number;
-  rationale: string;
-}
-
-export interface ResearchContextPacket {
-  goalFrame: ResearchGoalFrame;
-  activeGoal: ResearchGoalNode;
-  activeSubGoal: ResearchSubGoal;
-  workspaceContext?: ResearchWorkspaceContext;
-  directEvidence: readonly ResearchMemoryRef[];
-  priorObservations: readonly ResearchMemoryRef[];
-  candidateProcedures: readonly ResearchMemoryRef[];
-  currentHypotheses: readonly ResearchMemoryRef[];
-  currentFindings: readonly ResearchMemoryRef[];
-  contradictions: readonly ResearchMemoryRef[];
-  openQuestions: readonly string[];
-  userCommitments: readonly string[];
-  toolPermissions: readonly ResearchToolPermission[];
-  toolBudget: ResearchToolBudget;
-  governancePolicy?: ResearchGovernancePolicy;
-  selectedSkills: readonly ResearchSelectedSkill[];
-  candidateToolActions: readonly ResearchToolAction[];
-  skippedToolActions: readonly ResearchSkippedToolAction[];
-  writebackExpectations: readonly ResearchMemoryStoreKind[];
-}
-
-export interface ResearchMemoryControllerInput {
-  goalFrame: ResearchGoalFrame;
-  activeGoal?: ResearchGoalNode;
-  workspaceContext?: ResearchWorkspaceContext;
-  memory?: Partial<ResearchMemorySnapshot>;
-  tools?: readonly ResearchToolDescriptor[];
-  skills?: readonly ResearchSkillDescriptor[];
-  selectedSkillIds?: readonly string[];
-  governance?: ResearchGovernancePolicy;
-  events?: readonly ResearchEvent[];
-}
-
-export interface ResearchMemoryControllerDecision {
-  subGoal: ResearchSubGoal;
-  actionClass: ResearchActionClass;
-  rationale: string;
-  actionScores: readonly ResearchActionScore[];
-  selectedSkills: readonly ResearchSelectedSkill[];
-  candidateToolActions: readonly ResearchToolAction[];
-  skippedToolActions: readonly ResearchSkippedToolAction[];
-  contextPacket: ResearchContextPacket;
-  toolBudget: ResearchToolBudget;
-  completionGates: readonly ResearchCompletionGate[];
-  writeback: readonly ResearchMemoryStoreKind[];
-}
-
-export interface ResearchRequiredContextSection {
-  label:
-    | "goal_frame"
-    | "active_sub_goal"
-    | "workspace_context"
-    | "storage"
-    | "direct_evidence"
-    | "avoid_repeated_targets"
-    | "prior_observations"
-    | "candidate_procedures"
-    | "current_hypotheses"
-    | "current_findings"
-    | "contradictions"
-    | "open_questions"
-    | "user_commitments"
-    | "selected_skills"
-    | "tool_permissions"
-    | "candidate_tool_actions"
-    | "skipped_tool_actions";
-  description: string;
-  itemCount: number;
-  required: boolean;
 }
 
 export type ResearchStorageDirectoryName =
@@ -862,80 +680,52 @@ export interface ResearchStorageLayout {
   rules: readonly string[];
 }
 
-export interface ResearchLoopPlan {
-  id: string;
-  rootGoalId: string;
-  subGoal: ResearchSubGoal;
-  reason: string;
-  requiredContext: readonly ResearchRequiredContextSection[];
-  permittedToolClasses: readonly ResearchActionClass[];
-  actionBudget: ResearchToolBudget;
-  governancePolicy?: ResearchGovernancePolicy;
-  candidateToolActions: readonly ResearchToolAction[];
-  skippedToolActions: readonly ResearchSkippedToolAction[];
-  expectedArtifacts: readonly string[];
-  completionGates: readonly ResearchCompletionGate[];
-  writebackRequirements: readonly ResearchMemoryStoreKind[];
-  contextPacket: ResearchContextPacket;
-  loopPrompt: string;
-}
-
-export type ResearchLoopProcessingStatus = "complete" | "blocked" | "error";
-
-export type ResearchLoopExecutionMode = "deterministic" | "model" | "custom";
-
-export type ResearchLoopFollowUpRecommendation =
-  | "continue_branch"
-  | "create_sibling"
-  | "refine_goal_tree"
-  | "respond"
-  | "blocked";
-
-export interface ResearchLoopContextSection {
-  label: ResearchRequiredContextSection["label"];
-  required: boolean;
-  content: unknown;
-}
-
-export interface ResearchLoopModelInput {
-  loopPrompt: string;
-  contextSections: readonly ResearchLoopContextSection[];
-  permittedToolClasses: readonly ResearchActionClass[];
-  toolBudget: ResearchToolBudget;
-  storageLayout: ResearchStorageLayout;
-}
-
-export interface ResearchLoopExecutionInput {
-  loopPlan: ResearchLoopPlan;
-  modelInput: ResearchLoopModelInput;
-  storageLayout: ResearchStorageLayout;
-  eventSink?: ResearchLiveEventSink;
-  signal?: AbortSignal;
-}
-
 export interface ResearchNextPromptSuggestion {
   title: string;
   promptMarkdown: string;
   rationale?: string;
 }
 
-export interface ResearchLoopExecutionOutput {
+export interface ResearchAgentContextSection {
+  label: string;
+  content: unknown;
+}
+
+export interface ResearchAgentModelInput {
+  prompt: string;
+  contextSections: readonly ResearchAgentContextSection[];
+  toolBudget: ResearchToolBudget;
+  storageLayout: ResearchStorageLayout;
+}
+
+export interface ResearchAgentExecutionInput {
+  modelInput: ResearchAgentModelInput;
+  governance?: ResearchGovernancePolicy;
+  eventSink?: ResearchLiveEventSink;
+  signal?: AbortSignal;
+}
+
+export interface ResearchAgentExecutionOutput {
   text: string;
-  artifacts: readonly string[];
-  evidenceRefs: readonly ResearchMemoryRef[];
-  claimRefs: readonly ResearchMemoryRef[];
-  followUpActions: readonly string[];
   nextPromptSuggestions?: readonly ResearchNextPromptSuggestion[];
   toolEvents?: readonly ResearchEvent[];
   researchTrace?: ResearchTrace;
   raw?: unknown;
 }
 
-export interface ResearchLoopExecutor {
+export interface ResearchAgentExecutor {
   name: string;
-  execute(
-    input: ResearchLoopExecutionInput,
-  ): Promise<ResearchLoopExecutionOutput>;
+  execute(input: ResearchAgentExecutionInput): Promise<ResearchAgentExecutionOutput>;
+}
+
+export interface ResearchAgentRunResult {
+  id: string;
+  status: "complete" | "error";
+  executorName: string;
+  startedAt: string;
+  completedAt: string;
+  modelInput: ResearchAgentModelInput;
+  output: ResearchAgentExecutionOutput;
 }
 
 export type ResearchLiveEventKind =
@@ -955,72 +745,3 @@ export interface ResearchLiveEvent {
 export type ResearchLiveEventSink = (
   event: ResearchLiveEvent,
 ) => void | Promise<void>;
-
-export interface ResearchCompletionGateResult {
-  gateId: string;
-  description: string;
-  satisfied: boolean;
-  evidence?: string;
-}
-
-export interface ResearchLoopProcessingResult {
-  id: string;
-  loopPlanId: string;
-  subGoalId: string;
-  status: ResearchLoopProcessingStatus;
-  executorName: string;
-  startedAt: string;
-  completedAt: string;
-  modelInput: ResearchLoopModelInput;
-  output: ResearchLoopExecutionOutput;
-  completionGateResults: readonly ResearchCompletionGateResult[];
-  followUpRecommendation: ResearchLoopFollowUpRecommendation;
-  followUpRationale: string;
-}
-
-export type ResearchGoalRunTerminalReason =
-  | "complete"
-  | "blocked"
-  | "stop_gate"
-  | "ready_to_respond"
-  | "loop_limit"
-  | "safety_limit";
-
-export interface ResearchGoalRunOptions {
-  maxLoops?: number | null;
-  safetyMaxLoops?: number;
-  minLoopsBeforeRespond?: number;
-  blockedThreshold?: number;
-}
-
-export interface ResearchGoalRunState {
-  goalId: string;
-  objective: string;
-  status: ResearchGoalStatus;
-  startedAt: string;
-  updatedAt: string;
-  loopsUsed: number;
-  maxLoops: number | null;
-  safetyMaxLoops: number;
-  minLoopsBeforeRespond: number;
-  blockedThreshold: number;
-  consecutiveBlockedCount: number;
-  lastBlockerKey?: string;
-  terminalReason?: ResearchGoalRunTerminalReason;
-  statusReason?: string;
-}
-
-export interface ResearchGoalRunIteration {
-  index: number;
-  decision: ResearchMemoryControllerDecision;
-  loopPlan: ResearchLoopPlan;
-  loopResult: ResearchLoopProcessingResult;
-  statusBefore: ResearchGoalStatus;
-  statusAfter: ResearchGoalStatus;
-  continuationReason: string;
-}
-
-export interface ResearchGoalRunResult {
-  state: ResearchGoalRunState;
-  iterations: readonly ResearchGoalRunIteration[];
-}

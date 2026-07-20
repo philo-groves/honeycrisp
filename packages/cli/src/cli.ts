@@ -5,24 +5,20 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { HoneycrispControlStream } from "./control-stream.js";
 import {
-  bootstrapResearchRun,
-  compileContextPacketV2,
+  runResearchAgent,
   createAnalysisTool,
   createCodeIntelligenceTools,
   createConfiguredResearchMcpClient,
   createConfiguredExperimentTool,
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
-  createDeterministicLoopExecutor,
-  createMemoryDrivenController,
+  createDeterministicAgentExecutor,
   createMemoryGraphTools,
   createMemoryInspector,
   createMemorySteeringController,
-  createPiAgentLoopExecutor,
-  createPiLoopExecutor,
+  createPiAgentExecutor,
   createRepositorySearchTool,
-  createResearchFlowCapture,
-  createResearchGoalFrame,
+  createResearchAgentFlowCapture,
   createResearchStorageLayout,
   createDeterministicMemoryWritePipeline,
   createResearchToolRegistry,
@@ -75,7 +71,7 @@ import type {
   ResearchExecutableTool,
   ResearchGovernancePolicy,
   ResearchLiveEventSink,
-  ResearchLoopExecutor,
+  ResearchAgentExecutor,
   ResearchMemorySnapshot,
   ResearchModelConfigPreference,
   MemoryNodeStatus,
@@ -103,7 +99,7 @@ type ToolFamily =
   | "storage"
   | "experiment";
 
-type CliExecutorKind = "complete-simple" | "agent";
+type CliExecutorKind = "agent";
 type CliToolExecutionMode = "sequential" | "parallel";
 
 interface RuntimeToolConfig {
@@ -176,7 +172,6 @@ interface ParsedArgs {
   eventStream: boolean;
   controlStream: boolean;
   workspaceRoot: string;
-  goalLoops: number | null | undefined;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -198,7 +193,6 @@ interface ParsedMemoryArgs {
   command: string | undefined;
   workspaceRoot: string;
   positionals: string[];
-  goal: string | undefined;
   questions: string[];
   limit: number | undefined;
   summary: string | undefined;
@@ -211,9 +205,6 @@ interface ParsedMemoryArgs {
   findingStatus: string | undefined;
   supersededByRecordId: string | undefined;
   confidence: number | undefined;
-  goalId: string | undefined;
-  loopId: string | undefined;
-  subGoalId: string | undefined;
   question: string | undefined;
   methodKind: string | undefined;
   methodName: string | undefined;
@@ -250,7 +241,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let configPath: string | undefined;
   let provider: string | undefined;
   let model: string | undefined;
-  let executor: CliExecutorKind = "complete-simple";
+  let executor: CliExecutorKind = "agent";
   let toolExecution: CliToolExecutionMode | undefined;
   let maxTokens: number | undefined;
   let reasoning: ParsedArgs["reasoning"];
@@ -260,7 +251,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let eventStream = false;
   let controlStream = false;
   let workspaceRoot = process.cwd();
-  let goalLoops: number | null | undefined;
   const toolFamilies: ToolFamily[] = [];
   const disabledToolFamilies: ToolFamily[] = [];
   const repoRoots: string[] = [];
@@ -438,9 +428,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--workspace-root") {
       workspaceRoot = readOptionValue(argv, index, arg);
       index += 1;
-    } else if (arg === "--goal-loops") {
-      goalLoops = parseGoalLoops(readOptionValue(argv, index, arg));
-      index += 1;
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "-h" || arg === "--help") {
@@ -505,7 +492,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     eventStream,
     controlStream,
     workspaceRoot,
-    goalLoops,
     json,
     help,
     version,
@@ -516,7 +502,6 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
   const firstArg = argv[0];
   const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
   let workspaceRoot = process.cwd();
-  let goal: string | undefined;
   let limit: number | undefined;
   let summary: string | undefined;
   let body: string | undefined;
@@ -525,9 +510,6 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
   let findingStatus: string | undefined;
   let supersededByRecordId: string | undefined;
   let confidence: number | undefined;
-  let goalId: string | undefined;
-  let loopId: string | undefined;
-  let subGoalId: string | undefined;
   let question: string | undefined;
   let methodKind: string | undefined;
   let methodName: string | undefined;
@@ -554,9 +536,6 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
 
     if (arg === "--workspace-root") {
       workspaceRoot = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--goal" || arg === "--prompt") {
-      goal = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--question") {
       const value = readOptionValue(argv, index, arg);
@@ -604,15 +583,6 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
         throw new Error("--confidence requires a number from 0 to 1.");
       }
       confidence = value;
-      index += 1;
-    } else if (arg === "--goal-id") {
-      goalId = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--loop-id") {
-      loopId = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--sub-goal-id") {
-      subGoalId = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--question") {
       question = readOptionValue(argv, index, arg);
@@ -668,7 +638,6 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
     command,
     workspaceRoot,
     positionals,
-    goal,
     questions,
     limit,
     summary,
@@ -681,9 +650,6 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
     findingStatus,
     supersededByRecordId,
     confidence,
-    goalId,
-    loopId,
-    subGoalId,
     question,
     methodKind,
     methodName,
@@ -973,25 +939,12 @@ function parseInspectionAction(value: string): LocalInspectionAction {
   throw new Error("--inspect-action must be one of list, read_text.");
 }
 
-function parseGoalLoops(value: string): number | null {
-  if (value === "none" || value === "unbounded") {
-    return null;
-  }
-
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error("--goal-loops requires a positive integer, none, or unbounded.");
-  }
-
-  return parsed;
-}
-
 function parseExecutor(value: string): CliExecutorKind {
-  if (value === "complete-simple" || value === "agent") {
+  if (value === "agent") {
     return value;
   }
 
-  throw new Error("--executor must be one of complete-simple, agent.");
+  throw new Error("--executor must be agent.");
 }
 
 function parseToolExecutionMode(value: string): CliToolExecutionMode {
@@ -1093,7 +1046,7 @@ function usage(): string {
     "       honeycrisp memory <command> [options]",
     "",
     "Options:",
-    "  -p, --prompt <prompt>  Research prompt to turn into a root goal",
+    "  -p, --prompt <prompt>  Research request for the agent",
     "  --success <gate>       Add a success/completion gate",
     "  --stop <gate>          Add a failure or stop gate",
     "  --scope <constraint>   Add a scope constraint",
@@ -1105,13 +1058,13 @@ function usage(): string {
     "                         Defaults to .honeycrisp/config.json under --workspace-root when present",
     "  --provider <provider>  Override configured/default provider for real mode",
     "  --model <model>        Override configured/default model for real mode",
-    "  --executor <kind>      complete-simple or agent (default: complete-simple)",
+    "  --executor <kind>      agent (default: agent)",
     "  --max-tokens <n>       Max output tokens for real mode",
     "  --effort <level>       Model effort for real mode: minimal, low, medium, high, xhigh",
     "  --reasoning <level>    Alias for --effort",
     "  --tool-execution <m>   Agent tool execution mode: sequential or parallel",
     "  --inspect-root <path>  Allow a local root for read-only inspection",
-    "  --inspect-path <path>  Inspect a local path before the loop",
+    "  --inspect-path <path>  Make a local path available for inspection",
     "  --inspect-action <a>   Inspection action: read_text or list",
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
     "  --tool-family <name>   Enable local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
@@ -1139,7 +1092,6 @@ function usage(): string {
     "  --event-stream         Write prefixed live JSON events to stdout",
     "  --control-stream       Read host control JSONL from stdin",
     "  --workspace-root <p>   Workspace root for durable runtime memory",
-    "  --goal-loops <n|none>  Max loops, or none for no configured loop limit",
     "  --json                 Print the initialized run as JSON",
     "  -h, --help             Show help",
     "  -v, --version          Show version",
@@ -1229,13 +1181,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     controlStream?.start();
     try {
       let modelConfig: ResolvedResearchModelConfig | undefined;
-      const loopExecutor = args.mock
-        ? createDeterministicLoopExecutor(
-            runtimeConfig.toolRegistry
-              ? { toolRegistry: runtimeConfig.toolRegistry }
-              : {},
-          )
-        : createRealLoopExecutor(
+      const agentExecutor = args.mock
+        ? createDeterministicAgentExecutor()
+        : createRealAgentExecutor(
             args,
             runtimeConfig.toolRegistry,
             (modelConfig = await resolveResearchModelConfig({
@@ -1256,15 +1204,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
             }
           : {};
 
-      const result = await bootstrapResearchRun({
+      const result = await runResearchAgent({
         prompt: args.prompt,
         workspaceRoot: args.workspaceRoot,
-        successGates: args.successGates,
-        failureOrStopGates: args.failureOrStopGates,
-        scopeConstraints: args.scopeConstraints,
-        evidenceRequirements: args.evidenceRequirements,
-        initialRiskFlags: args.initialRiskFlags,
-        userPreferences: args.userPreferences,
         workspaceContext: runtimeConfig.workspaceContext,
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
@@ -1273,11 +1215,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           ? { selectedSkillIds: runtimeConfig.runtimeTools.selectedSkillIds }
           : {}),
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
-        loopExecutor,
+        executor: agentExecutor,
         ...(liveEventSink ? { eventSink: liveEventSink } : {}),
-        ...(args.goalLoops !== undefined
-          ? { goalRun: { maxLoops: args.goalLoops } }
-          : {}),
       });
 
       if (args.capturePath) {
@@ -1313,12 +1252,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
   }
 }
 
-function createRealLoopExecutor(
+function createRealAgentExecutor(
   args: ParsedArgs,
   toolRegistry: ResearchToolRegistry | undefined,
   modelConfig: ResolvedResearchModelConfig,
   controlStream: HoneycrispControlStream | undefined,
-): ResearchLoopExecutor {
+): ResearchAgentExecutor {
   const executorInput = {
     provider: modelConfig.provider,
     model: modelConfig.model,
@@ -1327,22 +1266,20 @@ function createRealLoopExecutor(
     ...(toolRegistry ? { toolRegistry } : {}),
   };
 
-  return args.executor === "agent"
-    ? createPiAgentLoopExecutor({
-        ...executorInput,
-        ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
-        ...(controlStream
-          ? {
-              getSteeringMessages: async () =>
-                (await controlStream.takeSteeringInstructions()).map((instruction) => ({
-                  role: "user" as const,
-                  content: `User steering for the active research run:\n\n${instruction}`,
-                  timestamp: Date.now(),
-                })),
-            }
-          : {}),
-      })
-    : createPiLoopExecutor(executorInput);
+  return createPiAgentExecutor({
+    ...executorInput,
+    ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
+    ...(controlStream
+      ? {
+          getSteeringMessages: async () =>
+            (await controlStream.takeSteeringInstructions()).map((instruction) => ({
+              role: "user" as const,
+              content: `User steering for the active research run:\n\n${instruction}`,
+              timestamp: Date.now(),
+            })),
+        }
+      : {}),
+  });
 }
 
 function createModelConfigCapture(
@@ -2468,9 +2405,6 @@ function handleMemorySteeringCommand(
 
 function memorySteeringContext(args: ParsedMemoryArgs) {
   return {
-    ...(args.goalId ? { goalId: args.goalId } : {}),
-    ...(args.loopId ? { loopId: args.loopId } : {}),
-    ...(args.subGoalId ? { subGoalId: args.subGoalId } : {}),
     ...(args.summary ? { note: args.summary } : {}),
   };
 }
@@ -2574,44 +2508,6 @@ function requireMemoryPositional(
   }
 
   return value;
-}
-
-function createRecallInspection(
-  args: ParsedMemoryArgs,
-  inspector: ReturnType<typeof createMemoryInspector>,
-) {
-  const goalFrame = createResearchGoalFrame(
-    args.goal ?? "Goal: Inspect durable memory",
-  );
-  const retrieval = inspector.runRecallQuery({
-    activeGoal: goalFrame.root,
-    openQuestions: args.questions,
-    ...(args.limit ? { limit: args.limit } : {}),
-  });
-
-  return { goalFrame, retrieval };
-}
-
-function createDecisionInspection(
-  args: ParsedMemoryArgs,
-  inspector: ReturnType<typeof createMemoryInspector>,
-) {
-  const { goalFrame, retrieval } = createRecallInspection(args, inspector);
-  const decision = createMemoryDrivenController().decide({
-    goalFrame,
-    retrieval,
-  });
-  const proofState = inspector.showProofState();
-  const contextPacket = compileContextPacketV2({
-    goalFrame,
-    activeGoal: goalFrame.root,
-    activeSubGoal: decision.subGoal,
-    retrieval,
-    proofState,
-    tools: [],
-  });
-
-  return { goalFrame, retrieval, decision, contextPacket, proofState };
 }
 
 function printMemoryOutput<T>(
@@ -2737,20 +2633,6 @@ function renderContextSelections(
           `selected=${section.selectedRecordIds.join(",") || "-"}`,
         ].join("\t"),
       ),
-  ].join("\n");
-}
-
-function renderDecisionExplanation(
-  decision: ReturnType<
-    ReturnType<typeof createMemoryInspector>["explainSelectedAction"]
-  >,
-): string {
-  return [
-    `Action: ${decision.actionClass}`,
-    `Subgoal: ${decision.subGoalObjective}`,
-    `Rationale: ${decision.rationale}`,
-    `Supporting records: ${decision.supportingRecordIds.join(", ") || "-"}`,
-    `Warnings: ${decision.warnings.join(", ") || "-"}`,
   ].join("\n");
 }
 
@@ -3456,12 +3338,12 @@ function repositorySearchRootsFromWorkspaceContext(
 
 async function writeFlowCapture(
   capturePath: string,
-  result: Awaited<ReturnType<typeof bootstrapResearchRun>>,
+  result: Awaited<ReturnType<typeof runResearchAgent>>,
   runtimeConfig?: Record<string, unknown>,
 ): Promise<string> {
   const absolutePath = resolve(capturePath);
   await mkdir(dirname(absolutePath), { recursive: true });
-  const capture = createResearchFlowCapture(result);
+  const capture = createResearchAgentFlowCapture(result);
   await writeFile(
     absolutePath,
     `${JSON.stringify(

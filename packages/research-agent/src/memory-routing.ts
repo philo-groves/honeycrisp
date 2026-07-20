@@ -15,18 +15,15 @@ import type {
 } from "./types.js";
 
 export const ACCEPTED_RAW_EVENT_KINDS = [
-  "goal.created",
-  "goal.updated",
-  "memory.decision",
   "memory.routed",
+  "memory.reviewed",
   "context.compiled",
-  "loop.planned",
-  "loop.processed",
   "artifact.updated",
   "artifact.tombstoned",
   "tool.requested",
   "tool.observed",
   "model.visible_note",
+  "model.observation",
   "model.claim",
   "model.hypothesis",
   "finding.proposed",

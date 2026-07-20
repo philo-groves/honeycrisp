@@ -37,19 +37,6 @@ export class DeterministicMemoryWritePipeline implements MemoryWritePipeline {
     switch (event.kind) {
       case "tool.observed":
         return [createToolObservationRecord(event)];
-      case "goal.created":
-      case "goal.updated":
-        return [createGoalEpisodeRecord(event)];
-      case "memory.decision":
-        return [
-          createEpisodeRecord(event, {
-            episodeKind: "memory_decision",
-            summary: summarizeMemoryEvent(event),
-            status: "active",
-            confidence: 0.8,
-            tags: ["memory-decision"],
-          }),
-        ];
       case "memory.routed":
         return [
           createWorkingRecord(event, {
@@ -58,32 +45,22 @@ export class DeterministicMemoryWritePipeline implements MemoryWritePipeline {
             tags: ["memory-routing"],
           }),
         ];
+      case "memory.reviewed":
+        return [
+          createEpisodeRecord(event, {
+            episodeKind: "memory_decision",
+            summary: summarizeMemoryEvent(event),
+            status: "confirmed",
+            confidence: 0.85,
+            tags: ["memory-review"],
+          }),
+        ];
       case "context.compiled":
         return [
           createWorkingRecord(event, {
             summary: summarizeMemoryEvent(event),
             confidence: 0.7,
             tags: ["context-reference"],
-          }),
-        ];
-      case "loop.planned":
-        return [
-          createEpisodeRecord(event, {
-            episodeKind: "loop_plan",
-            summary: summarizeMemoryEvent(event),
-            status: "active",
-            confidence: 0.75,
-            tags: ["loop-plan"],
-          }),
-        ];
-      case "loop.processed":
-        return [
-          createEpisodeRecord(event, {
-            episodeKind: "loop_result",
-            summary: summarizeMemoryEvent(event),
-            status: isTerminalLoopResult(event) ? "confirmed" : "active",
-            confidence: 0.85,
-            tags: ["loop-result"],
           }),
         ];
       case "artifact.updated":
@@ -111,6 +88,7 @@ export class DeterministicMemoryWritePipeline implements MemoryWritePipeline {
           }),
         ];
       case "model.visible_note":
+      case "model.observation":
         return createVisibleNoteRecords(event);
       case "model.claim":
         return [createSemanticClaimRecord(event)];
@@ -214,18 +192,6 @@ function createToolObservationRecord(
       ...(event.payloadHash ? { payloadHash: event.payloadHash } : {}),
     },
   };
-}
-
-function createGoalEpisodeRecord(
-  event: ResearchEvent,
-): ResearchEpisodicMemoryRecord {
-  return createEpisodeRecord(event, {
-    episodeKind: "goal_transition",
-    summary: summarizeMemoryEvent(event),
-    status: isTerminalGoalTransition(event) ? "confirmed" : "active",
-    confidence: 0.85,
-    tags: ["goal-transition"],
-  });
 }
 
 function createEpisodeRecord(
@@ -433,7 +399,7 @@ function createProspectiveCommitmentRecord(
     summarizeMemoryEvent(event);
   const trigger =
     readFirstString(payload, ["trigger"]) ??
-    "Carry forward whenever this user's constraints affect the active goal.";
+    "Carry forward whenever this user's constraints affect the active request.";
 
   return {
     ...createBaseRecord(event, {
@@ -601,26 +567,6 @@ function createSourceEventEvidenceRef(
     summary,
     confidence,
   };
-}
-
-function isTerminalGoalTransition(event: ResearchEvent): boolean {
-  if (!isRecord(event.payload)) {
-    return false;
-  }
-
-  const statusAfter = readFirstString(event.payload, ["statusAfter", "status"]);
-
-  return statusAfter === "complete" || statusAfter === "stopped";
-}
-
-function isTerminalLoopResult(event: ResearchEvent): boolean {
-  if (!isRecord(event.payload)) {
-    return false;
-  }
-
-  const status = readFirstString(event.payload, ["status"]);
-
-  return status === "complete" || status === "blocked" || status === "error";
 }
 
 function createTags(

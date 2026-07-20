@@ -2,7 +2,7 @@
   "name": "honeycrisp-workspace",
   "version": "0.1.0",
   "private": true,
-  "description": "Goal-oriented research agent workspace.",
+  "description": "Autonomous research agent workspace.",
   "type": "module",
   "workspaces": [
     "packages/*"

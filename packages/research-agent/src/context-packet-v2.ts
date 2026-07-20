@@ -2,23 +2,14 @@ import type {
   MemoryRetrievalCandidate,
   MemoryRetrievalResult,
 } from "./memory-retriever.js";
-import {
-  addPriorGoalContextWarning,
-  candidateBelongsToGoal,
-  goalObjectiveNeedsFreshEvidence,
-  isPriorGoalCandidate,
-} from "./goal-evidence-policy.js";
 import type {
   ResearchActionClass,
   ResearchDerivedMemoryRecord,
   ResearchGovernancePolicy,
-  ResearchGoalFrame,
-  ResearchGoalNode,
   ResearchMemoryStoreKind,
   ResearchProofAttempt,
   ResearchProofObligation,
   ResearchProofStateReadModel,
-  ResearchSubGoal,
   ResearchToolBudget,
   ResearchToolDescriptor,
   ResearchToolPermission,
@@ -81,9 +72,7 @@ export interface ResearchContextPacketV2Section {
 
 export interface ResearchContextPacketV2 {
   schemaVersion: 2;
-  goalFrame: ResearchGoalFrame;
-  activeGoal: ResearchGoalNode;
-  activeSubGoal: ResearchSubGoal;
+  prompt?: string;
   workspaceContext?: ResearchWorkspaceContext;
   actionClass?: ResearchActionClass;
   preconsciousCandidateCount: number;
@@ -106,9 +95,7 @@ export interface ResearchContextPacketV2 {
 }
 
 export interface CompileContextPacketV2Input {
-  goalFrame: ResearchGoalFrame;
-  activeGoal: ResearchGoalNode;
-  activeSubGoal: ResearchSubGoal;
+  prompt?: string;
   workspaceContext?: ResearchWorkspaceContext;
   retrieval: MemoryRetrievalResult;
   proofState?: ResearchProofStateReadModel;
@@ -145,24 +132,10 @@ export function compileContextPacketV2(
     ...DEFAULT_SECTION_TOKEN_BUDGETS,
     ...(input.sectionTokenBudgets ?? {}),
   };
-  const requiresCurrentEvidence =
-    input.actionClass === "inspect" &&
-    goalObjectiveNeedsFreshEvidence(input.activeGoal.objective);
-  const directEvidenceCandidates = requiresCurrentEvidence
-    ? input.retrieval.directEvidence.filter((candidate) =>
-        candidateBelongsToGoal(candidate, input.activeGoal),
-      )
-    : input.retrieval.directEvidence;
-  const priorEpisodeCandidates = [
-    ...(requiresCurrentEvidence
-      ? input.retrieval.directEvidence
-          .filter((candidate) => isPriorGoalCandidate(candidate, input.activeGoal))
-          .map(addPriorGoalContextWarning)
-      : []),
-    ...input.retrieval.candidates.filter((candidate) =>
-      isPriorEpisodeCandidate(candidate),
-    ),
-  ];
+  const directEvidenceCandidates = input.retrieval.directEvidence;
+  const priorEpisodeCandidates = input.retrieval.candidates.filter(
+    (candidate) => isPriorEpisodeCandidate(candidate),
+  );
   const compiledSections: ResearchContextPacketV2Section[] = [
     compileWorkspaceSection(
       input.workspaceContext,
@@ -220,9 +193,7 @@ export function compileContextPacketV2(
 
   return {
     schemaVersion: 2,
-    goalFrame: input.goalFrame,
-    activeGoal: input.activeGoal,
-    activeSubGoal: input.activeSubGoal,
+    ...(input.prompt ? { prompt: input.prompt } : {}),
     ...(input.workspaceContext
       ? { workspaceContext: input.workspaceContext }
       : {}),
@@ -233,11 +204,7 @@ export function compileContextPacketV2(
     compaction: compacted.compaction,
     sections: compacted.sections,
     openQuestions: input.openQuestions ?? [],
-    userCommitments: [
-      ...input.goalFrame.scopeConstraints,
-      ...input.goalFrame.userPreferences,
-      ...(input.userCommitments ?? []),
-    ],
+    userCommitments: input.userCommitments ?? [],
     toolPermissions: createToolPermissions(input.tools, input.governance),
     toolBudget: createToolBudget(input.governance, input.tools),
     writebackExpectations: input.writebackExpectations ?? [

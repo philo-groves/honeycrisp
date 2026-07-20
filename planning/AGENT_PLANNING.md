@@ -1,13 +1,14 @@
 # Agent Core Migration Plan
 
-This plan moves general agent capabilities out of Beale and into Honeycrisp while leaving Beale as a research interface, program/project setup surface, visualization layer, and host for domain-specific skills, MCP servers, and export/report workflows.
+This plan moves general agent capabilities out of Beale and into Honeycrisp while leaving Beale as a research interface, workspace setup surface, visualization layer, and host for domain-specific skills, MCP servers, and export/report workflows.
 
 The guiding principle is:
 
-1. Honeycrisp owns general research cognition: goals, subgoals, memory, evidence, hypotheses, findings, proof state, tools, storage, and run captures.
-2. Beale owns researcher UX: program/project setup, prompt drafting, session display, context/memory visualization, heatmap, and domain-specific report/export flows.
-3. Beale should not maintain a parallel agent runtime, semantic memory, benchmark harness, VM sandbox, or finding ledger when Honeycrisp can provide a general interface.
-4. Domain-specific behavior should arrive through skills, MCP, and Beale UI affordances, not through hard-coded Honeycrisp vulnerability logic.
+1. The selected model owns investigation planning, decomposition, tool use, and completion through Pi's native agent loop.
+2. Honeycrisp owns model context, durable memory, evidence, hypotheses, findings, proof state, tools, storage, and run captures. It does not wrap the model in a goal/subgoal controller.
+3. Beale owns researcher UX: authorized workspace setup, prompt drafting, session display, context/memory visualization, heatmap, and domain-specific report/export flows.
+4. Beale should not maintain a parallel agent runtime, semantic memory, benchmark harness, VM sandbox, or finding ledger when Honeycrisp can provide a general interface.
+5. Domain-specific behavior should arrive through skills, MCP, and Beale UI affordances, not through hard-coded Honeycrisp vulnerability logic.
 
 ## Tracking Rules
 
@@ -23,14 +24,25 @@ Update the checklists in this file as each implementation increment lands. Keep 
 
 ### Honeycrisp Already Owns
 
-- Goal and subgoal runtime with completion, stop, blocked, and loop-limit states.
+- A direct Pi agent runtime in which the model receives the request and context without an outer goal controller.
 - Durable SQLite memory event log and derived memory record store.
 - Evidence, episodic records, semantic claims, hypotheses, beliefs, procedures, prospective checks, working memory, and claim graph edges.
-- Memory retrieval, context packet v2, context compaction, reflection, lifecycle/audit controls, and memory inspector CLI.
+- Prompt-relevant memory retrieval, context packet v2, context compaction, lifecycle/audit controls, and memory inspection.
 - Built-in tool registry, local inspection, repository search, file read, analysis, synthesis, storage listing, configured experiments, MCP tools, and skills.
 - Storage layout under `.honeycrisp/memory/` with artifact manifest and artifact references.
 - Flow capture suitable for Beale import.
 - Preference-only provider/model/effort config.
+
+### Direct Agent Flow
+
+Status: completed.
+
+- [x] Remove prompt-to-goal parsing, root goal frames, generated subgoals, controller scoring, completion/stop gates, repeated-blocker logic, reflection boundaries, and outer loop budgets.
+- [x] Run requests through Pi's native agent loop with direct access to Honeycrisp tools and live steering.
+- [x] Compile workspace context, relevant durable memory, selected skills, storage, and host-enforced tool policy directly for the model.
+- [x] Replace the schema-v1 goal/decision/loop capture with schema-v2 request/agent capture.
+- [x] Remove goal/controller APIs and tests instead of retaining a pre-alpha compatibility path.
+- [x] Keep subagent support out of this phase; it will be added as a separate model-facing capability.
 
 ### Honeycrisp Is Missing Or Too Thin
 
