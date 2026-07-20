@@ -266,6 +266,14 @@ export {
 export type {
   CreatePiAgentExecutorOptions,
 } from "./agent-executor.js";
+export { SUBAGENT_COLLABORATION_TOOLS, SubagentManager } from "./subagent-runtime.js";
+export type {
+  CreateSubagentManagerOptions,
+  SubagentActivity,
+  SubagentRunRequest,
+  SubagentRunResult,
+  SubagentStatus,
+} from "./subagent-runtime.js";
 export {
   computeMemoryEventPayloadHash,
   createMemorySnapshotFromEventLog,
@@ -446,6 +454,7 @@ export type {
   ResearchWorkspaceRepositoryContext,
   ResearchWorkspaceRepositoryRole,
   ResearchContextUsageReadModel,
+  ResearchCollaborationToolDescriptor,
   ResearchLiveEvent,
   ResearchLiveEventKind,
   ResearchLiveEventSink,

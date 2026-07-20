@@ -714,8 +714,14 @@ export interface ResearchAgentExecutionOutput {
   raw?: unknown;
 }
 
+export interface ResearchCollaborationToolDescriptor {
+  name: string;
+  description: string;
+}
+
 export interface ResearchAgentExecutor {
   name: string;
+  collaborationTools?: readonly ResearchCollaborationToolDescriptor[];
   execute(input: ResearchAgentExecutionInput): Promise<ResearchAgentExecutionOutput>;
 }
 

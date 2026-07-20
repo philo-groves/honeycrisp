@@ -35,6 +35,7 @@ import { createId, createResearchEventId, nowIso } from "./ids.js";
 import type {
   ResearchAgentExecutor,
   ResearchAgentRunResult,
+  ResearchCollaborationToolDescriptor,
   ResearchEvent,
   ResearchGovernancePolicy,
   ResearchLiveEventSink,
@@ -72,6 +73,7 @@ export interface RunResearchAgentResult {
   workspaceContext: ResearchWorkspaceContext;
   selectedSkills: readonly ResearchSelectedSkill[];
   toolPermissions: ReturnType<typeof createToolPermissions>;
+  collaborationTools: readonly ResearchCollaborationToolDescriptor[];
   durableMemory?: ResearchDurableMemoryRunSummary;
   piBase: {
     agentCorePackage: "@earendil-works/pi-agent-core";
@@ -193,6 +195,7 @@ export async function runResearchAgent(
     stats.latestContextPacketV2 = contextPacketV2;
     const toolBudget = createToolBudget(input.governance, tools);
     const toolPermissions = createToolPermissions(tools, input.governance);
+    const collaborationTools = input.executor.collaborationTools ?? [];
     const modelInput = {
       prompt: input.prompt,
       contextSections: [
@@ -233,6 +236,7 @@ export async function runResearchAgent(
         workspaceContext,
         selectedSkills,
         toolPermissions,
+        collaborationTools,
         storage: storageLayout,
         relevantMemory: contextPacketV2.sections.flatMap((section) =>
           section.items.map((item) => item.recordId),
@@ -320,6 +324,7 @@ export async function runResearchAgent(
       workspaceContext,
       selectedSkills,
       toolPermissions,
+      collaborationTools,
       ...(durableMemory
         ? { durableMemory: durableMemorySummary(durableMemory, stats) }
         : {}),

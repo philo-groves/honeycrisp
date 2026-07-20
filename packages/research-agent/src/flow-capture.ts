@@ -10,6 +10,7 @@ import {
   type ResearchStorageArtifactManifestEntry,
 } from "./storage.js";
 import type {
+  ResearchCollaborationToolDescriptor,
   ResearchEvent,
   ResearchMemoryRef,
   ResearchNextPromptSuggestion,
@@ -89,6 +90,7 @@ export interface ResearchAgentFlowCapture {
     workspaceContext: ResearchWorkspaceContext;
     selectedSkills: readonly ResearchSelectedSkill[];
     toolPermissions: readonly ResearchToolPermission[];
+    collaborationTools: readonly ResearchCollaborationToolDescriptor[];
     toolBudget: ResearchToolBudget;
   };
   workspaceContext: ResearchWorkspaceContext;
@@ -153,6 +155,7 @@ export function createResearchAgentFlowCapture(
       workspaceContext: result.workspaceContext,
       selectedSkills: result.selectedSkills,
       toolPermissions: result.toolPermissions,
+      collaborationTools: result.collaborationTools,
       toolBudget: result.agentRun.modelInput.toolBudget,
     },
     workspaceContext: result.workspaceContext,

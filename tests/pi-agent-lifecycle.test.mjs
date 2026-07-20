@@ -38,6 +38,14 @@ const FAUX_MODEL = {
   contextWindow: 100_000,
   maxTokens: 4096,
 };
+const COLLABORATION_TOOL_NAMES = [
+  "spawn_agent",
+  "send_message",
+  "followup_task",
+  "interrupt_agent",
+  "list_agents",
+  "wait_agent",
+];
 
 test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", async () => {
   const calls = [];
@@ -76,12 +84,13 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   assert.equal(raw.lifecycle, "pi-agent");
   assert.equal(raw.toolExecutionMode, "sequential");
   assert.equal(raw.toolCallCount, 1);
+  assert.deepEqual(result.collaborationTools.map((tool) => tool.name), COLLABORATION_TOOL_NAMES);
   assert.equal(calls.length, 1);
   assert.equal(observed.payload.toolName, "fixture.inspect");
   assert.equal(observed.payload.status, "complete");
   assert.ok(raw.agentEvents.some((event) => event.type === "tool_execution_update"));
-  assert.deepEqual(contexts[0].toolNames, ["fixture_inspect"]);
-  assert.deepEqual(contexts[1].toolNames, []);
+  assert.deepEqual(contexts[0].toolNames, ["fixture_inspect", ...COLLABORATION_TOOL_NAMES]);
+  assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
 });
 
 test("Pi Agent keeps tools available without an explicit governance call limit", async () => {
@@ -153,7 +162,46 @@ test("Pi Agent beforeToolCall preflight preserves blocked tool events", async ()
       (event) => event.type === "tool_execution_end" && event.isError === true,
     ),
   );
-  assert.deepEqual(contexts[1].toolNames, []);
+  assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
+});
+
+test("Pi Agent coordinates a partial-context subagent with a model and effort override", async () => {
+  const contexts = [];
+  const liveEvents = [];
+  const result = await runResearchAgent({
+    prompt: "Delegate a bounded parser review, then incorporate the result.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      reasoning: "high",
+      models: createSubagentModels(contexts),
+    }),
+  });
+
+  const child = result.agentRun.output.raw.subagents.agents[0];
+  const childContext = contexts.find((context) => context.model === "child-model");
+  const rootContexts = contexts.filter((context) => context.model === "faux-model");
+  const activity = liveEvents
+    .filter((event) => event.kind === "agent.event" && event.payload.type === "subagent.activity")
+    .map((event) => event.payload.action);
+
+  assert.match(result.agentRun.output.text, /incorporated child result/i);
+  assert.equal(child.path, "/root/parser_review");
+  assert.equal(child.status, "completed");
+  assert.equal(child.model, "child-model");
+  assert.equal(child.reasoningEffort, "low");
+  assert.equal(child.forkTurns, "1");
+  assert.equal(child.output, "CHILD_RESULT: parser boundary inspected.");
+  assert.ok(childContext);
+  assert.equal(childContext.reasoning, "low");
+  assert.ok(childContext.messageContents.some((content) => content.includes("Delegate a bounded parser review")));
+  assert.ok(childContext.messageContents.some((content) => content.includes("Inspect the parser boundary independently")));
+  assert.ok(rootContexts.at(-1).messageContents.some((content) => content.includes("CHILD_RESULT")));
+  assert.deepEqual(activity, ["spawned", "completed"]);
+  assert.ok(liveEvents.some((event) => event.payload.agentPath === "/root/parser_review"));
 });
 
 test("Pi Agent executor streams live thought events", async () => {
@@ -385,6 +433,52 @@ function createScriptedModels(messages, contexts = []) {
       const message = messages[index] ?? assistant("## Result\nNo scripted response.");
       index += 1;
       return streamFrom(message);
+    },
+  };
+}
+
+function createSubagentModels(contexts) {
+  return {
+    getModel(_provider, id) {
+      return { ...FAUX_MODEL, id, name: id };
+    },
+    streamSimple(model, context, options = {}) {
+      const captured = {
+        model: model.id,
+        reasoning: options.reasoning,
+        toolNames: context.tools?.map((tool) => tool.name) ?? [],
+        messageContents: context.messages.map((message) => JSON.stringify(message.content)),
+      };
+      contexts.push(captured);
+      if (model.id === "child-model") {
+        return streamFrom({
+          ...assistant("CHILD_RESULT: parser boundary inspected."),
+          model: model.id,
+        });
+      }
+      const joined = captured.messageContents.join("\n");
+      if (!joined.includes('"name":"spawn_agent"')) {
+        return streamFrom({
+          ...assistant(toolCall("spawn_agent", {
+            task_name: "parser_review",
+            message: "Inspect the parser boundary independently.",
+            fork_turns: "1",
+            model: "child-model",
+            reasoning_effort: "low",
+          }, "spawn_1"), "toolUse"),
+          model: model.id,
+        });
+      }
+      if (!joined.includes("CHILD_RESULT")) {
+        return streamFrom({
+          ...assistant(toolCall("wait_agent", { timeout_ms: 1000 }, "wait_1"), "toolUse"),
+          model: model.id,
+        });
+      }
+      return streamFrom({
+        ...assistant("## Result\nIncorporated child result into the root analysis."),
+        model: model.id,
+      });
     },
   };
 }

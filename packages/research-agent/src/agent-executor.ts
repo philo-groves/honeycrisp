@@ -21,6 +21,12 @@ import {
   type ResearchToolExecutionResult,
   type ResearchToolRegistry,
 } from "./tool-registry.js";
+import {
+  SubagentManager,
+  SUBAGENT_COLLABORATION_TOOLS,
+  type SubagentRunRequest,
+  type SubagentRunResult,
+} from "./subagent-runtime.js";
 import type {
   ResearchAgentExecutionInput,
   ResearchAgentExecutor,
@@ -39,6 +45,10 @@ export interface CreatePiAgentExecutorOptions {
   toolRegistry?: ResearchToolRegistry;
   toolExecution?: ToolExecutionMode;
   getSteeringMessages?: () => Promise<AgentMessage[]>;
+  subagents?: false | {
+    maxThreads?: number;
+    maxDepth?: number;
+  };
 }
 
 export function createDeterministicAgentExecutor(): ResearchAgentExecutor {
@@ -62,6 +72,7 @@ export function createPiAgentExecutor(
 ): ResearchAgentExecutor {
   return {
     name: `pi:${options.provider}/${options.model}:agent`,
+    ...(options.subagents === false ? {} : { collaborationTools: SUBAGENT_COLLABORATION_TOOLS }),
     async execute(input) {
       const models =
         options.models ??
@@ -73,134 +84,209 @@ export function createPiAgentExecutor(
         throw new Error(`Unknown model ${options.provider}/${options.model}`);
       }
 
-      const toolEvents: ResearchEvent[] = [];
-      const agentEvents: Record<string, unknown>[] = [];
-      const executionRecords = new Map<string, ResearchToolExecutionRecord>();
-      const capturedToolCalls = new Set<string>();
-      const reservations = new Map<string, number>();
-      let toolCallCount = 0;
-      let currentTurn = 0;
-      const reserveToolCall = (toolCallId: string): number => {
-        const reserved = reservations.get(toolCallId);
-        if (reserved !== undefined) return reserved;
-        const next = toolCallCount;
-        reservations.set(toolCallId, next);
-        toolCallCount += 1;
-        return next;
-      };
-      const tools = createAgentTools({
-        toolRegistry: options.toolRegistry,
-        governance: input.governance,
-        reserveToolCall,
-        recordExecution(record) {
-          executionRecords.set(record.action.id, record);
-        },
-      });
       const toolExecution = options.toolExecution ?? "sequential";
-      const agentMessages = await runAgentLoop(
-        [createUserMessage(input.modelInput)],
-        {
-          systemPrompt: createSystemPrompt(tools.length > 0),
-          messages: [],
-          ...(tools.length > 0 ? { tools } : {}),
-        },
-        {
-          model,
-          convertToLlm: convertAgentMessagesToLlm,
-          ...(options.maxTokens !== undefined
-            ? { maxTokens: options.maxTokens }
-            : {}),
-          ...(options.reasoning ? { reasoning: options.reasoning } : {}),
-          toolExecution,
-          beforeToolCall: async (hookContext, signal) => {
-            const toolCall = createToolCallFromHook(hookContext);
-            const preflight = options.toolRegistry?.preflightToolCall(toolCall, {
-              ...(input.governance ? { governance: input.governance } : {}),
-              toolCallCount,
-              ...(signal ? { signal } : {}),
-            });
-            if (!preflight) {
-              reserveToolCall(toolCall.id);
-              return undefined;
-            }
-            reserveToolCall(toolCall.id);
-            executionRecords.set(toolCall.id, preflight);
-            capturedToolCalls.add(toolCall.id);
-            toolEvents.push(...preflight.events);
-            emitResearchEvents(input.eventSink, preflight.events);
-            return { block: true, reason: preflight.result.summary };
-          },
-          afterToolCall: async (hookContext) => {
-            const record = executionRecords.get(hookContext.toolCall.id);
-            if (record && !capturedToolCalls.has(hookContext.toolCall.id)) {
-              capturedToolCalls.add(hookContext.toolCall.id);
-              toolEvents.push(...record.events);
-              emitResearchEvents(input.eventSink, record.events);
-            }
-            return record
-              ? {
-                  content: toolResultContent(record.result),
-                  details: record.result,
-                  isError: record.result.status !== "complete",
-                }
-              : undefined;
-          },
-          prepareNextTurn: ({ context }) =>
-            typeof input.modelInput.toolBudget.maxToolCalls === "number" &&
-            toolCallCount >= input.modelInput.toolBudget.maxToolCalls &&
-            context.tools?.length
-              ? { context: { ...context, tools: [] } }
-              : undefined,
-          getSteeringMessages: options.getSteeringMessages ?? (async () => []),
-          getFollowUpMessages: async () => [],
-        },
-        async (event) => {
-          if (event.type === "turn_start") currentTurn += 1;
-          agentEvents.push(captureAgentEvent(event, currentTurn));
-          await emitAgentEvent(input.eventSink, event, currentTurn);
-        },
-        input.signal,
-        models.streamSimple.bind(models),
+      let runSession!: (request: SubagentRunRequest & { root?: boolean }) => Promise<SubagentRunResult & { agentEvents: Record<string, unknown>[] }>;
+      const subagents = options.subagents === false
+        ? null
+        : new SubagentManager({
+            rootModel: model.id,
+            ...(options.reasoning ? { rootReasoning: options.reasoning } : {}),
+            ...(options.subagents?.maxThreads ? { maxThreads: options.subagents.maxThreads } : {}),
+            ...(options.subagents?.maxDepth !== undefined ? { maxDepth: options.subagents.maxDepth } : {}),
+            ...(input.signal ? { signal: input.signal } : {}),
+            run: (request) => runSession(request),
+            onActivity: async (activity) => {
+              if (!input.eventSink) return;
+              const { type: action, ...details } = activity;
+              await emitLiveEvent(input.eventSink, {
+                schemaVersion: 1,
+                kind: "agent.event",
+                timestamp: nowIso(),
+                payload: { type: "subagent.activity", action, ...details },
+              });
+            },
+          });
+      const researchToolNames = new Set(
+        options.toolRegistry?.listTools().map((tool) => getToolTransportName(tool)) ?? [],
       );
 
-      const assistantMessages = agentMessages.filter(isAssistantMessage);
-      const finalAssistant = assistantMessages.at(-1);
-      if (
-        finalAssistant &&
-        (finalAssistant.stopReason === "error" ||
-          finalAssistant.stopReason === "aborted")
-      ) {
-        throw new Error(
-          finalAssistant.errorMessage ??
-            `Model stopped: ${finalAssistant.stopReason}`,
+      runSession = async (request) => {
+        const sessionModel = request.root ? model : models.getModel(options.provider, request.model);
+        if (!sessionModel) throw new Error(`Unknown subagent model ${options.provider}/${request.model}`);
+        const toolEvents: ResearchEvent[] = [];
+        const agentEvents: Record<string, unknown>[] = [];
+        const executionRecords = new Map<string, ResearchToolExecutionRecord>();
+        const capturedToolCalls = new Set<string>();
+        const reservations = new Map<string, number>();
+        let toolCallCount = 0;
+        let currentTurn = 0;
+        const reserveToolCall = (toolCallId: string): number => {
+          const reserved = reservations.get(toolCallId);
+          if (reserved !== undefined) return reserved;
+          const next = toolCallCount;
+          reservations.set(toolCallId, next);
+          toolCallCount += 1;
+          return next;
+        };
+        const researchTools = createAgentTools({
+          toolRegistry: options.toolRegistry,
+          governance: input.governance,
+          reserveToolCall,
+          recordExecution(record) {
+            executionRecords.set(record.action.id, record);
+          },
+        });
+        const collaborationTools = subagents?.createTools(request.id) ?? [];
+        const tools = [...researchTools, ...collaborationTools];
+        const agentMessages = await runAgentLoop(
+          [request.root ? createUserMessage(input.modelInput) : createTaskMessage(request.prompt)],
+          {
+            systemPrompt: createSystemPrompt(tools.length > 0, request.root ? undefined : request.path, collaborationTools.length > 0),
+            messages: request.inheritedMessages,
+            ...(tools.length > 0 ? { tools } : {}),
+          },
+          {
+            model: sessionModel,
+            convertToLlm: convertAgentMessagesToLlm,
+            ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+            ...(request.reasoning ? { reasoning: request.reasoning } : options.reasoning ? { reasoning: options.reasoning } : {}),
+            toolExecution,
+            beforeToolCall: async (hookContext, signal) => {
+              const toolCall = createToolCallFromHook(hookContext);
+              subagents?.captureContext(request.id, toolCall.id, hookContext.context.messages);
+              const researchTool = options.toolRegistry?.find(toolCall.name);
+              const preflight = researchTool
+                ? options.toolRegistry?.preflightToolCall(toolCall, {
+                    ...(input.governance ? { governance: input.governance } : {}),
+                    toolCallCount,
+                    ...(signal ? { signal } : {}),
+                  })
+                : undefined;
+              if (!preflight) {
+                reserveToolCall(toolCall.id);
+                return undefined;
+              }
+              reserveToolCall(toolCall.id);
+              executionRecords.set(toolCall.id, preflight);
+              capturedToolCalls.add(toolCall.id);
+              toolEvents.push(...preflight.events);
+              emitResearchEvents(input.eventSink, preflight.events);
+              return { block: true, reason: preflight.result.summary };
+            },
+            afterToolCall: async (hookContext) => {
+              const record = executionRecords.get(hookContext.toolCall.id);
+              if (record && !capturedToolCalls.has(hookContext.toolCall.id)) {
+                capturedToolCalls.add(hookContext.toolCall.id);
+                toolEvents.push(...record.events);
+                emitResearchEvents(input.eventSink, record.events);
+              }
+              return record
+                ? {
+                    content: toolResultContent(record.result),
+                    details: record.result,
+                    isError: record.result.status !== "complete",
+                  }
+                : undefined;
+            },
+            prepareNextTurn: ({ context }) => {
+              if (
+                typeof input.modelInput.toolBudget.maxToolCalls !== "number" ||
+                toolCallCount < input.modelInput.toolBudget.maxToolCalls ||
+                !context.tools?.some((tool) => researchToolNames.has(tool.name))
+              ) return undefined;
+              return {
+                context: {
+                  ...context,
+                  tools: context.tools.filter((tool) => !researchToolNames.has(tool.name)),
+                },
+              };
+            },
+            getSteeringMessages: async () => [
+              ...(request.root && options.getSteeringMessages ? await options.getSteeringMessages() : []),
+              ...(subagents?.takeMailbox(request.id) ?? []),
+            ],
+            getFollowUpMessages: async () => subagents?.takeMailbox(request.id) ?? [],
+          },
+          async (event) => {
+            if (event.type === "turn_start") currentTurn += 1;
+            agentEvents.push({
+              ...captureAgentEvent(event, currentTurn),
+              agentId: request.id,
+              agentPath: request.path,
+            });
+            await emitAgentEvent(input.eventSink, event, currentTurn, {
+              agentId: request.id,
+              agentPath: request.path,
+              parentAgentId: request.parentId,
+            });
+          },
+          request.signal,
+          models.streamSimple.bind(models),
         );
-      }
+        const assistantMessages = agentMessages.filter(isAssistantMessage);
+        const finalAssistant = assistantMessages.at(-1);
+        if (finalAssistant && (finalAssistant.stopReason === "error" || finalAssistant.stopReason === "aborted")) {
+          throw new Error(finalAssistant.errorMessage ?? `Model stopped: ${finalAssistant.stopReason}`);
+        }
+        return {
+          messages: agentMessages,
+          text: finalAssistant ? assistantText(finalAssistant.content) : "",
+          turnCount: currentTurn,
+          toolCallCount,
+          modelCalls: assistantMessages.map(modelCallMetadata),
+          toolEvents,
+          agentEvents,
+        };
+      };
+
+      const rootResult = await runSession({
+        id: "root",
+        path: "/root",
+        parentId: "",
+        depth: 0,
+        model: model.id,
+        ...(options.reasoning ? { reasoning: options.reasoning } : {}),
+        prompt: input.modelInput.prompt,
+        inheritedMessages: [],
+        signal: input.signal ?? new AbortController().signal,
+        root: true,
+      });
+      await subagents?.settle();
+      const childToolEvents = subagents?.allToolEvents() ?? [];
+      const allToolEvents = [...rootResult.toolEvents, ...childToolEvents];
 
       return {
-        text: finalAssistant ? assistantText(finalAssistant.content) : "",
-        ...(toolEvents.length > 0 ? { toolEvents } : {}),
+        text: rootResult.text,
+        ...(allToolEvents.length > 0 ? { toolEvents: allToolEvents } : {}),
         raw: {
           provider: model.provider,
           model: model.id,
           api: model.api,
           lifecycle: "pi-agent",
           toolExecutionMode: toolExecution,
-          toolCallCount,
-          modelCalls: assistantMessages.map(modelCallMetadata),
-          agentEvents,
+          toolCallCount: rootResult.toolCallCount,
+          modelCalls: rootResult.modelCalls,
+          agentEvents: rootResult.agentEvents,
+          ...(subagents ? { subagents: subagents.snapshot() } : {}),
         },
       };
     },
   };
 }
 
-function createSystemPrompt(hasTools: boolean): string {
+function createSystemPrompt(hasTools: boolean, agentPath?: string, hasCollaborationTools = false): string {
   return [
     "You are Honeycrisp, an autonomous research agent built on Pi.",
     "Work directly on the user's request and decide how to investigate it and when the work is complete.",
     "Treat the supplied workspace context as the authorized research scope. Do not claim evidence you did not inspect.",
     hasTools ? "Use the available tools as needed." : "No tools are available in this session.",
+    ...(agentPath ? [`You are subagent ${agentPath}. Complete the assigned task and return a concise result to the parent agent.`] : []),
+    ...(hasCollaborationTools ? ["Use collaboration tools for independent work and inter-agent communication; wait for requested subagent results before concluding."] : []),
   ].join("\n");
+}
+
+function createTaskMessage(prompt: string): Message {
+  return { role: "user", timestamp: Date.now(), content: prompt };
 }
 
 function createUserMessage(modelInput: ResearchAgentModelInput): Message {
@@ -420,15 +506,17 @@ async function emitAgentEvent(
   sink: ResearchLiveEventSink | undefined,
   event: AgentEvent,
   turn: number,
+  agent: { agentId: string; agentPath: string; parentAgentId: string },
 ): Promise<void> {
   if (!sink) return;
-  const liveEvent = agentLiveEvent(event, turn);
+  const liveEvent = agentLiveEvent(event, turn, agent);
   if (liveEvent) await emitLiveEvent(sink, liveEvent);
 }
 
 function agentLiveEvent(
   event: AgentEvent,
   turn: number,
+  agent: { agentId: string; agentPath: string; parentAgentId: string },
 ): Parameters<ResearchLiveEventSink>[0] | undefined {
   if (event.type === "message_update") {
     const update = event.assistantMessageEvent;
@@ -443,6 +531,7 @@ function agentLiveEvent(
         kind: "model.thought",
         timestamp: nowIso(),
         payload: {
+          ...agent,
           turn,
           eventType: update.type,
           phase:
@@ -479,6 +568,7 @@ function agentLiveEvent(
         kind: "model.output",
         timestamp: nowIso(),
         payload: {
+          ...agent,
           turn,
           eventType: update.type,
           phase:
@@ -510,6 +600,7 @@ function agentLiveEvent(
       kind: "agent.event",
       timestamp: nowIso(),
       payload: {
+        ...agent,
         type: "turn_completed",
         turn,
         responseId: event.message.responseId,

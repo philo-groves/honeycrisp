@@ -24,6 +24,8 @@ pnpm start -p "Investigate the parser behavior in this workspace"
 
 Honeycrisp passes the request, authorized workspace context, relevant durable memory, selected skills, storage locations, and available tools directly to Pi's native agent loop. The model owns investigation planning, tool use, and completion; Honeycrisp does not create a parallel goal tree, subgoal controller, or outer loop.
 
+The Pi agent can delegate bounded independent work through Codex-style collaboration tools: `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, `list_agents`, and `wait_agent`. Children share the current workspace, tool policy, storage, and memory tier context. A child may inherit all, none, or the last N user turns. Full-history children inherit the parent model and effort; partial or fresh children may choose another model from the active provider and a supported effort. The initial runtime permits six concurrent children at one level of depth.
+
 On a real run, Honeycrisp opens the workspace database at `.honeycrisp/memory/memory.sqlite`, exposes configured research tools plus a small durable knowledge graph, and runs the selected model through Pi. Run state, transcripts, and tool traces are operational data; they are not automatically promoted into durable knowledge. The model explicitly searches and updates concise reusable nodes when the research warrants it.
 
 Durable graph nodes carry a memory tier and their origin context. `session` nodes are visible only to one research session, `workspace` nodes are reusable across sessions for one workspace, and `subject` nodes can be recalled from explicitly supplied peer databases for workspaces with the same owner or subject. The memory tool set stays unchanged; `memory.save` selects a tier and `memory.search` can filter tiers. Peer access never exposes another workspace's runs, transcripts, or bulk artifacts.
@@ -82,6 +84,7 @@ pnpm start --mock \
 The schema-v2 capture records the request, agent result, model/tool metadata,
 event timeline, bounded memory context, storage manifest, and workspace context.
 Private model thought traces are not persisted as durable memory.
+Subagent identity, lifecycle, model calls, result text, and errors are retained in `agent.raw.subagents` in the flow capture. Research tool events produced by children remain part of the same authorized session event stream.
 
 Durable knowledge uses typed nodes (`asset`, `bug`, `invariant`, `mitigation`, `source`, `sink`, `hypothesis`, `finding`, `primitive`, `chain`, `procedure`, and `trajectory`), directed relationships, tags, asset links, and lightweight evidence references. Saves are additive; exact corrections require the current node revision. Transcripts, task narration, and bulk tool output do not belong in the graph.
 

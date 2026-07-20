@@ -44,6 +44,18 @@ Status: completed.
 - [x] Remove goal/controller APIs and tests instead of retaining a pre-alpha compatibility path.
 - [x] Keep subagent support out of this phase; it will be added as a separate model-facing capability.
 
+### Subagent Orchestration
+
+Status: completed initial vertical slice.
+
+- [x] Add Codex-style spawn, message, follow-up, interrupt, list, and wait tools to Pi sessions.
+- [x] Support full, partial, and fresh conversation inheritance with unresolved spawn-turn sanitization.
+- [x] Support child model and effort overrides for partial or fresh sessions while full-history children inherit root settings.
+- [x] Enforce bounded concurrency and depth in the runtime.
+- [x] Preserve parent/child identity, lifecycle, results, errors, model calls, and tool events in flow captures.
+- [x] Stream child lifecycle and agent-aware turn metadata for Beale presentation.
+- [x] Cover inheritance, communication, idle follow-up, waiting, listing, interruption, and Pi-loop coordination with deterministic tests.
+
 ### Honeycrisp Is Missing Or Too Thin
 
 - A first-class general `finding` memory record distinct from hypotheses and semantic claims.
