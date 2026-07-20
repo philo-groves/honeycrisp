@@ -109,6 +109,9 @@ export function createPiAgentExecutor(
       const researchToolNames = new Set(
         options.toolRegistry?.listTools().map((tool) => getToolTransportName(tool)) ?? [],
       );
+      const hasMemoryTools = researchToolNames.has("memory_search")
+        && researchToolNames.has("memory_save")
+        && researchToolNames.has("memory_link");
 
       runSession = async (request) => {
         const sessionModel = request.root ? model : models.getModel(options.provider, request.model);
@@ -141,7 +144,12 @@ export function createPiAgentExecutor(
         const agentMessages = await runAgentLoop(
           [request.root ? createUserMessage(input.modelInput) : createTaskMessage(request.prompt)],
           {
-            systemPrompt: createSystemPrompt(tools.length > 0, request.root ? undefined : request.path, collaborationTools.length > 0),
+            systemPrompt: createSystemPrompt({
+              hasTools: tools.length > 0,
+              hasMemoryTools,
+              ...(request.root ? {} : { agentPath: request.path }),
+              hasCollaborationTools: collaborationTools.length > 0,
+            }),
             messages: request.inheritedMessages,
             ...(tools.length > 0 ? { tools } : {}),
           },
@@ -292,14 +300,27 @@ export function createPiAgentExecutor(
   };
 }
 
-function createSystemPrompt(hasTools: boolean, agentPath?: string, hasCollaborationTools = false): string {
+function createSystemPrompt(options: {
+  hasTools: boolean;
+  hasMemoryTools: boolean;
+  agentPath?: string;
+  hasCollaborationTools: boolean;
+}): string {
   return [
     "You are Honeycrisp, an autonomous research agent built on Pi.",
     "Work directly on the user's request and decide how to investigate it and when the work is complete.",
     "Treat the supplied workspace context as the authorized research scope. Do not claim evidence you did not inspect.",
-    hasTools ? "Use the available tools as needed." : "No tools are available in this session.",
-    ...(agentPath ? [`You are subagent ${agentPath}. Complete the assigned task and return a concise result to the parent agent.`] : []),
-    ...(hasCollaborationTools ? ["Use collaboration tools for independent work and inter-agent communication; wait for requested subagent results before concluding."] : []),
+    options.hasTools ? "Use the available tools as needed." : "No tools are available in this session.",
+    ...(options.agentPath ? [`You are subagent ${options.agentPath}. Complete the assigned task and return a concise result to the parent agent.`] : []),
+    ...(options.hasCollaborationTools ? ["Use collaboration tools for independent work and inter-agent communication; wait for requested subagent results before concluding."] : []),
+    ...(options.hasMemoryTools ? [
+      "Use durable memory as a concise research graph:",
+      "- Search memory early and as research crosses system boundaries. Favor security-sensitive code near dangerous sinks, established primitives, historical bugs, and relevant successful trajectories.",
+      "- Save relevant historical bugs with affected assets. Save reusable sequences of key research actions as trajectories; omit routine narration.",
+      "- Save user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, and system- or hardware-level exploitation blockers as mitigations.",
+      "- Save an individual flaw as a primitive only after proving it through static analysis and attaching code or tool evidence.",
+      "- Save a chain only when linked sources, primitives, sinks, and assets establish end-to-end attacker reachability and security impact. A realistic proof-of-vulnerability is required. Have a review subagent independently approve it before marking the chain confirmed; if review is unavailable or inconclusive, leave it suspected.",
+    ] : []),
   ].join("\n");
 }
 

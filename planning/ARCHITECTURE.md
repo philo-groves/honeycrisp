@@ -65,6 +65,10 @@ Knowledge is tiered by:
 
 Transcripts, narration, and bulk tool output are operational data, not durable knowledge. Large outputs remain artifact files referenced by concise graph nodes.
 
+The agent searches memory early and when research crosses system boundaries. It records relevant historical bugs with affected assets, user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, exploitation blockers as mitigations, and reusable sequences of important research actions as trajectories. Routine action narration is not durable knowledge.
+
+An individual flaw becomes a primitive only with static-analysis support and code or tool evidence. A chain links its sources, primitives, sinks, and assets only after they establish end-to-end attacker reachability and security impact. Confirming a chain additionally requires a realistic proof-of-vulnerability and independent approval from a review subagent; absent or inconclusive review leaves the chain suspected.
+
 ## Research Tools
 
 Research tools expose concrete capabilities such as repository search, bounded file reads, structural code intelligence, analysis, experiments, storage inspection, memory access, skills, and configured MCP servers.

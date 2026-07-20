@@ -141,11 +141,55 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   assert.ok(raw.agentEvents.some((event) => event.type === "tool_execution_update"));
   assert.deepEqual(contexts[0].toolNames, ["fixture_inspect", ...COLLABORATION_TOOL_NAMES]);
   assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
+  assert.doesNotMatch(contexts[0].systemPrompt, /Use durable memory as a concise research graph/);
   const initialMessage = contexts[0].messageContents.join("\n");
   assert.match(initialMessage, /### memory/);
   assert.match(initialMessage, /mem_fixture_parser/);
   assert.match(initialMessage, /evidence_fixture_parser/);
   assert.doesNotMatch(initialMessage, /### storage|### tool_policy|memory\.sqlite/);
+});
+
+test("Pi Agent adds research guidance when durable memory tools are available", async () => {
+  const contexts = [];
+  const memoryTool = createFixtureInspectTool([]);
+  memoryTool.descriptor = {
+    ...memoryTool.descriptor,
+    name: "memory.save",
+    transportName: "memory_save",
+  };
+  const searchTool = createFixtureInspectTool([]);
+  searchTool.descriptor = {
+    ...searchTool.descriptor,
+    name: "memory.search",
+    transportName: "memory_search",
+  };
+  const linkTool = createFixtureInspectTool([]);
+  linkTool.descriptor = {
+    ...linkTool.descriptor,
+    name: "memory.link",
+    transportName: "memory_link",
+  };
+
+  await runResearchAgent({
+    prompt: "Orient to the target.",
+    tools: [memoryTool.descriptor, searchTool.descriptor, linkTool.descriptor],
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistant("## Result\nTarget orientation complete."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry([memoryTool, searchTool, linkTool]),
+    }),
+  });
+
+  const systemPrompt = contexts[0].systemPrompt;
+  assert.match(systemPrompt, /Use durable memory as a concise research graph/);
+  assert.match(systemPrompt, /Save user-controlled ingress as sources/);
+  assert.match(systemPrompt, /static analysis/);
+  assert.match(systemPrompt, /realistic proof-of-vulnerability/);
+  assert.match(systemPrompt, /review subagent independently approve it/);
+  assert.match(systemPrompt, /leave it suspected/);
 });
 
 test("Pi Agent keeps tools available without an explicit governance call limit", async () => {
@@ -500,6 +544,7 @@ function createScriptedModels(messages, contexts = []) {
     },
     streamSimple(_model, context) {
       contexts.push({
+        systemPrompt: context.systemPrompt,
         toolNames: context.tools?.map((tool) => tool.name) ?? [],
         messageRoles: context.messages.map((message) => message.role),
         messageContents: context.messages.map((message) => JSON.stringify(message.content)),

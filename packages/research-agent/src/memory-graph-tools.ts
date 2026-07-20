@@ -106,7 +106,7 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
       });
     }),
     tool("memory.get", "memory_get", "Read one durable memory node with evidence references.", "read", GET_PARAMETERS, (input) => store.get(requiredString(input.id, "id"))),
-    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge. Choose session for run-specific state, workspace for target-specific knowledge, or subject for knowledge useful across this owner's workspaces. Do not store transcripts, task narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
+    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge with asset links and evidence. Choose session for run-specific state, workspace for target-specific knowledge, or subject for knowledge useful across this owner's workspaces. Use trajectories for reusable research sequences, primitives for statically supported flaws, and chains for reviewed end-to-end reachability and impact. Do not store transcripts, routine narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
       const id = string(input.id);
       const tier = string(input.tier);
       return store.save({
