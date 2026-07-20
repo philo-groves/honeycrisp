@@ -1,5 +1,6 @@
 export {
   MemoryGraphStore,
+  MEMORY_TIERS,
   MEMORY_NODE_STATUSES,
   MEMORY_NODE_TYPES,
 } from "./memory-graph.js";
@@ -9,6 +10,9 @@ export type {
   MemoryNode,
   MemoryNodeStatus,
   MemoryNodeType,
+  MemoryPeerDatabase,
+  MemoryTier,
+  MemoryTierContext,
   SaveMemoryNodeInput,
   SearchMemoryNodesInput,
 } from "./memory-graph.js";
@@ -434,6 +438,8 @@ export type {
   ResearchStorageDirectoryName,
   ResearchStorageLayout,
   ResearchStorageReadModel,
+  ResearchMemoryPeerContext,
+  ResearchMemoryTierContext,
   ResearchWorkspaceContext,
   ResearchWorkspaceRepositoryContext,
   ResearchWorkspaceRepositoryRole,

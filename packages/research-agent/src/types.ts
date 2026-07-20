@@ -449,10 +449,28 @@ export interface ResearchWorkspaceAuthorizationContext {
   expiresAt?: string;
 }
 
+export interface ResearchMemoryPeerContext {
+  databasePath: string;
+  workspaceId: string;
+  workspaceName: string;
+  subjectId: string;
+  subjectName: string;
+}
+
+export interface ResearchMemoryTierContext {
+  sessionId?: string;
+  workspaceId: string;
+  workspaceName: string;
+  subjectId?: string;
+  subjectName?: string;
+  peers: readonly ResearchMemoryPeerContext[];
+}
+
 export interface ResearchWorkspaceContext {
   schemaVersion: 1;
   workspaceRoot: string;
   memory: ResearchWorkspaceStorageContext;
+  memoryTierContext?: ResearchMemoryTierContext;
   authorization?: ResearchWorkspaceAuthorizationContext;
   knownRepositories: readonly ResearchWorkspaceRepositoryContext[];
   materializedSourcePaths: readonly string[];

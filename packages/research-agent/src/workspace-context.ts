@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
   ResearchStorageLayout,
+  ResearchMemoryTierContext,
   ResearchWorkspaceAuthorizationContext,
   ResearchWorkspaceContext,
   ResearchWorkspaceRepositoryContext,
@@ -15,6 +16,7 @@ export interface CreateResearchWorkspaceContextInput {
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
   authorization?: ResearchWorkspaceAuthorizationContext;
+  memoryTierContext?: ResearchMemoryTierContext;
 }
 
 export type WorkspaceRepositoryInput =
@@ -34,6 +36,7 @@ export interface ResearchWorkspaceContextOverlay {
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
   authorization?: ResearchWorkspaceAuthorizationContext;
+  memoryTierContext?: ResearchMemoryTierContext;
 }
 
 export function createResearchWorkspaceContext(
@@ -63,6 +66,7 @@ export function createResearchWorkspaceContext(
       rules: input.storageLayout.rules,
     },
     ...(input.authorization ? { authorization: input.authorization } : {}),
+    ...(input.memoryTierContext ? { memoryTierContext: input.memoryTierContext } : {}),
     knownRepositories: uniqueRepositories(repositories),
     materializedSourcePaths,
     projectNotes: uniqueStrings(input.projectNotes ?? []),
@@ -95,6 +99,7 @@ export function loadResearchWorkspaceContextFile(
     ...readStringArray(parsed.notes),
   ]);
   const authorization = normalizeAuthorization(parsed.authorization);
+  const memoryTierContext = normalizeMemoryTierContext(parsed.memoryTierContext);
   const memory = isRecord(parsed.memory)
     ? {
         ...(typeof parsed.memory.rootPath === "string"
@@ -120,6 +125,7 @@ export function loadResearchWorkspaceContextFile(
     ...(workspaceRoot ? { workspaceRoot } : {}),
     ...(memory ? { memory } : {}),
     ...(authorization ? { authorization } : {}),
+    ...(memoryTierContext ? { memoryTierContext } : {}),
     ...(knownRepositories.length > 0 ? { knownRepositories } : {}),
     ...(materializedSourcePaths.length > 0 ? { materializedSourcePaths } : {}),
     ...(projectNotes.length > 0 ? { projectNotes } : {}),
@@ -154,6 +160,11 @@ export function mergeResearchWorkspaceContexts(
       : input.base.authorization
         ? { authorization: input.base.authorization }
         : {}),
+    ...(overlay.memoryTierContext
+      ? { memoryTierContext: overlay.memoryTierContext }
+      : input.base.memoryTierContext
+        ? { memoryTierContext: input.base.memoryTierContext }
+        : {}),
     knownRepositories: uniqueRepositories([
       ...input.base.knownRepositories,
       ...(overlay.knownRepositories ?? []),
@@ -166,6 +177,34 @@ export function mergeResearchWorkspaceContexts(
       ...input.base.projectNotes,
       ...(overlay.projectNotes ?? []),
     ]),
+  };
+}
+
+function normalizeMemoryTierContext(value: unknown): ResearchMemoryTierContext | undefined {
+  if (!isRecord(value)) return undefined;
+  const workspaceId = typeof value.workspaceId === "string" ? value.workspaceId.trim() : "";
+  const workspaceName = typeof value.workspaceName === "string" ? value.workspaceName.trim() : "";
+  if (!workspaceId || !workspaceName) return undefined;
+  const subjectId = typeof value.subjectId === "string" ? value.subjectId.trim() : "";
+  const subjectName = typeof value.subjectName === "string" ? value.subjectName.trim() : "";
+  const peers = readArray(value.peers).flatMap((peer) => {
+    if (!isRecord(peer)) return [];
+    const databasePath = typeof peer.databasePath === "string" ? resolve(peer.databasePath) : "";
+    const peerWorkspaceId = typeof peer.workspaceId === "string" ? peer.workspaceId.trim() : "";
+    const peerWorkspaceName = typeof peer.workspaceName === "string" ? peer.workspaceName.trim() : "";
+    const peerSubjectId = typeof peer.subjectId === "string" ? peer.subjectId.trim() : "";
+    const peerSubjectName = typeof peer.subjectName === "string" ? peer.subjectName.trim() : "";
+    return databasePath && peerWorkspaceId && peerWorkspaceName && peerSubjectId && peerSubjectName
+      ? [{ databasePath, workspaceId: peerWorkspaceId, workspaceName: peerWorkspaceName, subjectId: peerSubjectId, subjectName: peerSubjectName }]
+      : [];
+  });
+  return {
+    ...(typeof value.sessionId === "string" && value.sessionId.trim() ? { sessionId: value.sessionId.trim() } : {}),
+    workspaceId,
+    workspaceName,
+    ...(subjectId ? { subjectId } : {}),
+    ...(subjectName ? { subjectName } : {}),
+    peers,
   };
 }
 

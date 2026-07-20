@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
 
@@ -22,9 +22,23 @@ export const MEMORY_NODE_TYPES = [
   "trajectory",
 ] as const;
 export const MEMORY_NODE_STATUSES = ["draft", "suspected", "confirmed", "rejected", "stale"] as const;
+export const MEMORY_TIERS = ["session", "workspace", "subject"] as const;
 
 export type MemoryNodeType = (typeof MEMORY_NODE_TYPES)[number];
 export type MemoryNodeStatus = (typeof MEMORY_NODE_STATUSES)[number];
+export type MemoryTier = (typeof MEMORY_TIERS)[number];
+
+export interface MemoryTierContext {
+  sessionId?: string;
+  workspaceId: string;
+  workspaceName: string;
+  subjectId?: string;
+  subjectName?: string;
+}
+
+export interface MemoryPeerDatabase extends Omit<MemoryTierContext, "sessionId"> {
+  databasePath: string;
+}
 
 export interface MemoryEvidenceRef {
   id: string;
@@ -47,6 +61,12 @@ export interface MemoryEdge {
 
 export interface MemoryNode {
   id: string;
+  tier: MemoryTier;
+  sessionId: string | null;
+  workspaceId: string;
+  workspaceName: string;
+  subjectId: string | null;
+  subjectName: string | null;
   type: MemoryNodeType;
   title: string;
   summary: string;
@@ -64,6 +84,7 @@ export interface MemoryNode {
 
 export interface SaveMemoryNodeInput {
   id?: string;
+  tier?: MemoryTier;
   type: MemoryNodeType;
   title: string;
   summary?: string;
@@ -78,6 +99,7 @@ export interface SaveMemoryNodeInput {
 
 export interface SearchMemoryNodesInput {
   query?: string;
+  tiers?: readonly MemoryTier[];
   types?: readonly MemoryNodeType[];
   statuses?: readonly MemoryNodeStatus[];
   assetIds?: readonly string[];
@@ -85,33 +107,60 @@ export interface SearchMemoryNodesInput {
   limit?: number;
 }
 
+interface MemoryDatabaseBinding {
+  database: DatabaseSync;
+  databasePath: string;
+  context: MemoryTierContext;
+  local: boolean;
+}
+
+interface LocatedMemoryNode {
+  binding: MemoryDatabaseBinding;
+  node: MemoryNode;
+}
+
 export class MemoryGraphStore {
   public readonly databasePath: string;
-  private readonly database: DatabaseSync;
+  private readonly bindings: MemoryDatabaseBinding[];
+  private readonly local: MemoryDatabaseBinding;
 
-  public constructor(options: { workspaceRoot?: string; databasePath?: string } = {}) {
+  public constructor(options: {
+    workspaceRoot?: string;
+    databasePath?: string;
+    context?: MemoryTierContext;
+    peers?: readonly MemoryPeerDatabase[];
+  } = {}) {
+    const workspaceRoot = options.workspaceRoot ?? process.cwd();
     this.databasePath = options.databasePath ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     mkdirSync(dirname(this.databasePath), { recursive: true });
     const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSync };
-    this.database = new DatabaseSync(this.databasePath);
-    this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
-    this.initializeSchema();
+    const context = normalizeTierContext(options.context ?? readStoredTierContext(DatabaseSync, this.databasePath), workspaceRoot);
+    this.local = this.openBinding(DatabaseSync, this.databasePath, context, true);
+    const seenPaths = new Set([resolveDatabasePath(this.databasePath)]);
+    const peers = (options.peers ?? []).flatMap((peer) => {
+      const databasePath = resolveDatabasePath(peer.databasePath);
+      if (seenPaths.has(databasePath)) return [];
+      seenPaths.add(databasePath);
+      return [this.openBinding(DatabaseSync, databasePath, normalizeTierContext(peer, dirname(databasePath)), false)];
+    });
+    this.bindings = [this.local, ...peers];
   }
 
   public close(): void {
-    this.database.close();
+    for (const binding of this.bindings) binding.database.close();
   }
 
   public save(input: SaveMemoryNodeInput): MemoryNode {
     validateNodeInput(input);
+    const tier = input.tier ?? "workspace";
+    const scopeKey = scopeKeyForTier(tier, this.local.context);
     const title = input.title.trim();
     const titleNorm = normalizeTitle(title);
-    const existingRow = this.database.prepare("SELECT id FROM memory_nodes WHERE type = ? AND title_norm = ?").get(input.type, titleNorm) as
-      | { id?: unknown }
-      | undefined;
-    const existing = typeof existingRow?.id === "string" ? this.get(existingRow.id) : null;
+    const existingLocation = this.findByIdentity(tier, scopeKey, input.type, titleNorm);
+    const existing = existingLocation?.node ?? null;
+    const target = existingLocation?.binding ?? this.local;
     const now = new Date().toISOString();
-    const id = existing?.id ?? input.id ?? stableNodeId(input.type, titleNorm);
+    const id = existing?.id ?? input.id ?? stableNodeId(tier, scopeKey, input.type, titleNorm);
     if (!existing && input.id) {
       const conflicting = this.get(input.id);
       if (conflicting) throw new Error(`Memory node id already belongs to ${conflicting.type}: ${input.id}`);
@@ -132,6 +181,12 @@ export class MemoryGraphStore {
         }
       : {
           id,
+          tier,
+          sessionId: this.local.context.sessionId ?? null,
+          workspaceId: this.local.context.workspaceId,
+          workspaceName: this.local.context.workspaceName,
+          subjectId: this.local.context.subjectId ?? null,
+          subjectName: this.local.context.subjectName ?? null,
           type: input.type,
           title,
           summary: input.summary?.trim() ?? "",
@@ -146,13 +201,15 @@ export class MemoryGraphStore {
           updatedAt: now,
           revision: 1,
         };
-    this.writeNode(next, titleNorm);
-    return this.get(id)!;
+    this.writeNode(target.database, next, titleNorm, scopeKey);
+    return this.getFromDatabase(target.database, id)!;
   }
 
   public correct(id: string, expectedRevision: number, patch: Partial<Omit<SaveMemoryNodeInput, "id" | "type">>): MemoryNode {
-    const existing = this.get(id);
-    if (!existing) throw new Error(`Memory node not found: ${id}`);
+    if (patch.tier !== undefined) throw new Error("Memory tier is immutable; save a new node in the intended tier.");
+    const located = this.locate(id);
+    const existing = located?.node;
+    if (!existing || !located) throw new Error(`Memory node not found: ${id}`);
     if (existing.revision !== expectedRevision) {
       throw new Error(`Memory node revision conflict for ${id}: expected ${expectedRevision}, found ${existing.revision}.`);
     }
@@ -172,25 +229,35 @@ export class MemoryGraphStore {
       revision: existing.revision + 1,
     };
     validateNodeInput(next);
-    this.writeNode(next, normalizeTitle(next.title), expectedRevision);
-    return this.get(id)!;
+    this.writeNode(located.binding.database, next, normalizeTitle(next.title), scopeKeyForNode(next), expectedRevision);
+    return this.getFromDatabase(located.binding.database, id)!;
   }
 
   public get(id: string): MemoryNode | null {
-    const row = this.database.prepare("SELECT * FROM memory_nodes WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return this.locate(id)?.node ?? null;
+  }
+
+  private getFromDatabase(database: DatabaseSync, id: string): MemoryNode | null {
+    const row = database.prepare("SELECT * FROM memory_nodes WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     if (!row) return null;
     return {
       id: text(row.id),
+      tier: memoryTier(row.tier),
+      sessionId: nullableText(row.session_id),
+      workspaceId: text(row.workspace_id),
+      workspaceName: text(row.workspace_name),
+      subjectId: nullableText(row.subject_id),
+      subjectName: nullableText(row.subject_name),
       type: nodeType(row.type),
       title: text(row.title),
       summary: text(row.summary),
       body: text(row.body),
       status: nodeStatus(row.status),
       confidence: number(row.confidence),
-      assetIds: this.strings("SELECT asset_id AS value FROM memory_node_assets WHERE node_id = ? ORDER BY asset_id", id),
-      tags: this.strings("SELECT tag AS value FROM memory_node_tags WHERE node_id = ? ORDER BY tag", id),
+      assetIds: this.strings(database, "SELECT asset_id AS value FROM memory_node_assets WHERE node_id = ? ORDER BY asset_id", id),
+      tags: this.strings(database, "SELECT tag AS value FROM memory_node_tags WHERE node_id = ? ORDER BY tag", id),
       attributes: jsonObject(row.attributes_json),
-      evidence: (this.database.prepare("SELECT * FROM memory_evidence_refs WHERE node_id = ? ORDER BY created_at, id").all(id) as Record<string, unknown>[]).map(
+      evidence: (database.prepare("SELECT * FROM memory_evidence_refs WHERE node_id = ? ORDER BY created_at, id").all(id) as Record<string, unknown>[]).map(
         evidenceFromRow,
       ),
       createdAt: text(row.created_at),
@@ -200,8 +267,20 @@ export class MemoryGraphStore {
   }
 
   public search(input: SearchMemoryNodesInput = {}): MemoryNode[] {
+    const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
+    const nodes = this.bindings.flatMap((binding) => this.searchBinding(binding, input));
+    return nodes
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
+      .slice(0, limit);
+  }
+
+  private searchBinding(binding: MemoryDatabaseBinding, input: SearchMemoryNodesInput): MemoryNode[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
+    const visibility = visibilityClause(binding, this.local.context);
+    if (!visibility) return [];
+    clauses.push(visibility.sql);
+    params.push(...visibility.params);
     if (input.query?.trim()) {
       const query = `%${input.query.trim().toLowerCase()}%`;
       clauses.push("(lower(n.title) LIKE ? OR lower(n.summary) LIKE ? OR lower(n.body) LIKE ? OR lower(n.attributes_json) LIKE ?)");
@@ -215,6 +294,10 @@ export class MemoryGraphStore {
       clauses.push(`n.status IN (${input.statuses.map(() => "?").join(",")})`);
       params.push(...input.statuses);
     }
+    if (input.tiers?.length) {
+      clauses.push(`n.tier IN (${input.tiers.map(() => "?").join(",")})`);
+      params.push(...input.tiers);
+    }
     for (const assetId of input.assetIds ?? []) {
       clauses.push("EXISTS (SELECT 1 FROM memory_node_assets a WHERE a.node_id = n.id AND a.asset_id = ?)");
       params.push(assetId);
@@ -223,41 +306,104 @@ export class MemoryGraphStore {
       clauses.push("EXISTS (SELECT 1 FROM memory_node_tags t WHERE t.node_id = n.id AND t.tag = ?)");
       params.push(normalizeTag(tag));
     }
-    const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
-    params.push(limit);
-    const rows = this.database
+    params.push(100);
+    const rows = binding.database
       .prepare(`SELECT n.id FROM memory_nodes n ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY n.updated_at DESC, n.id LIMIT ?`)
       .all(...params) as { id?: unknown }[];
-    return rows.flatMap((row) => (typeof row.id === "string" ? [this.get(row.id)!] : []));
+    return rows.flatMap((row) => (typeof row.id === "string" ? [this.getFromDatabase(binding.database, row.id)!] : []));
   }
 
   public link(fromId: string, toId: string, relation: string, note = ""): MemoryEdge {
-    if (!this.get(fromId) || !this.get(toId)) throw new Error("Both memory edge nodes must exist.");
+    const from = this.locate(fromId);
+    const to = this.locate(toId);
+    if (!from || !to) throw new Error("Both memory edge nodes must exist in the visible memory tiers.");
+    const federated = from.binding.databasePath !== to.binding.databasePath;
+    const database = federated ? this.local.database : from.binding.database;
+    const table = federated ? "memory_federated_edges" : "memory_edges";
     const cleanRelation = normalizeTag(relation);
     const now = new Date().toISOString();
-    this.database
+    database
       .prepare(
-        `INSERT INTO memory_edges(from_id, to_id, relation, note, created_at, updated_at)
+        `INSERT INTO ${table}(from_id, to_id, relation, note, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(from_id, to_id, relation) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at`,
       )
       .run(fromId, toId, cleanRelation, note.trim(), now, now);
-    const row = this.database.prepare("SELECT * FROM memory_edges WHERE from_id = ? AND to_id = ? AND relation = ?").get(fromId, toId, cleanRelation) as Record<string, unknown>;
+    const row = database.prepare(`SELECT * FROM ${table} WHERE from_id = ? AND to_id = ? AND relation = ?`).get(fromId, toId, cleanRelation) as Record<string, unknown>;
     return edgeFromRow(row);
   }
 
   public listEdges(nodeId?: string): MemoryEdge[] {
-    const rows = (nodeId
-      ? this.database.prepare("SELECT * FROM memory_edges WHERE from_id = ? OR to_id = ? ORDER BY updated_at DESC").all(nodeId, nodeId)
-      : this.database.prepare("SELECT * FROM memory_edges ORDER BY updated_at DESC").all()) as Record<string, unknown>[];
-    return rows.map(edgeFromRow);
+    const visibleIds = new Set(this.bindings.flatMap((binding) => [...this.visibleNodeIds(binding)]));
+    if (nodeId) {
+      const located = this.locate(nodeId);
+      if (!located) return [];
+      const ordinary = this.bindings.flatMap((binding) =>
+        (binding.database.prepare("SELECT * FROM memory_edges WHERE from_id = ? OR to_id = ? ORDER BY updated_at DESC").all(nodeId, nodeId) as Record<string, unknown>[]).map(edgeFromRow),
+      );
+      const federated = (this.local.database.prepare("SELECT * FROM memory_federated_edges WHERE from_id = ? OR to_id = ? ORDER BY updated_at DESC").all(nodeId, nodeId) as Record<string, unknown>[]).map(edgeFromRow);
+      return [...ordinary, ...federated].filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
+    }
+    const ordinary = this.bindings.flatMap((binding) =>
+      (binding.database.prepare("SELECT * FROM memory_edges ORDER BY updated_at DESC").all() as Record<string, unknown>[]).map(edgeFromRow),
+    );
+    const federated = (this.local.database.prepare("SELECT * FROM memory_federated_edges ORDER BY updated_at DESC").all() as Record<string, unknown>[]).map(edgeFromRow);
+    return [...ordinary, ...federated].filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
   }
 
-  private initializeSchema(): void {
-    this.database.exec(`
+  private visibleNodeIds(binding: MemoryDatabaseBinding): Set<string> {
+    const visibility = visibilityClause(binding, this.local.context);
+    if (!visibility) return new Set();
+    const rows = binding.database.prepare(`SELECT n.id FROM memory_nodes n WHERE ${visibility.sql}`).all(...visibility.params) as Array<{ id?: unknown }>;
+    return new Set(rows.flatMap((row) => typeof row.id === "string" ? [row.id] : []));
+  }
+
+  private locate(id: string): LocatedMemoryNode | null {
+    for (const binding of this.bindings) {
+      const node = this.getFromDatabase(binding.database, id);
+      if (node && nodeIsVisible(node, binding, this.local.context)) return { binding, node };
+    }
+    return null;
+  }
+
+  private findByIdentity(tier: MemoryTier, scopeKey: string, type: MemoryNodeType, titleNorm: string): LocatedMemoryNode | null {
+    const bindings = tier === "subject" ? this.bindings : [this.local];
+    for (const binding of bindings) {
+      const row = binding.database
+        .prepare("SELECT id FROM memory_nodes WHERE tier = ? AND scope_key = ? AND type = ? AND title_norm = ?")
+        .get(tier, scopeKey, type, titleNorm) as { id?: unknown } | undefined;
+      if (typeof row?.id !== "string") continue;
+      const node = this.getFromDatabase(binding.database, row.id);
+      if (node) return { binding, node };
+    }
+    return null;
+  }
+
+  private openBinding(
+    Database: new (path: string) => DatabaseSync,
+    databasePath: string,
+    context: MemoryTierContext,
+    local: boolean,
+  ): MemoryDatabaseBinding {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    const database = new Database(databasePath);
+    database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+    this.initializeSchema(database, context);
+    return { database, databasePath: resolveDatabasePath(databasePath), context, local };
+  }
+
+  private initializeSchema(database: DatabaseSync, context: MemoryTierContext): void {
+    database.exec(`
       CREATE TABLE IF NOT EXISTS honeycrisp_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_nodes (
         id TEXT PRIMARY KEY,
+        tier TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        session_id TEXT,
+        workspace_id TEXT NOT NULL,
+        workspace_name TEXT NOT NULL,
+        subject_id TEXT,
+        subject_name TEXT,
         type TEXT NOT NULL,
         title TEXT NOT NULL,
         title_norm TEXT NOT NULL,
@@ -268,8 +414,7 @@ export class MemoryGraphStore {
         attributes_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        revision INTEGER NOT NULL DEFAULT 1,
-        UNIQUE(type, title_norm)
+        revision INTEGER NOT NULL DEFAULT 1
       );
       CREATE TABLE IF NOT EXISTS memory_node_assets (
         node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
@@ -290,6 +435,15 @@ export class MemoryGraphStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(from_id, to_id, relation)
       );
+      CREATE TABLE IF NOT EXISTS memory_federated_edges (
+        from_id TEXT NOT NULL,
+        to_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(from_id, to_id, relation)
+      );
       CREATE TABLE IF NOT EXISTS memory_evidence_refs (
         id TEXT PRIMARY KEY,
         node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
@@ -300,59 +454,68 @@ export class MemoryGraphStore {
         summary TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       );
+    `);
+    if (!tableColumns(database, "memory_nodes").has("tier")) {
+      migrateMemoryNodesToTiers(database, context);
+    }
+    database.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS memory_nodes_tier_identity_idx ON memory_nodes(tier, scope_key, type, title_norm);
+      CREATE INDEX IF NOT EXISTS memory_nodes_context_idx ON memory_nodes(tier, scope_key, updated_at);
       CREATE INDEX IF NOT EXISTS memory_nodes_type_status_idx ON memory_nodes(type, status);
       CREATE INDEX IF NOT EXISTS memory_nodes_updated_at_idx ON memory_nodes(updated_at);
       CREATE INDEX IF NOT EXISTS memory_node_assets_asset_idx ON memory_node_assets(asset_id, node_id);
       CREATE INDEX IF NOT EXISTS memory_node_tags_tag_idx ON memory_node_tags(tag, node_id);
       CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges(to_id, relation);
+      CREATE INDEX IF NOT EXISTS memory_federated_edges_to_idx ON memory_federated_edges(to_id, relation);
       CREATE INDEX IF NOT EXISTS memory_evidence_node_idx ON memory_evidence_refs(node_id);
-      INSERT OR REPLACE INTO honeycrisp_meta(key, value) VALUES ('schema_version', '1');
+      INSERT OR REPLACE INTO honeycrisp_meta(key, value) VALUES ('schema_version', '2');
     `);
   }
 
-  private writeNode(node: MemoryNode, titleNorm: string, expectedRevision?: number): void {
-    this.database.exec("BEGIN IMMEDIATE");
+  private writeNode(database: DatabaseSync, node: MemoryNode, titleNorm: string, scopeKey: string, expectedRevision?: number): void {
+    database.exec("BEGIN IMMEDIATE");
     try {
       if (expectedRevision !== undefined) {
-        const row = this.database.prepare("SELECT revision FROM memory_nodes WHERE id = ?").get(node.id) as { revision?: unknown } | undefined;
+        const row = database.prepare("SELECT revision FROM memory_nodes WHERE id = ?").get(node.id) as { revision?: unknown } | undefined;
         if (typeof row?.revision !== "number" || row.revision !== expectedRevision) {
           throw new Error(`Memory node revision conflict for ${node.id}: expected ${expectedRevision}, found ${String(row?.revision ?? "missing")}.`);
         }
       }
-      this.database
+      database
         .prepare(
-          `INSERT INTO memory_nodes(id, type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO memory_nodes(id, tier, scope_key, session_id, workspace_id, workspace_name, subject_id, subject_name, type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET title = excluded.title, title_norm = excluded.title_norm, summary = excluded.summary,
              body = excluded.body, status = excluded.status, confidence = excluded.confidence, attributes_json = excluded.attributes_json,
              updated_at = excluded.updated_at, revision = excluded.revision`,
         )
-        .run(node.id, node.type, node.title, titleNorm, node.summary, node.body, node.status, node.confidence, JSON.stringify(node.attributes), node.createdAt, node.updatedAt, node.revision);
-      this.database.prepare("DELETE FROM memory_node_assets WHERE node_id = ?").run(node.id);
-      this.database.prepare("DELETE FROM memory_node_tags WHERE node_id = ?").run(node.id);
-      this.database.prepare("DELETE FROM memory_evidence_refs WHERE node_id = ?").run(node.id);
-      for (const assetId of node.assetIds) this.database.prepare("INSERT INTO memory_node_assets(node_id, asset_id) VALUES (?, ?)").run(node.id, assetId);
-      for (const tag of node.tags) this.database.prepare("INSERT INTO memory_node_tags(node_id, tag) VALUES (?, ?)").run(node.id, tag);
+        .run(node.id, node.tier, scopeKey, node.sessionId, node.workspaceId, node.workspaceName, node.subjectId, node.subjectName, node.type, node.title, titleNorm, node.summary, node.body, node.status, node.confidence, JSON.stringify(node.attributes), node.createdAt, node.updatedAt, node.revision);
+      database.prepare("DELETE FROM memory_node_assets WHERE node_id = ?").run(node.id);
+      database.prepare("DELETE FROM memory_node_tags WHERE node_id = ?").run(node.id);
+      database.prepare("DELETE FROM memory_evidence_refs WHERE node_id = ?").run(node.id);
+      for (const assetId of node.assetIds) database.prepare("INSERT INTO memory_node_assets(node_id, asset_id) VALUES (?, ?)").run(node.id, assetId);
+      for (const tag of node.tags) database.prepare("INSERT INTO memory_node_tags(node_id, tag) VALUES (?, ?)").run(node.id, tag);
       for (const evidence of node.evidence) {
-        this.database
+        database
           .prepare("INSERT INTO memory_evidence_refs(id, node_id, kind, path_base, path, locator_json, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
           .run(evidence.id, node.id, evidence.kind, evidence.pathBase ?? null, evidence.path ?? null, JSON.stringify(evidence.locator), evidence.summary, evidence.createdAt);
       }
-      this.database.exec("COMMIT");
+      database.exec("COMMIT");
     } catch (error) {
-      this.database.exec("ROLLBACK");
+      database.exec("ROLLBACK");
       throw error;
     }
   }
 
-  private strings(sql: string, value: string): string[] {
-    return (this.database.prepare(sql).all(value) as { value?: unknown }[]).flatMap((row) => (typeof row.value === "string" ? [row.value] : []));
+  private strings(database: DatabaseSync, sql: string, value: string): string[] {
+    return (database.prepare(sql).all(value) as { value?: unknown }[]).flatMap((row) => (typeof row.value === "string" ? [row.value] : []));
   }
 }
 
-function validateNodeInput(input: { type: unknown; title: unknown; status?: unknown; confidence?: unknown; attributes?: unknown }): void {
+function validateNodeInput(input: { type: unknown; title: unknown; tier?: unknown; status?: unknown; confidence?: unknown; attributes?: unknown }): void {
   if (!MEMORY_NODE_TYPES.includes(input.type as MemoryNodeType)) throw new Error(`Unsupported memory node type: ${String(input.type)}`);
   if (typeof input.title !== "string" || !input.title.trim()) throw new Error("Memory node title is required.");
+  if (input.tier !== undefined && !MEMORY_TIERS.includes(input.tier as MemoryTier)) throw new Error(`Unsupported memory tier: ${String(input.tier)}`);
   if (input.status !== undefined && !MEMORY_NODE_STATUSES.includes(input.status as MemoryNodeStatus)) throw new Error(`Unsupported memory node status: ${String(input.status)}`);
   if (input.confidence !== undefined && (typeof input.confidence !== "number" || input.confidence < 0 || input.confidence > 1)) throw new Error("Memory confidence must be between 0 and 1.");
   if (input.type === "chain") {
@@ -363,6 +526,156 @@ function validateNodeInput(input: { type: unknown; title: unknown; status?: unkn
       throw new Error("Chain nodes require non-empty impact and reachability attributes.");
     }
   }
+}
+
+function readStoredTierContext(Database: new (path: string) => DatabaseSync, databasePath: string): MemoryTierContext | undefined {
+  const database = new Database(databasePath);
+  try {
+    const tables = new Set(
+      (database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name?: unknown }>)
+        .flatMap((row) => typeof row.name === "string" ? [row.name] : []),
+    );
+    if (!tables.has("workspace_meta")) return undefined;
+    const workspaceRow = database.prepare("SELECT value FROM workspace_meta WHERE key = 'workspace_id'").get() as { value?: unknown } | undefined;
+    const workspaceId = typeof workspaceRow?.value === "string" ? workspaceRow.value.trim() : "";
+    if (!workspaceId) return undefined;
+    const scopeRow = tables.has("scope_versions")
+      ? database.prepare("SELECT workspace_name, scope_owner FROM scope_versions WHERE status = 'active' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined
+      : undefined;
+    const workspaceName = typeof scopeRow?.workspace_name === "string" && scopeRow.workspace_name.trim() ? scopeRow.workspace_name.trim() : "Workspace";
+    const subjectName = typeof scopeRow?.scope_owner === "string" && scopeRow.scope_owner.trim() ? scopeRow.scope_owner.trim() : undefined;
+    return {
+      workspaceId,
+      workspaceName,
+      ...(subjectName ? { subjectId: stableSubjectId(subjectName), subjectName } : {}),
+    };
+  } finally {
+    database.close();
+  }
+}
+
+function normalizeTierContext(context: MemoryTierContext | undefined, workspaceRoot: string): MemoryTierContext {
+  const resolvedRoot = resolve(workspaceRoot);
+  const workspaceId = context?.workspaceId?.trim() || `workspace_${createHash("sha256").update(resolvedRoot).digest("hex").slice(0, 20)}`;
+  const workspaceName = context?.workspaceName?.trim() || basename(resolvedRoot) || "Workspace";
+  const subjectName = context?.subjectName?.trim();
+  const subjectId = context?.subjectId?.trim() || (subjectName ? stableSubjectId(subjectName) : undefined);
+  return {
+    ...(context?.sessionId?.trim() ? { sessionId: context.sessionId.trim() } : {}),
+    workspaceId,
+    workspaceName,
+    ...(subjectId ? { subjectId } : {}),
+    ...(subjectName ? { subjectName } : {}),
+  };
+}
+
+function stableSubjectId(subjectName: string): string {
+  const normalized = subjectName.trim().replace(/\s+/g, " ").toLowerCase();
+  return `subject_${createHash("sha256").update(normalized).digest("hex").slice(0, 20)}`;
+}
+
+function scopeKeyForTier(tier: MemoryTier, context: MemoryTierContext): string {
+  if (tier === "session") {
+    if (!context.sessionId) throw new Error("Session-tier memory requires a session id in workspace context.");
+    return context.sessionId;
+  }
+  if (tier === "subject") {
+    if (!context.subjectId) throw new Error("Subject-tier memory requires a scope owner or subject in workspace context.");
+    return context.subjectId;
+  }
+  return context.workspaceId;
+}
+
+function scopeKeyForNode(node: MemoryNode): string {
+  if (node.tier === "session") {
+    if (!node.sessionId) throw new Error(`Session-tier memory is missing its session id: ${node.id}`);
+    return node.sessionId;
+  }
+  if (node.tier === "subject") {
+    if (!node.subjectId) throw new Error(`Subject-tier memory is missing its subject id: ${node.id}`);
+    return node.subjectId;
+  }
+  return node.workspaceId;
+}
+
+function visibilityClause(
+  binding: MemoryDatabaseBinding,
+  current: MemoryTierContext,
+): { sql: string; params: string[] } | null {
+  if (!binding.local) {
+    if (!current.subjectId) return null;
+    return { sql: "n.tier = 'subject' AND n.scope_key = ?", params: [current.subjectId] };
+  }
+  const clauses = ["(n.tier = 'workspace' AND n.scope_key = ?)"];
+  const params = [current.workspaceId];
+  if (current.sessionId) {
+    clauses.push("(n.tier = 'session' AND n.scope_key = ?)");
+    params.push(current.sessionId);
+  }
+  if (current.subjectId) {
+    clauses.push("(n.tier = 'subject' AND n.scope_key = ?)");
+    params.push(current.subjectId);
+  }
+  return { sql: `(${clauses.join(" OR ")})`, params };
+}
+
+function nodeIsVisible(node: MemoryNode, binding: MemoryDatabaseBinding, current: MemoryTierContext): boolean {
+  if (!binding.local) return node.tier === "subject" && Boolean(current.subjectId) && node.subjectId === current.subjectId;
+  if (node.tier === "session") return Boolean(current.sessionId) && node.sessionId === current.sessionId;
+  if (node.tier === "subject") return Boolean(current.subjectId) && node.subjectId === current.subjectId;
+  return node.workspaceId === current.workspaceId;
+}
+
+function tableColumns(database: DatabaseSync, table: string): Set<string> {
+  return new Set((database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>).flatMap((row) => typeof row.name === "string" ? [row.name] : []));
+}
+
+function migrateMemoryNodesToTiers(database: DatabaseSync, context: MemoryTierContext): void {
+  database.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    database.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE memory_nodes_tiered (
+        id TEXT PRIMARY KEY,
+        tier TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        session_id TEXT,
+        workspace_id TEXT NOT NULL,
+        workspace_name TEXT NOT NULL,
+        subject_id TEXT,
+        subject_name TEXT,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        title_norm TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'draft',
+        confidence REAL NOT NULL DEFAULT 0.5,
+        attributes_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1
+      );
+    `);
+    database.prepare(
+      `INSERT INTO memory_nodes_tiered (
+         id, tier, scope_key, session_id, workspace_id, workspace_name, subject_id, subject_name,
+         type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision
+       )
+       SELECT id, 'workspace', ?, NULL, ?, ?, ?, ?, type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision
+       FROM memory_nodes`,
+    ).run(context.workspaceId, context.workspaceId, context.workspaceName, context.subjectId ?? null, context.subjectName ?? null);
+    database.exec("DROP TABLE memory_nodes; ALTER TABLE memory_nodes_tiered RENAME TO memory_nodes; COMMIT;");
+  } catch (error) {
+    try { database.exec("ROLLBACK;"); } catch { /* no active transaction */ }
+    throw error;
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON;");
+  }
+}
+
+function resolveDatabasePath(path: string): string {
+  return resolve(path);
 }
 
 function validateEvidence(item: Omit<MemoryEvidenceRef, "id" | "createdAt">): void {
@@ -382,7 +695,7 @@ function validateEvidence(item: Omit<MemoryEvidenceRef, "id" | "createdAt">): vo
 
 function normalizeTitle(value: string): string { return value.trim().replace(/\s+/g, " ").toLowerCase(); }
 function normalizeTag(value: string): string { return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); }
-function stableNodeId(type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${type}:${title}`).digest("hex").slice(0, 20)}`; }
+function stableNodeId(tier: MemoryTier, scopeKey: string, type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${tier}:${scopeKey}:${type}:${title}`).digest("hex").slice(0, 20)}`; }
 function unique(values: readonly string[]): string[] { return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort(); }
 function mergeObjects(base: Record<string, unknown>, update: Record<string, unknown>): Record<string, unknown> { return { ...base, ...update }; }
 function mergeEvidence(existing: readonly MemoryEvidenceRef[], incoming: readonly Omit<MemoryEvidenceRef, "id" | "createdAt">[], nodeId: string, now: string): MemoryEvidenceRef[] {
@@ -415,6 +728,8 @@ function evidenceFromRow(row: Record<string, unknown>): MemoryEvidenceRef {
 function edgeFromRow(row: Record<string, unknown>): MemoryEdge { return { fromId: text(row.from_id), toId: text(row.to_id), relation: text(row.relation), note: text(row.note), createdAt: text(row.created_at), updatedAt: text(row.updated_at) }; }
 function jsonObject(value: unknown): Record<string, unknown> { if (typeof value !== "string") return {}; const parsed = JSON.parse(value) as unknown; return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; }
 function text(value: unknown): string { if (typeof value !== "string") throw new Error("Expected SQLite text value."); return value; }
+function nullableText(value: unknown): string | null { return typeof value === "string" ? value : null; }
 function number(value: unknown): number { if (typeof value !== "number") throw new Error("Expected SQLite number value."); return value; }
+function memoryTier(value: unknown): MemoryTier { if (!MEMORY_TIERS.includes(value as MemoryTier)) throw new Error(`Unsupported stored memory tier: ${String(value)}`); return value as MemoryTier; }
 function nodeType(value: unknown): MemoryNodeType { if (!MEMORY_NODE_TYPES.includes(value as MemoryNodeType)) throw new Error(`Unsupported stored memory node type: ${String(value)}`); return value as MemoryNodeType; }
 function nodeStatus(value: unknown): MemoryNodeStatus { if (!MEMORY_NODE_STATUSES.includes(value as MemoryNodeStatus)) throw new Error(`Unsupported stored memory status: ${String(value)}`); return value as MemoryNodeStatus; }

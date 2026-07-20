@@ -26,6 +26,8 @@ Honeycrisp passes the request, authorized workspace context, relevant durable me
 
 On a real run, Honeycrisp opens the workspace database at `.honeycrisp/memory/memory.sqlite`, exposes configured research tools plus a small durable knowledge graph, and runs the selected model through Pi. Run state, transcripts, and tool traces are operational data; they are not automatically promoted into durable knowledge. The model explicitly searches and updates concise reusable nodes when the research warrants it.
 
+Durable graph nodes carry a memory tier and their origin context. `session` nodes are visible only to one research session, `workspace` nodes are reusable across sessions for one workspace, and `subject` nodes can be recalled from explicitly supplied peer databases for workspaces with the same owner or subject. The memory tool set stays unchanged; `memory.save` selects a tier and `memory.search` can filter tiers. Peer access never exposes another workspace's runs, transcripts, or bulk artifacts.
+
 Run with stored auth. If no config is provided, Honeycrisp first checks `.honeycrisp/config.json` under `--workspace-root`, then falls back to the first authorized provider/model from the CLI auth store. A config file is only a model preference file; credentials still come from `honeycrisp auth login`.
 
 ```sh

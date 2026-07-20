@@ -2834,7 +2834,15 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   });
-  const memoryGraph = new MemoryGraphStore({ workspaceRoot });
+  const memoryGraph = new MemoryGraphStore({
+    workspaceRoot,
+    ...(workspaceContext.memoryTierContext
+      ? {
+          context: workspaceContext.memoryTierContext,
+          peers: workspaceContext.memoryTierContext.peers,
+        }
+      : {}),
+  });
   const memoryTools = createMemoryGraphTools(memoryGraph);
   executableTools.push(...memoryTools);
   toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));

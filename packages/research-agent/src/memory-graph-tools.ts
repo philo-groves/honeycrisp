@@ -4,6 +4,7 @@ import {
   type MemoryEvidenceRef,
   type MemoryNodeStatus,
   type MemoryNodeType,
+  type MemoryTier,
   type SaveMemoryNodeInput,
 } from "./memory-graph.js";
 import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
@@ -13,6 +14,7 @@ const SEARCH_PARAMETERS = {
   type: "object",
   properties: {
     query: { type: "string" },
+    tiers: { type: "array", items: { type: "string", enum: ["session", "workspace", "subject"] } },
     types: { type: "array", items: { type: "string" } },
     statuses: { type: "array", items: { type: "string" } },
     assetIds: { type: "array", items: { type: "string" } },
@@ -25,7 +27,7 @@ const SAVE_PARAMETERS = {
   type: "object",
   required: ["type", "title"],
   properties: {
-    id: { type: "string" }, type: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
+    id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
     status: { type: "string" }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
     tags: { type: "array", items: { type: "string" } }, attributes: { type: "object" }, evidence: { type: "array", items: { type: "object" } },
   },
@@ -46,14 +48,16 @@ const LINK_PARAMETERS = {
 
 export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecutableTool[] {
   return [
-    tool("memory.search", "memory_search", "Search concise reusable workspace knowledge. Use before repeating prior research.", "read", SEARCH_PARAMETERS, (input) => {
+    tool("memory.search", "memory_search", "Search visible session, workspace, and subject knowledge. Use before repeating prior research.", "read", SEARCH_PARAMETERS, (input) => {
       const query = string(input.query);
+      const tiers = strings(input.tiers) as MemoryTier[];
       const types = strings(input.types) as MemoryNodeType[];
       const statuses = strings(input.statuses) as MemoryNodeStatus[];
       const assetIds = strings(input.assetIds);
       const tags = strings(input.tags);
       return store.search({
         ...(query ? { query } : {}),
+        ...(tiers.length ? { tiers } : {}),
         ...(types.length ? { types } : {}),
         ...(statuses.length ? { statuses } : {}),
         ...(assetIds.length ? { assetIds } : {}),
@@ -62,10 +66,12 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
       });
     }),
     tool("memory.get", "memory_get", "Read one durable memory node with evidence references.", "read", GET_PARAMETERS, (input) => store.get(requiredString(input.id, "id"))),
-    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge. Do not store transcripts, task narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
+    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge. Choose session for run-specific state, workspace for target-specific knowledge, or subject for knowledge useful across this owner's workspaces. Do not store transcripts, task narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
       const id = string(input.id);
+      const tier = string(input.tier);
       return store.save({
         ...(id ? { id } : {}),
+        ...(tier ? { tier: tier as MemoryTier } : {}),
         type: requiredString(input.type, "type") as MemoryNodeType,
         title: requiredString(input.title, "title"),
         ...(input.summary !== undefined ? { summary: requiredString(input.summary, "summary", true) } : {}),
