@@ -34,6 +34,30 @@ import {
   routeEventToMemory,
 } from "../packages/research-agent/dist/index.js";
 
+function recordedWorkspaceContext() {
+  return {
+    schemaVersion: 1,
+    workspaceRoot: "/tmp/research-workspace",
+    memory: {
+      rootPath: "/tmp/research-workspace/.honeycrisp/memory",
+      databasePath: "/tmp/research-workspace/.honeycrisp/memory/memory.sqlite",
+      artifactDirectoryPath: "/tmp/research-workspace/.beale/artifacts",
+      directories: [],
+      rules: [],
+    },
+    authorization: {
+      recorded: true,
+      source: "beale",
+      scopeId: "scope_fixture",
+      scopeName: "Parser fixture",
+      networkProfile: "offline",
+    },
+    knownRepositories: [],
+    materializedSourcePaths: [],
+    projectNotes: [],
+  };
+}
+
 test("phase 1 memory contracts define canonical ids, sequences, statuses, and provenance", () => {
   const eventId = createResearchEventId();
   const stableRecordId = createResearchMemoryRecordId({
@@ -169,6 +193,41 @@ test("first-run controller asks for scope before security-sensitive work", () =>
 
   assert.equal(decision.actionClass, "ask_user");
   assert.match(decision.subGoal.objective, /Confirm missing scope/);
+});
+
+test("first-run controller accepts recorded workspace authorization as scope", () => {
+  const goalFrame = createResearchGoalFrame(
+    [
+      "Goal: Triage a suspected parser vulnerability",
+      "Risk: security-sensitive authorized vulnerability research",
+    ].join("\n"),
+  );
+  const workspaceContext = recordedWorkspaceContext();
+
+  const decision = createFirstRunMemoryController().decide({
+    goalFrame,
+    workspaceContext,
+  });
+
+  assert.notEqual(decision.actionClass, "ask_user");
+  assert.equal(decision.contextPacket.workspaceContext?.authorization?.recorded, true);
+});
+
+test("first-run controller does not mistake repository URLs for local paths", () => {
+  const goalFrame = createResearchGoalFrame(
+    [
+      "Goal: Materialize https://github.com/apple-oss-distributions/zsh and inspect ZFTP",
+      "Scope constraints: recorded Zsh workspace scope",
+    ].join("\n"),
+  );
+
+  const decision = createFirstRunMemoryController().decide({
+    goalFrame,
+    tools: [createActionToolDescriptor("repository.search", "inspect")],
+  });
+
+  assert.equal(decision.actionClass, "inspect");
+  assert.equal(decision.candidateToolActions.length, 0);
 });
 
 test("first-run controller can select user-configured non-inspection tools", () => {

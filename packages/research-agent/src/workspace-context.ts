@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
   ResearchStorageLayout,
+  ResearchWorkspaceAuthorizationContext,
   ResearchWorkspaceContext,
   ResearchWorkspaceRepositoryContext,
   ResearchWorkspaceRepositoryRole,
@@ -13,6 +14,7 @@ export interface CreateResearchWorkspaceContextInput {
   knownRepositories?: readonly WorkspaceRepositoryInput[];
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
+  authorization?: ResearchWorkspaceAuthorizationContext;
 }
 
 export type WorkspaceRepositoryInput =
@@ -31,6 +33,7 @@ export interface ResearchWorkspaceContextOverlay {
   knownRepositories?: readonly ResearchWorkspaceRepositoryContext[];
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
+  authorization?: ResearchWorkspaceAuthorizationContext;
 }
 
 export function createResearchWorkspaceContext(
@@ -59,6 +62,7 @@ export function createResearchWorkspaceContext(
       directories: input.storageLayout.directories,
       rules: input.storageLayout.rules,
     },
+    ...(input.authorization ? { authorization: input.authorization } : {}),
     knownRepositories: uniqueRepositories(repositories),
     materializedSourcePaths,
     projectNotes: uniqueStrings(input.projectNotes ?? []),
@@ -90,6 +94,7 @@ export function loadResearchWorkspaceContextFile(
     ...readStringArray(parsed.projectNotes),
     ...readStringArray(parsed.notes),
   ]);
+  const authorization = normalizeAuthorization(parsed.authorization);
   const memory = isRecord(parsed.memory)
     ? {
         ...(typeof parsed.memory.rootPath === "string"
@@ -114,6 +119,7 @@ export function loadResearchWorkspaceContextFile(
     schemaVersion: 1,
     ...(workspaceRoot ? { workspaceRoot } : {}),
     ...(memory ? { memory } : {}),
+    ...(authorization ? { authorization } : {}),
     ...(knownRepositories.length > 0 ? { knownRepositories } : {}),
     ...(materializedSourcePaths.length > 0 ? { materializedSourcePaths } : {}),
     ...(projectNotes.length > 0 ? { projectNotes } : {}),
@@ -143,6 +149,11 @@ export function mergeResearchWorkspaceContexts(
       ...(overlay.memory?.directories ? { directories: overlay.memory.directories } : {}),
       ...(overlay.memory?.rules ? { rules: overlay.memory.rules } : {}),
     },
+    ...(overlay.authorization
+      ? { authorization: overlay.authorization }
+      : input.base.authorization
+        ? { authorization: input.base.authorization }
+        : {}),
     knownRepositories: uniqueRepositories([
       ...input.base.knownRepositories,
       ...(overlay.knownRepositories ?? []),
@@ -156,6 +167,38 @@ export function mergeResearchWorkspaceContexts(
       ...(overlay.projectNotes ?? []),
     ]),
   };
+}
+
+function normalizeAuthorization(
+  value: unknown,
+): ResearchWorkspaceAuthorizationContext | undefined {
+  if (!isRecord(value) || value.recorded !== true) {
+    return undefined;
+  }
+  const source =
+    value.source === "beale" || value.source === "cli" || value.source === "config"
+      ? value.source
+      : "config";
+  return {
+    recorded: true,
+    source,
+    ...optionalStringProperty(value, "scopeId"),
+    ...optionalStringProperty(value, "scopeName"),
+    ...optionalStringProperty(value, "scopeOwner"),
+    ...optionalStringProperty(value, "networkProfile"),
+    ...optionalStringProperty(value, "activeFrom"),
+    ...optionalStringProperty(value, "expiresAt"),
+  };
+}
+
+function optionalStringProperty(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, string> {
+  const candidate = value[key];
+  return typeof candidate === "string" && candidate.trim()
+    ? { [key]: candidate.trim() }
+    : {};
 }
 
 export function workspaceContextFileReadHints(

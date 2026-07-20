@@ -462,10 +462,22 @@ export interface ResearchWorkspaceStorageContext {
   rules: readonly string[];
 }
 
+export interface ResearchWorkspaceAuthorizationContext {
+  recorded: true;
+  source: "beale" | "cli" | "config";
+  scopeId?: string;
+  scopeName?: string;
+  scopeOwner?: string;
+  networkProfile?: string;
+  activeFrom?: string;
+  expiresAt?: string;
+}
+
 export interface ResearchWorkspaceContext {
   schemaVersion: 1;
   workspaceRoot: string;
   memory: ResearchWorkspaceStorageContext;
+  authorization?: ResearchWorkspaceAuthorizationContext;
   knownRepositories: readonly ResearchWorkspaceRepositoryContext[];
   materializedSourcePaths: readonly string[];
   projectNotes: readonly string[];

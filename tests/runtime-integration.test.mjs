@@ -174,6 +174,13 @@ test("bootstrap run exposes workspace context with repository and source hints",
   const workspaceContext = createResearchWorkspaceContext({
     workspaceRoot,
     storageLayout,
+    authorization: {
+      recorded: true,
+      source: "beale",
+      scopeId: "scope_zsh_fixture",
+      scopeName: "ZSH fixture",
+      networkProfile: "offline",
+    },
     knownRepositories: [
       {
         rootPath: sourceRoot,
@@ -205,6 +212,7 @@ test("bootstrap run exposes workspace context with repository and source hints",
   );
 
   assert.equal(result.workspaceContext.workspaceRoot, workspaceRoot);
+  assert.equal(result.workspaceContext.authorization?.scopeId, "scope_zsh_fixture");
   assert.equal(capture.workspaceContext.knownRepositories[0]?.rootPath, sourceRoot);
   assert.equal(capture.context.workspaceContext?.materializedSourcePaths[0], sourceRoot);
   assert.ok(

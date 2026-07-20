@@ -36,6 +36,7 @@ export class FirstRunMemoryController {
     const actionScores = scoreActionClasses(
       input.goalFrame.riskFlags,
       input.goalFrame.scopeConstraints,
+      input.workspaceContext?.authorization?.recorded === true,
       tools,
       input.governance,
     );
@@ -236,7 +237,8 @@ function classifyCandidateToolActions(input: {
 
 function findFirstAbsolutePath(values: readonly string[]): string | undefined {
   for (const value of values) {
-    for (const match of value.matchAll(/\/[^\s"'`<>|{}[\]]+/g)) {
+    const withoutUrls = value.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'`<>]+/gi, "");
+    for (const match of withoutUrls.matchAll(/\/[^\s"'`<>|{}[\]]+/g)) {
       const candidate = normalizePathCandidate(match[0]);
       if (candidate && candidate !== "/") {
         return candidate;
@@ -259,13 +261,14 @@ function normalizePathCandidate(value: string): string | undefined {
 function scoreActionClasses(
   riskFlags: readonly string[],
   scopeConstraints: readonly string[],
+  hasRecordedWorkspaceAuthorization: boolean,
   tools: readonly ResearchToolDescriptor[],
   governance: ResearchGovernancePolicy | undefined,
 ): ResearchActionScore[] {
   const securitySensitive = riskFlags.some((flag) =>
     /security|vulnerability|exploit|rce|sandbox|privilege/i.test(flag),
   );
-  const hasScope = scopeConstraints.length > 0;
+  const hasScope = scopeConstraints.length > 0 || hasRecordedWorkspaceAuthorization;
   const hasInspectTool = supportsAction(tools, "inspect", governance);
   const hasSearchTool = supportsAction(tools, "search", governance);
   const hasExperimentTool = supportsAction(tools, "experiment", governance);
@@ -283,7 +286,7 @@ function scoreActionClasses(
       score: securitySensitive && !hasScope ? 100 : 15,
       rationale:
         securitySensitive && !hasScope
-          ? "Security-sensitive research needs explicit scope before tool use."
+          ? "Security-sensitive research has no prompt scope or recorded workspace authorization."
           : "No blocking missing input was detected.",
     },
     {

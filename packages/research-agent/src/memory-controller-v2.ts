@@ -73,6 +73,7 @@ export class MemoryDrivenController {
       retrieval,
       tools,
       governance: input.governance,
+      workspaceContext: input.workspaceContext,
     });
     const actionClass = actionScores[0]?.actionClass ?? "synthesize";
     const supportingCandidates = selectSupportingCandidates(
@@ -180,16 +181,19 @@ function scoreMemoryDrivenActions(input: {
   retrieval: MemoryRetrievalResult;
   tools: readonly ResearchToolDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
+  workspaceContext: ResearchWorkspaceContext | undefined;
 }): ResearchActionScore[] {
   const scores: ResearchActionScore[] = [];
   const securitySensitive = input.goalFrame.riskFlags.some((flag) =>
     /security|vulnerability|exploit|rce|sandbox|privilege/i.test(flag),
   );
-  const hasScope = input.goalFrame.scopeConstraints.length > 0;
+  const hasScope =
+    input.goalFrame.scopeConstraints.length > 0 ||
+    input.workspaceContext?.authorization?.recorded === true;
 
   addScore(scores, "ask_user", securitySensitive && !hasScope ? 100 : 0,
     securitySensitive && !hasScope
-      ? "Security-sensitive work still needs explicit scope."
+      ? "Security-sensitive work has no prompt scope or recorded workspace authorization."
       : "No blocking user clarification was inferred from memory.");
 
   addScore(scores, "stop", stopGateTriggered(input) ? 100 : 0,

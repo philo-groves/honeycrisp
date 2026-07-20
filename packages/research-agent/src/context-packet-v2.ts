@@ -268,6 +268,15 @@ function compileWorkspaceSection(
       `memory_db=${workspaceContext.memory.databasePath}`,
       `storage_root=${workspaceContext.memory.rootPath}`,
       `artifact_dir=${workspaceContext.memory.artifactDirectoryPath}`,
+      workspaceContext.authorization?.recorded
+        ? `authorization=recorded source=${workspaceContext.authorization.source}` +
+          (workspaceContext.authorization.scopeName
+            ? ` scope=${workspaceContext.authorization.scopeName}`
+            : "") +
+          (workspaceContext.authorization.networkProfile
+            ? ` network=${workspaceContext.authorization.networkProfile}`
+            : "")
+        : "",
       workspaceContext.knownRepositories.length > 0
         ? `repositories=${workspaceContext.knownRepositories
             .map((repository) => repository.rootPath)
