@@ -405,11 +405,11 @@ export class MemoryGraphStore {
     mkdirSync(dirname(databasePath), { recursive: true });
     const database = new Database(databasePath);
     database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
-    this.initializeSchema(database, context);
+    this.initializeSchema(database);
     return { database, databasePath: resolveDatabasePath(databasePath), context, local };
   }
 
-  private initializeSchema(database: DatabaseSync, context: MemoryTierContext): void {
+  private initializeSchema(database: DatabaseSync): void {
     database.exec(`
       CREATE TABLE IF NOT EXISTS honeycrisp_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_nodes (
@@ -472,9 +472,6 @@ export class MemoryGraphStore {
         created_at TEXT NOT NULL
       );
     `);
-    if (!tableColumns(database, "memory_nodes").has("tier")) {
-      migrateMemoryNodesToTiers(database, context);
-    }
     database.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS memory_nodes_tier_identity_idx ON memory_nodes(tier, scope_key, type, title_norm);
       CREATE INDEX IF NOT EXISTS memory_nodes_context_idx ON memory_nodes(tier, scope_key, updated_at);
@@ -641,54 +638,6 @@ function nodeIsVisible(node: MemoryNode, binding: MemoryDatabaseBinding, current
   if (node.tier === "session") return Boolean(current.sessionId) && node.sessionId === current.sessionId;
   if (node.tier === "subject") return Boolean(current.subjectId) && node.subjectId === current.subjectId;
   return node.workspaceId === current.workspaceId;
-}
-
-function tableColumns(database: DatabaseSync, table: string): Set<string> {
-  return new Set((database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>).flatMap((row) => typeof row.name === "string" ? [row.name] : []));
-}
-
-function migrateMemoryNodesToTiers(database: DatabaseSync, context: MemoryTierContext): void {
-  database.exec("PRAGMA foreign_keys = OFF;");
-  try {
-    database.exec(`
-      BEGIN IMMEDIATE;
-      CREATE TABLE memory_nodes_tiered (
-        id TEXT PRIMARY KEY,
-        tier TEXT NOT NULL,
-        scope_key TEXT NOT NULL,
-        session_id TEXT,
-        workspace_id TEXT NOT NULL,
-        workspace_name TEXT NOT NULL,
-        subject_id TEXT,
-        subject_name TEXT,
-        type TEXT NOT NULL,
-        title TEXT NOT NULL,
-        title_norm TEXT NOT NULL,
-        summary TEXT NOT NULL DEFAULT '',
-        body TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'draft',
-        confidence REAL NOT NULL DEFAULT 0.5,
-        attributes_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        revision INTEGER NOT NULL DEFAULT 1
-      );
-    `);
-    database.prepare(
-      `INSERT INTO memory_nodes_tiered (
-         id, tier, scope_key, session_id, workspace_id, workspace_name, subject_id, subject_name,
-         type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision
-       )
-       SELECT id, 'workspace', ?, NULL, ?, ?, ?, ?, type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision
-       FROM memory_nodes`,
-    ).run(context.workspaceId, context.workspaceId, context.workspaceName, context.subjectId ?? null, context.subjectName ?? null);
-    database.exec("DROP TABLE memory_nodes; ALTER TABLE memory_nodes_tiered RENAME TO memory_nodes; COMMIT;");
-  } catch (error) {
-    try { database.exec("ROLLBACK;"); } catch { /* no active transaction */ }
-    throw error;
-  } finally {
-    database.exec("PRAGMA foreign_keys = ON;");
-  }
 }
 
 function resolveDatabasePath(path: string): string {

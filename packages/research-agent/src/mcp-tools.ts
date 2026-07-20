@@ -169,7 +169,6 @@ function createMcpExecutableTool(
       ? { outputSchema: createWrappedMcpOutputSchema(mcpTool.outputSchema) }
       : {}),
     estimatedCost: "external MCP provider",
-    memoryWritebackDefaults: ["event", "working", "episodic"],
     metadata: {
       provider: "mcp",
       mcpKind: "tool",
@@ -254,7 +253,6 @@ function createMcpResourceReadTool(
     ],
     inputSchema,
     estimatedCost: "external MCP provider",
-    memoryWritebackDefaults: ["event", "working", "episodic"],
     metadata: {
       provider: "mcp",
       mcpKind: "resource",

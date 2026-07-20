@@ -529,7 +529,6 @@ function createCodeTool(input: {
         maxBytes: input.maxFileBytes,
       },
     },
-    memoryWritebackDefaults: ["event", "working", "episodic"],
   };
 
   return {

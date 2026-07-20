@@ -15,13 +15,10 @@ import {
   createDeterministicAgentExecutor,
   createMemoryGraphTools,
   compileMemoryModelContext,
-  createMemoryInspector,
-  createMemorySteeringController,
   createPiAgentExecutor,
   createRepositorySearchTool,
   createResearchAgentFlowCapture,
   createResearchStorageLayout,
-  createDeterministicMemoryWritePipeline,
   createResearchToolRegistry,
   createResearchWorkspaceContext,
   createMcpResearchTools,
@@ -30,15 +27,11 @@ import {
   createStructuredFileReadTool,
   getDefaultResearchModelConfigPath,
   getDefaultResearchToolConfigPath,
-  createSqliteMemoryEventLog,
-  createSqliteMemoryRecordStore,
-  createSqliteProofStore,
   createSynthesisTool,
   getAuthStatus,
   listAuthProviders,
   loadResearchSkillsFromDirectory,
   loadResearchStorageManifest,
-  registerResearchStorageArtifactRef,
   loadResearchMcpClientConfig,
   loadResearchExperimentConfig,
   loadResearchModelConfig,
@@ -47,15 +40,7 @@ import {
   loginAuthProvider,
   logoutAuthProvider,
   mergeResearchWorkspaceContexts,
-  parseResearchDerivedMemoryStatus,
-  parseResearchFindingStatus,
-  parseResearchProofAttemptStatus,
-  parseResearchProofMethodKind,
-  parseResearchProofObligationStatus,
-  parseResearchProofResultStatus,
-  parseResearchProofSubjectKind,
   resolveResearchModelConfig,
-  routeEventsToMemorySnapshot,
   verifyProviderAuth,
   workspaceContextFileReadHints,
   writeResearchModelConfig,
@@ -66,19 +51,16 @@ import type {
   AuthLoginCallbacks,
   AuthPrompt,
   LocalInspectionAction,
-  ResearchArtifactRef,
   ResearchModelEffort,
   ResearchEvent,
   ResearchExecutableTool,
   ResearchGovernancePolicy,
   ResearchLiveEventSink,
   ResearchAgentExecutor,
-  ResearchMemorySnapshot,
   ResearchModelConfigPreference,
   MemoryNodeStatus,
   MemoryNodeType,
   ResearchModelMemoryContextNode,
-  ResearchProofMethodDescriptor,
   ResearchToolConfigPreference,
   ResolvedResearchModelConfig,
   ResearchSkillDescriptor,
@@ -195,7 +177,6 @@ interface ParsedMemoryArgs {
   command: string | undefined;
   workspaceRoot: string;
   positionals: string[];
-  questions: string[];
   limit: number | undefined;
   summary: string | undefined;
   body: string | undefined;
@@ -204,22 +185,7 @@ interface ParsedMemoryArgs {
   assetIds: string[];
   expectedRevision: number | undefined;
   status: string | undefined;
-  findingStatus: string | undefined;
-  supersededByRecordId: string | undefined;
   confidence: number | undefined;
-  question: string | undefined;
-  methodKind: string | undefined;
-  methodName: string | undefined;
-  result: string | undefined;
-  verifier: string | undefined;
-  requiredResult: string | undefined;
-  obligationStatus: string | undefined;
-  obligationId: string | undefined;
-  attemptStatus: string | undefined;
-  artifactKind: string | undefined;
-  artifactUri: string | undefined;
-  mark: string | undefined;
-  policy: string | undefined;
   json: boolean;
   help: boolean;
 }
@@ -509,25 +475,9 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
   let body: string | undefined;
   let expectedRevision: number | undefined;
   let status: string | undefined;
-  let findingStatus: string | undefined;
-  let supersededByRecordId: string | undefined;
   let confidence: number | undefined;
-  let question: string | undefined;
-  let methodKind: string | undefined;
-  let methodName: string | undefined;
-  let result: string | undefined;
-  let verifier: string | undefined;
-  let requiredResult: string | undefined;
-  let obligationStatus: string | undefined;
-  let obligationId: string | undefined;
-  let attemptStatus: string | undefined;
-  let artifactKind: string | undefined;
-  let artifactUri: string | undefined;
-  let mark: string | undefined;
-  let policy: string | undefined;
   let json = false;
   let help = false;
-  const questions: string[] = [];
   const types: MemoryNodeType[] = [];
   const tags: string[] = [];
   const assetIds: string[] = [];
@@ -535,23 +485,16 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
 
   for (let index = command ? 1 : 0; index < argv.length; index += 1) {
     const arg = argv[index];
-
+    if (!arg) continue;
     if (arg === "--workspace-root") {
       workspaceRoot = readOptionValue(argv, index, arg);
       index += 1;
-    } else if (arg === "--question") {
-      const value = readOptionValue(argv, index, arg);
-      questions.push(value);
-      question = value;
-      index += 1;
     } else if (arg === "--limit") {
       const value = Number.parseInt(readOptionValue(argv, index, arg), 10);
-      if (!Number.isFinite(value) || value <= 0) {
-        throw new Error("--limit requires a positive integer.");
-      }
+      if (!Number.isFinite(value) || value <= 0) throw new Error("--limit requires a positive integer.");
       limit = value;
       index += 1;
-    } else if (arg === "--summary" || arg === "--note") {
+    } else if (arg === "--summary") {
       summary = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--body") {
@@ -573,101 +516,23 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
     } else if (arg === "--status") {
       status = readOptionValue(argv, index, arg);
       index += 1;
-    } else if (arg === "--finding-status") {
-      findingStatus = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--superseded-by") {
-      supersededByRecordId = readOptionValue(argv, index, arg);
-      index += 1;
     } else if (arg === "--confidence") {
       const value = Number.parseFloat(readOptionValue(argv, index, arg));
-      if (!Number.isFinite(value) || value < 0 || value > 1) {
-        throw new Error("--confidence requires a number from 0 to 1.");
-      }
+      if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error("--confidence requires a number from 0 to 1.");
       confidence = value;
-      index += 1;
-    } else if (arg === "--question") {
-      question = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--method-kind") {
-      methodKind = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--method-name") {
-      methodName = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--result") {
-      result = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--verifier") {
-      verifier = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--required-result") {
-      requiredResult = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--obligation-status") {
-      obligationStatus = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--obligation-id") {
-      obligationId = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--attempt-status") {
-      attemptStatus = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--artifact-kind") {
-      artifactKind = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--artifact-uri") {
-      artifactUri = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--mark") {
-      mark = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--policy") {
-      policy = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "-h" || arg === "--help") {
       help = true;
-    } else if (arg?.startsWith("-")) {
+    } else if (arg.startsWith("-")) {
       throw new Error(`Unknown memory option: ${arg}`);
-    } else if (arg) {
+    } else {
       positionals.push(arg);
     }
   }
 
-  return {
-    command,
-    workspaceRoot,
-    positionals,
-    questions,
-    limit,
-    summary,
-    body,
-    types,
-    tags,
-    assetIds,
-    expectedRevision,
-    status,
-    findingStatus,
-    supersededByRecordId,
-    confidence,
-    question,
-    methodKind,
-    methodName,
-    result,
-    verifier,
-    requiredResult,
-    obligationStatus,
-    obligationId,
-    attemptStatus,
-    artifactKind,
-    artifactUri,
-    mark,
-    policy,
-    json,
-    help,
-  };
+  return { command, workspaceRoot, positionals, limit, summary, body, types, tags, assetIds, expectedRevision, status, confidence, json, help };
 }
 
 function parseConfigArgs(argv: readonly string[]): ParsedConfigArgs {
@@ -1076,7 +941,7 @@ function usage(): string {
     "  --repo-root <path>     Add a known repository context hint and enable repository.search unless disabled",
     "  --file-read-root <p>   Add a file.read context hint and enable file.read unless disabled",
     "  --source-path <path>   Add a materialized source context path",
-    "  --project-note <text>  Add a project/workspace note to the context packet",
+    "  --project-note <text>  Add a project/workspace note to compiled context",
     "  --workspace-context <p> JSON workspace context file to merge with CLI hints",
     "  --allowed-side-effect <s> Allow tool side effect: none, read, write, network, process",
     "  --tool-max-calls <n>   Max tool calls for governance",
@@ -1199,11 +1064,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           );
 
       const inspectionState =
-        runtimeConfig.events.length > 0 && runtimeConfig.memory
-          ? {
-              events: runtimeConfig.events,
-              memory: runtimeConfig.memory,
-            }
+        runtimeConfig.events.length > 0
+          ? { events: runtimeConfig.events }
           : {};
 
       const result = await runResearchAgent({
@@ -1387,6 +1249,20 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
   } finally {
     store.close();
   }
+}
+
+function requireMemoryPositional(args: ParsedMemoryArgs, usage: string): string {
+  const value = args.positionals[0];
+  if (!value) throw new Error(`memory ${usage}`);
+  return value;
+}
+
+function printMemoryOutput<T>(
+  args: ParsedMemoryArgs,
+  value: T,
+  render: (value: T) => string,
+): void {
+  console.log(args.json ? JSON.stringify(value, null, 2) : render(value));
 }
 
 function countStrings(values: readonly string[]): Record<string, number> {
@@ -2008,7 +1884,7 @@ function toolsUsage(): string {
     "  --repo-root <path>          Add a known repository context hint and enable repository.search unless disabled",
     "  --file-read-root <path>     Add a file.read context hint and enable file.read unless disabled",
     "  --source-path <path>        Add a materialized source context path",
-    "  --project-note <text>       Add a project/workspace note to the context packet",
+    "  --project-note <text>       Add a project/workspace note to compiled context",
     "  --workspace-context <path>  JSON workspace context file to merge with CLI hints",
     "  --inspect-root <path>       Enable local.inspection for this root unless disabled",
     "  --allowed-side-effect <s>   Allow side effect: none, read, write, network, process",
@@ -2087,690 +1963,6 @@ function memoryUsage(): string {
   ].join("\n");
 }
 
-function isMemorySteeringCommand(
-  command: string | undefined,
-): command is
-  | "promote-hypothesis"
-  | "review-record"
-  | "reject-record"
-  | "supersede-record"
-  | "tombstone-record"
-  | "request-proof"
-  | "attach-proof-attempt"
-  | "review-proof-attempt"
-  | "mark-artifact" {
-  return (
-    command === "promote-hypothesis" ||
-    command === "review-record" ||
-    command === "reject-record" ||
-    command === "supersede-record" ||
-    command === "tombstone-record" ||
-    command === "request-proof" ||
-    command === "attach-proof-attempt" ||
-    command === "review-proof-attempt" ||
-    command === "mark-artifact"
-  );
-}
-
-interface MemoryImportStores {
-  eventLog: ReturnType<typeof createSqliteMemoryEventLog>;
-  recordStore: ReturnType<typeof createSqliteMemoryRecordStore>;
-  proofStore: ReturnType<typeof createSqliteProofStore>;
-  inspector: ReturnType<typeof createMemoryInspector>;
-}
-
-interface MemoryImportResult {
-  action: "import-events";
-  importPath: string;
-  loadedEvents: number;
-  appendedEvents: number;
-  skippedExistingEvents: number;
-  recordsWritten: number;
-  proofObjectsUpdated: number;
-  events: readonly ResearchEvent[];
-  records: readonly {
-    id: string;
-    kind: string;
-    status: string;
-    summary: string;
-  }[];
-  agentState: ReturnType<ReturnType<typeof createMemoryInspector>["showAgentState"]>;
-}
-
-async function importMemoryEvents(
-  args: ParsedMemoryArgs,
-  stores: MemoryImportStores,
-): Promise<MemoryImportResult> {
-  const importPath = resolve(
-    args.workspaceRoot,
-    requireMemoryPositional(args, "import-events <json-or-jsonl-file>"),
-  );
-  const events = parseMemoryImportEvents(
-    await readFile(importPath, "utf8"),
-    importPath,
-  );
-  const newEvents = events.filter((event) => !stores.eventLog.getById(event.id));
-  const appended = stores.eventLog.appendMany(newEvents);
-  const writePipeline = createDeterministicMemoryWritePipeline();
-  const derivedRecords = writePipeline.deriveMany(appended);
-  const recordsToWrite = derivedRecords.filter(
-    (record) => !stores.recordStore.getById(record.id),
-  );
-  if (recordsToWrite.length > 0) {
-    stores.recordStore.writeMany(recordsToWrite);
-  }
-
-  let proofObjectsUpdated = 0;
-  for (const event of appended) {
-    proofObjectsUpdated += stores.proofStore.applyEvent(event).length;
-    for (const artifactRef of event.artifactRefs ?? []) {
-      registerResearchStorageArtifactRef(
-        createResearchStorageLayout({ workspaceRoot: args.workspaceRoot }),
-        artifactRef,
-        [event.id],
-      );
-    }
-  }
-
-  return {
-    action: "import-events",
-    importPath,
-    loadedEvents: events.length,
-    appendedEvents: appended.length,
-    skippedExistingEvents: events.length - appended.length,
-    recordsWritten: recordsToWrite.length,
-    proofObjectsUpdated,
-    events: appended,
-    records: recordsToWrite.map((record) => ({
-      id: record.id,
-      kind: record.kind,
-      status: record.status,
-      summary: record.summary,
-    })),
-    agentState: stores.inspector.showAgentState({
-      storage: createMemoryCommandStorageReadModel(args),
-    }),
-  };
-}
-
-function parseMemoryImportEvents(
-  text: string,
-  importPath: string,
-): ResearchEvent[] {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return [];
-  }
-
-  const parsed = trimmed.startsWith("[")
-    ? (JSON.parse(trimmed) as unknown)
-    : trimmed
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line, index) => {
-          try {
-            return JSON.parse(line) as unknown;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            throw new Error(`${importPath}:${index + 1}: ${message}`);
-          }
-        });
-
-  if (!Array.isArray(parsed)) {
-    throw new Error("memory import-events expects a JSON array or JSONL event stream.");
-  }
-
-  return parsed.map((item, index) => {
-    if (!isRecord(item)) {
-      throw new Error(`memory import-events item ${index + 1} is not an object.`);
-    }
-    return item as unknown as ResearchEvent;
-  });
-}
-
-function handleMemorySteeringCommand(
-  args: ParsedMemoryArgs,
-  steering: ReturnType<typeof createMemorySteeringController>,
-) {
-  const context = memorySteeringContext(args);
-
-  if (args.command === "promote-hypothesis") {
-    const hypothesisRecordId = requireMemoryPositional(args, "promote-hypothesis <record-id>");
-    const findingStatus = args.findingStatus
-      ? parseResearchFindingStatus(args.findingStatus)
-      : undefined;
-    if (
-      findingStatus &&
-      findingStatus !== "candidate" &&
-      findingStatus !== "needs_evidence" &&
-      findingStatus !== "supported" &&
-      findingStatus !== "verified"
-    ) {
-      throw new Error("promote-hypothesis finding status must be candidate, needs_evidence, supported, or verified.");
-    }
-    return steering.promoteHypothesisToFinding({
-      ...context,
-      hypothesisRecordId,
-      ...(args.summary ? { summary: args.summary } : {}),
-      ...(findingStatus ? { findingStatus } : {}),
-      ...(typeof args.confidence === "number"
-        ? { confidence: args.confidence }
-        : {}),
-    });
-  }
-
-  if (args.command === "review-record") {
-    const recordId = requireMemoryPositional(args, "review-record <record-id> --status <status>");
-    if (!args.status) {
-      throw new Error("review-record requires --status.");
-    }
-    return steering.reviewRecord({
-      ...context,
-      recordId,
-      status: parseResearchDerivedMemoryStatus(args.status),
-      ...(args.summary ? { summary: args.summary } : {}),
-      ...(args.findingStatus
-        ? { findingStatus: parseResearchFindingStatus(args.findingStatus) }
-        : {}),
-      ...(args.supersededByRecordId
-        ? { supersededByRecordId: args.supersededByRecordId }
-        : {}),
-    });
-  }
-
-  if (args.command === "reject-record") {
-    const recordId = requireMemoryPositional(args, "reject-record <record-id>");
-    const findingStatus = args.findingStatus
-      ? parseResearchFindingStatus(args.findingStatus)
-      : undefined;
-    if (
-      findingStatus &&
-      findingStatus !== "rejected" &&
-      findingStatus !== "out_of_scope"
-    ) {
-      throw new Error("reject-record finding status must be rejected or out_of_scope.");
-    }
-    return steering.rejectRecord({
-      ...context,
-      recordId,
-      ...(args.summary ? { summary: args.summary } : {}),
-      ...(findingStatus ? { findingStatus } : {}),
-    });
-  }
-
-  if (args.command === "supersede-record") {
-    const recordId = requireMemoryPositional(args, "supersede-record <record-id> --superseded-by <record-id>");
-    const supersededByRecordId = args.supersededByRecordId ?? args.positionals[1];
-    if (!supersededByRecordId) {
-      throw new Error("supersede-record requires --superseded-by or a replacement positional.");
-    }
-    return steering.supersedeRecord({
-      ...context,
-      recordId,
-      supersededByRecordId,
-      ...(args.summary ? { summary: args.summary } : {}),
-    });
-  }
-
-  if (args.command === "tombstone-record") {
-    const recordId = requireMemoryPositional(args, "tombstone-record <record-id>");
-    return steering.tombstoneRecord({
-      ...context,
-      recordId,
-      ...(args.summary ? { summary: args.summary } : {}),
-    });
-  }
-
-  if (args.command === "request-proof") {
-    const subjectKind = args.positionals[0];
-    const subjectId = args.positionals[1];
-    if (!subjectKind || !subjectId) {
-      throw new Error("request-proof requires <subject-kind> <subject-id>.");
-    }
-    const question = args.question ?? args.summary;
-    if (!question) {
-      throw new Error("request-proof requires --question or --summary.");
-    }
-    return steering.requestProof({
-      ...context,
-      subject: {
-        kind: parseResearchProofSubjectKind(subjectKind),
-        id: subjectId,
-        ...(args.summary ? { summary: args.summary } : {}),
-      },
-      question,
-      acceptableMethods: [proofMethodFromArgs(args)],
-      ...(args.requiredResult
-        ? { requiredResult: parseResearchProofResultStatus(args.requiredResult) }
-        : {}),
-      ...(args.obligationStatus
-        ? { status: parseResearchProofObligationStatus(args.obligationStatus) }
-        : {}),
-      ...(subjectKind === "memory_record"
-        ? { hypothesisRecordIds: [subjectId] }
-        : {}),
-    });
-  }
-
-  if (args.command === "attach-proof-attempt") {
-    const obligationId = requireMemoryPositional(args, "attach-proof-attempt <obligation-id> --summary <text>");
-    if (!args.summary) {
-      throw new Error("attach-proof-attempt requires --summary.");
-    }
-    return steering.attachProofAttempt({
-      ...context,
-      obligationId,
-      summary: args.summary,
-      method: proofMethodFromArgs(args),
-      ...(args.attemptStatus
-        ? { status: parseResearchProofAttemptStatus(args.attemptStatus) }
-        : {}),
-      ...(args.result ? { result: parseResearchProofResultStatus(args.result) } : {}),
-      ...(args.verifier ? { verifier: args.verifier } : {}),
-    });
-  }
-
-  if (args.command === "review-proof-attempt") {
-    const attemptId = requireMemoryPositional(args, "review-proof-attempt <attempt-id>");
-    return steering.reviewProofAttempt({
-      ...context,
-      attemptId,
-      ...(args.summary ? { summary: args.summary } : {}),
-      ...(args.attemptStatus
-        ? { status: parseResearchProofAttemptStatus(args.attemptStatus) }
-        : {}),
-      ...(args.result ? { result: parseResearchProofResultStatus(args.result) } : {}),
-      ...(args.verifier ? { verifier: args.verifier } : {}),
-      ...(args.obligationStatus
-        ? { obligationStatus: parseResearchProofObligationStatus(args.obligationStatus) }
-        : {}),
-    });
-  }
-
-  if (args.command === "mark-artifact") {
-    const artifactId = requireMemoryPositional(args, "mark-artifact <artifact-id> --mark <important|sensitive|tombstoned>");
-    const mark = args.mark;
-    if (mark !== "important" && mark !== "sensitive" && mark !== "tombstoned") {
-      throw new Error("mark-artifact requires --mark important, sensitive, or tombstoned.");
-    }
-    return steering.markArtifact({
-      ...context,
-      mark,
-      artifact: artifactRefFromArgs(args, artifactId),
-      ...(args.policy ? { policy: args.policy } : {}),
-      ...(args.summary ? { summary: args.summary } : {}),
-    });
-  }
-
-  throw new Error(`Unknown memory steering command: ${String(args.command)}`);
-}
-
-function memorySteeringContext(args: ParsedMemoryArgs) {
-  return {
-    ...(args.summary ? { note: args.summary } : {}),
-  };
-}
-
-function proofMethodFromArgs(args: ParsedMemoryArgs): ResearchProofMethodDescriptor {
-  const kind = args.methodKind
-    ? parseResearchProofMethodKind(args.methodKind)
-    : "human_review";
-  return {
-    kind,
-    name: args.methodName ?? kind.replaceAll("_", " "),
-  };
-}
-
-function artifactRefFromArgs(
-  args: ParsedMemoryArgs,
-  artifactId: string,
-): ResearchArtifactRef {
-  return {
-    id: artifactId,
-    kind: args.artifactKind ?? "artifact",
-    ...(args.artifactUri ? { uri: args.artifactUri } : {}),
-    ...(args.summary ? { summary: args.summary } : {}),
-  };
-}
-
-function renderMemorySteeringResult(input: {
-  action: string;
-  event: ResearchEvent;
-  record?: { id: string; kind: string; status: string; summary: string };
-  obligation?: { id: string; status: string; question: string };
-  attempt?: { id: string; status: string; result?: string; summary: string };
-}): string {
-  const lines = [
-    `Action: ${input.action}`,
-    `Event: ${input.event.kind} ${input.event.id}`,
-  ];
-  if (input.record) {
-    lines.push(
-      `Record: ${input.record.kind} ${input.record.status} ${input.record.id}`,
-      input.record.summary,
-    );
-  }
-  if (input.obligation) {
-    lines.push(
-      `Proof obligation: ${input.obligation.status} ${input.obligation.id}`,
-      input.obligation.question,
-    );
-  }
-  if (input.attempt) {
-    lines.push(
-      `Proof attempt: ${input.attempt.status}${input.attempt.result ? `/${input.attempt.result}` : ""} ${input.attempt.id}`,
-      input.attempt.summary,
-    );
-  }
-  return lines.join("\n");
-}
-
-function renderMemoryImportResult(input: MemoryImportResult): string {
-  return [
-    `Action: ${input.action}`,
-    `Import: ${input.importPath}`,
-    `Events: ${input.appendedEvents} appended, ${input.skippedExistingEvents} skipped, ${input.loadedEvents} loaded`,
-    `Records written: ${input.recordsWritten}`,
-    `Proof objects updated: ${input.proofObjectsUpdated}`,
-    ...(input.records.length > 0
-      ? [
-          "Records:",
-          ...input.records.map((record) =>
-            `${record.kind}\t${record.status}\t${record.id}\t${record.summary}`,
-          ),
-        ]
-      : []),
-  ].join("\n");
-}
-
-function createMemoryCommandStorageReadModel(args: ParsedMemoryArgs) {
-  const layout = createResearchStorageLayout({ workspaceRoot: args.workspaceRoot });
-  const manifest = loadResearchStorageManifest(layout);
-  return {
-    rootPath: layout.rootPath,
-    databasePath: layout.databasePath,
-    directories: layout.directories,
-    artifacts: manifest.artifacts.map((artifact) => ({
-      id: artifact.id,
-      kind: artifact.kind,
-      uri: artifact.uri,
-      summary: artifact.purpose,
-      contentHash: artifact.contentHash,
-    })),
-  };
-}
-
-function requireMemoryPositional(
-  args: ParsedMemoryArgs,
-  usageHint: string,
-): string {
-  const value = args.positionals[0];
-  if (!value) {
-    throw new Error(`Usage: honeycrisp memory ${usageHint}`);
-  }
-
-  return value;
-}
-
-function printMemoryOutput<T>(
-  args: ParsedMemoryArgs,
-  value: T,
-  renderText: (value: T) => string,
-): void {
-  if (args.json) {
-    console.log(JSON.stringify(value, null, 2));
-    return;
-  }
-
-  console.log(renderText(value));
-}
-
-function renderTimeline(
-  timeline: ReturnType<ReturnType<typeof createMemoryInspector>["eventTimeline"]>,
-): string {
-  if (timeline.length === 0) {
-    return "No memory events found.";
-  }
-
-  return timeline
-    .map((event) =>
-      [
-        event.sequence ?? "-",
-        event.timestamp,
-        event.kind,
-        event.id,
-        event.summary,
-      ].join("\t"),
-    )
-    .join("\n");
-}
-
-function renderRecords(
-  records: readonly {
-    kind: string;
-    status: string;
-    id: string;
-    confidence?: number;
-    summary: string;
-  }[],
-): string {
-  if (records.length === 0) {
-    return "No memory records found.";
-  }
-
-  return records
-    .map((record) =>
-      [
-        record.kind,
-        record.status,
-        record.id,
-        record.confidence ?? "-",
-        record.summary,
-      ].join("\t"),
-    )
-    .join("\n");
-}
-
-function renderAgentState(
-  state: ReturnType<ReturnType<typeof createMemoryInspector>["showAgentState"]>,
-): string {
-  const memory = state.memory;
-  return [
-    `Evidence: ${memory.evidence.length}`,
-    `Hypotheses: ${memory.hypotheses.length}`,
-    `Findings: ${memory.findings.length}`,
-    `Procedures: ${memory.procedures.length}`,
-    `Prospective checks: ${memory.prospectiveChecks.length}`,
-    `Proof obligations: ${state.proof.obligations.length}`,
-    `Proof attempts: ${state.proof.attempts.length}`,
-    `Storage artifacts: ${state.storage.artifacts.length}`,
-  ].join("\n");
-}
-
-function renderPreconsciousPacket(
-  packet: ReturnType<
-    ReturnType<typeof createMemoryInspector>["showPreconsciousPacket"]
-  >,
-): string {
-  if (packet.candidates.length === 0) {
-    return "No recall candidates found.";
-  }
-
-  return packet.candidates
-    .map((candidate) =>
-      [
-        candidate.score,
-        candidate.kind,
-        candidate.status,
-        candidate.recordId,
-        candidate.summary,
-      ].join("\t"),
-    )
-    .join("\n");
-}
-
-function renderContextSelections(
-  context: ReturnType<
-    ReturnType<typeof createMemoryInspector>["showCompiledContextPacket"]
-  >,
-): string {
-  if (context.sections.length === 0) {
-    return "No context sections found.";
-  }
-
-  return [
-    [
-      "context",
-      `items=${context.sections.reduce((sum, section) => sum + section.itemCount, 0)}`,
-      `tokens=${context.estimatedTokens}/${context.tokenBudget}`,
-      `compaction=${context.compaction.reason}`,
-      `removed=${context.compaction.removedRecordIds.join(",") || "-"}`,
-    ].join("\t"),
-    ...context.sections
-      .map((section) =>
-        [
-          section.label,
-          `items=${section.itemCount}`,
-          `tokens=${section.estimatedTokens}/${section.tokenBudget}`,
-          `selected=${section.selectedRecordIds.join(",") || "-"}`,
-        ].join("\t"),
-      ),
-  ].join("\n");
-}
-
-function renderFindingDetails(
-  detail: ReturnType<
-    ReturnType<typeof createMemoryInspector>["showFindingById"]
-  > | null,
-): string {
-  if (!detail) {
-    return "No finding found.";
-  }
-
-  return [
-    `${detail.finding.kind}\t${detail.finding.findingStatus}\t${detail.finding.id}`,
-    detail.finding.summary,
-    `Evidence for: ${detail.evidenceFor.map((ref) => ref.id).join(", ") || "-"}`,
-    `Evidence against: ${detail.evidenceAgainst.map((ref) => ref.id).join(", ") || "-"}`,
-    `Hypotheses: ${detail.linkedHypothesisRecordIds.join(", ") || "-"}`,
-    `Claims: ${detail.linkedClaimRecordIds.join(", ") || "-"}`,
-    `Proof attempts: ${detail.proofAttemptIds.join(", ") || "-"}`,
-    `Artifacts: ${detail.artifactRefs.map((ref) => ref.id).join(", ") || "-"}`,
-  ].join("\n");
-}
-
-function renderProofState(
-  state: ReturnType<ReturnType<typeof createMemoryInspector>["showProofState"]>,
-): string {
-  return [
-    `Proof obligations: ${state.obligations.length}`,
-    `Proof attempts: ${state.attempts.length}`,
-  ].join("\n");
-}
-
-function renderProofObligations(
-  obligations: ReturnType<
-    ReturnType<typeof createMemoryInspector>["showProofObligations"]
-  >,
-): string {
-  if (obligations.length === 0) {
-    return "No proof obligations found.";
-  }
-
-  return obligations
-    .map((obligation) =>
-      [
-        obligation.status,
-        obligation.id,
-        obligation.subject.kind,
-        obligation.subject.id,
-        obligation.question,
-      ].join("\t"),
-    )
-    .join("\n");
-}
-
-function renderProofObligation(
-  obligation: ReturnType<
-    ReturnType<typeof createMemoryInspector>["showProofObligationById"]
-  > | null,
-): string {
-  if (!obligation) {
-    return "No proof obligation found.";
-  }
-
-  return [
-    `${obligation.status}\t${obligation.id}`,
-    `Subject: ${obligation.subject.kind}:${obligation.subject.id}`,
-    `Question: ${obligation.question}`,
-    `Findings: ${obligation.findingRecordIds.join(", ") || "-"}`,
-    `Evidence: ${obligation.evidenceRefIds.join(", ") || "-"}`,
-    `Artifacts: ${obligation.artifactRefs.map((ref) => ref.id).join(", ") || "-"}`,
-  ].join("\n");
-}
-
-function renderProofAttempts(
-  attempts: ReturnType<
-    ReturnType<typeof createMemoryInspector>["showProofAttempts"]
-  >,
-): string {
-  if (attempts.length === 0) {
-    return "No proof attempts found.";
-  }
-
-  return attempts
-    .map((attempt) =>
-      [
-        attempt.status,
-        attempt.result ?? "-",
-        attempt.id,
-        attempt.obligationId,
-        attempt.method.kind,
-        attempt.summary,
-      ].join("\t"),
-    )
-    .join("\n");
-}
-
-function renderProofAttempt(
-  attempt: ReturnType<
-    ReturnType<typeof createMemoryInspector>["showProofAttemptById"]
-  > | null,
-): string {
-  if (!attempt) {
-    return "No proof attempt found.";
-  }
-
-  return [
-    `${attempt.status}\t${attempt.result ?? "-"}\t${attempt.id}`,
-    `Obligation: ${attempt.obligationId}`,
-    `Method: ${attempt.method.kind} (${attempt.method.name})`,
-    `Evidence: ${attempt.evidenceRefIds.join(", ") || "-"}`,
-    `Artifacts: ${attempt.artifactRefs.map((ref) => ref.id).join(", ") || "-"}`,
-    attempt.summary,
-  ].join("\n");
-}
-
-function renderClaimGraph(
-  edges: ReturnType<ReturnType<typeof createMemoryInspector>["showClaimGraph"]>,
-): string {
-  if (edges.length === 0) {
-    return "No claim graph edges found.";
-  }
-
-  return edges
-    .map((edge) =>
-      [
-        edge.sourceRecordId,
-        edge.relationship,
-        edge.targetRecordId,
-        edge.evidenceRefId ?? "-",
-      ].join("\t"),
-    )
-    .join("\n");
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -2791,7 +1983,6 @@ async function createRuntimeConfig(args: {
   workspaceRoot?: string;
 }): Promise<{
   events: ResearchEvent[];
-  memory: ResearchMemorySnapshot | undefined;
   tools: ResearchToolDescriptor[];
   toolRegistry: ResearchToolRegistry | undefined;
   skills: ResearchSkillDescriptor[];
@@ -2959,7 +2150,6 @@ async function createRuntimeConfig(args: {
 
   return {
     events,
-    memory: events.length > 0 ? routeEventsToMemorySnapshot(events) : undefined,
     tools: toolDescriptors,
     toolRegistry:
       executableTools.length > 0

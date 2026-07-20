@@ -21,9 +21,6 @@ test("storage manifest registers, lists, resolves, and reloads artifacts", async
     createResearchStorageLayout({ workspaceRoot }),
   );
   assert.deepEqual(layout.directories.map((directory) => directory.name), ["artifacts"]);
-  for (const retiredDirectory of ["events", "episodes", "claims", "procedures", "hypotheses", "prospective", "scratch"]) {
-    assert.equal(layout.directories.some((directory) => directory.name === retiredDirectory), false);
-  }
   const artifactPath = join(layout.artifactDirectoryPath, "reports", "summary.txt");
   const outsidePath = join(outsideRoot, "outside.txt");
   await mkdir(join(layout.artifactDirectoryPath, "reports"), { recursive: true });

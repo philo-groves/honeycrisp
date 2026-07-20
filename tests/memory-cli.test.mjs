@@ -592,12 +592,11 @@ test("main CLI capture includes runtime tool and skill configuration", async () 
   );
   assert.deepEqual(capture.runtimeConfig.skills.selectedIds, ["parser-cli"]);
   assert.equal(capture.runtimeConfig.governance.maxToolCalls, 2);
-  assert.equal(capture.schemaVersion, 3);
+  assert.equal(capture.schemaVersion, 4);
   assert.ok(capture.context.availableTools.some((tool) => tool.name === "repository.search"));
   assert.equal("toolPermissions" in capture.context, false);
   assert.equal("workspaceRoot" in capture.context.workspaceContext, false);
   assert.equal("memory" in capture.runtimeConfig.workspaceContext, false);
-  assert.equal(JSON.stringify(capture.runtimeConfig.workspaceContext).includes("episodes"), false);
   assert.equal(JSON.stringify(capture.runtimeConfig.workspaceContext).includes("prospective"), false);
 });
 
@@ -622,7 +621,7 @@ test("memory CLI saves, searches, corrects, and links durable knowledge", async 
   assert.equal(corrected.status, "rejected");
   assert.equal(corrected.revision, 2);
 
-  const edge = runMemoryCliJson("link", hypothesis.id, finding.id, "promoted_to", "--workspace-root", workspaceRoot, "--note", "Reproduction created a finding.");
+  const edge = runMemoryCliJson("link", hypothesis.id, finding.id, "promoted_to", "--workspace-root", workspaceRoot, "--summary", "Reproduction created a finding.");
   assert.equal(edge.relation, "promoted_to");
 
   const state = runMemoryCliJson("state", "--workspace-root", workspaceRoot);

@@ -9,7 +9,6 @@ import {
   createCodeIntelligenceTools,
   createDefaultBuiltInToolFamily,
   createExperimentTool,
-  createMemoryRecallTool,
   createRepositorySearchTool,
   createResearchStorageLayout,
   createResearchToolRegistry,
@@ -19,40 +18,6 @@ import {
   ensureResearchStorageLayout,
   registerResearchStorageArtifact,
 } from "../packages/research-agent/dist/index.js";
-
-test("memory recall exposes retriever refs as evidence", async () => {
-  let capturedInput;
-  const tool = createMemoryRecallTool({
-    recall(input) {
-      capturedInput = input;
-      return [
-        {
-          store: "working",
-          id: "mem_parser_invariant",
-          summary: "Parser invariant from earlier loop",
-        },
-      ];
-    },
-  });
-  const result = await createResearchToolRegistry([tool]).execute({
-    id: "recall_1",
-    actionClass: "recall",
-    toolName: "memory.recall",
-    input: {
-      query: "parser invariant",
-      limit: 3,
-    },
-  });
-
-  assert.equal(result.result.status, "complete");
-  assert.deepEqual(capturedInput, {
-    query: "parser invariant",
-    limit: 3,
-  });
-  assert.equal(result.result.output.refs[0].id, "mem_parser_invariant");
-  assert.equal(result.result.evidence[0], "Parser invariant from earlier loop");
-  assert.equal(tool.descriptor.metadata.safetyProfile, "memory-read");
-});
 
 test("repository search finds bounded local source matches", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-"));
@@ -442,11 +407,6 @@ test("default built-in family assembles configured tool surfaces", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-family-"));
   try {
     const tools = createDefaultBuiltInToolFamily({
-      recall: {
-        recall() {
-          return [];
-        },
-      },
       repositorySearch: {
         root,
       },
@@ -480,7 +440,6 @@ test("default built-in family assembles configured tool surfaces", async () => {
       "code.references",
       "experiment.run",
       "file.read",
-      "memory.recall",
       "repository.search",
       "synthesis.compose",
     ]);
@@ -494,7 +453,6 @@ test("default built-in family assembles configured tool surfaces", async () => {
       "code_references",
       "experiment_run",
       "file_read",
-      "memory_recall",
       "repository_search",
       "synthesis_compose",
     ]);

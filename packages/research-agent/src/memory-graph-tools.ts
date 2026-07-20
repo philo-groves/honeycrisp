@@ -126,7 +126,7 @@ function tool(
   run: (input: Record<string, unknown>) => unknown,
 ): ResearchExecutableTool {
   return {
-    descriptor: { name, transportName, description, actionClasses: [sideEffects === "read" ? "recall" : "synthesize"], sideEffects, requiredPermissions: [sideEffects === "read" ? "memory:read" : "memory:write"], inputSchema: parameters, memoryWritebackDefaults: [] },
+    descriptor: { name, transportName, description, actionClasses: [sideEffects === "read" ? "recall" : "synthesize"], sideEffects, requiredPermissions: [sideEffects === "read" ? "memory:read" : "memory:write"], inputSchema: parameters },
     parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action: ResearchToolAction): Promise<ResearchToolExecutionResult> {
       const startedAt = nowIso();

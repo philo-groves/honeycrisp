@@ -166,45 +166,6 @@ test("memory graph tiers session, workspace, and subject knowledge across peer w
   }
 });
 
-test("memory graph upgrades existing nodes into the workspace tier", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-tier-upgrade-"));
-  const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
-  await mkdir(dirname(databasePath), { recursive: true });
-  const legacy = new DatabaseSync(databasePath);
-  legacy.exec(`
-    PRAGMA foreign_keys = ON;
-    CREATE TABLE memory_nodes (
-      id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, title_norm TEXT NOT NULL,
-      summary TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft',
-      confidence REAL NOT NULL DEFAULT 0.5, attributes_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1, UNIQUE(type, title_norm)
-    );
-    CREATE TABLE memory_node_assets (node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE, asset_id TEXT NOT NULL, PRIMARY KEY(node_id, asset_id));
-    CREATE TABLE memory_node_tags (node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY(node_id, tag));
-    CREATE TABLE memory_edges (from_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE, to_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE, relation TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(from_id, to_id, relation));
-    CREATE TABLE memory_evidence_refs (id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE, kind TEXT NOT NULL, path_base TEXT, path TEXT, locator_json TEXT NOT NULL DEFAULT '{}', summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
-    INSERT INTO memory_nodes VALUES ('legacy_node', 'asset', 'Legacy target', 'legacy target', 'Existing memory.', '', 'confirmed', 0.9, '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1);
-    INSERT INTO memory_node_tags VALUES ('legacy_node', 'legacy');
-  `);
-  legacy.close();
-
-  const store = new MemoryGraphStore({
-    workspaceRoot,
-    context: { workspaceId: "workspace_upgrade", workspaceName: "Upgrade Fixture", subjectId: "subject_apple", subjectName: "Apple" },
-  });
-  try {
-    const node = store.get("legacy_node");
-    assert.equal(node.tier, "workspace");
-    assert.equal(node.workspaceId, "workspace_upgrade");
-    assert.deepEqual(node.tags, ["legacy"]);
-    const subjectNode = store.save({ tier: "subject", type: "asset", title: "Legacy target" });
-    assert.notEqual(subjectNode.id, node.id);
-  } finally {
-    store.close();
-    await rm(workspaceRoot, { recursive: true, force: true });
-  }
-});
-
 test("memory graph derives shared Beale workspace identity for headless access", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-headless-identity-"));
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);

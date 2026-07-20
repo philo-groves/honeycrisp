@@ -398,7 +398,6 @@ function createFixtureInspectTool(calls) {
       sideEffects: "read",
       requiredPermissions: ["filesystem:read"],
       inputSchema: parameters,
-      memoryWritebackDefaults: ["event", "working", "episodic"],
     },
     parameters,
     async execute(action) {

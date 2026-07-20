@@ -8,7 +8,7 @@ Honeycrisp is a general-purpose research agent built around Pi's native agent lo
 - Honeycrisp owns context compilation, tool execution, durable knowledge, storage, orchestration, live events, and flow captures.
 - A host such as Beale owns workspace setup, authorization recording, repository references, researcher interaction, and presentation.
 
-Honeycrisp does not maintain an outer goal tree, generated subgoals, a triager, or completion gates. Historical nullable goal and subgoal correlation columns remain persistence compatibility metadata, not an active runtime.
+Honeycrisp does not maintain an outer goal tree, generated subgoals, a triager, or completion gates.
 
 ## Runtime Flow
 
@@ -18,11 +18,11 @@ Honeycrisp does not maintain an outer goal tree, generated subgoals, a triager, 
 4. Pi runs the selected model with research tools and collaboration tools.
 5. Research tool observations are appended to the operational event stream. The model explicitly saves or updates concise graph knowledge when it is reusable.
 6. The model may spawn bounded child sessions, communicate with them, and incorporate their results.
-7. Honeycrisp returns the root response and writes a schema-v3 flow capture containing root, child, tool, memory, context, and operational storage metadata.
+7. Honeycrisp returns the root response and writes a schema-v4 flow capture containing the root result, child sessions, tools, compiled context, and operational storage metadata.
 
 ## Context
 
-The context packet is guidance, not a repository permission fence. It contains:
+The compiled workspace context is guidance, not a repository permission fence. It contains:
 
 - the user's request;
 - structured authorization and scope metadata supplied by the host;
@@ -80,7 +80,7 @@ The default durable surfaces are:
 - `.honeycrisp/memory/memory.sqlite` for operational state and tiered knowledge; and
 - `.honeycrisp/memory/artifacts/` for files, raw outputs, logs, generated material, and reproducible scripts.
 
-Schema-v3 flow captures summarize the request, root result, child session tree, model calls, tool events, compiled context, memory integration, and storage manifest. Child metadata includes path, parent, lifecycle state, model, effort, inheritance mode, timestamps, result, errors, and usage.
+Schema-v4 flow captures summarize the request, root result, child session tree, model calls, tool events, compiled context with selected graph knowledge, and storage manifest. Child metadata includes path, parent, lifecycle state, model, effort, inheritance mode, timestamps, result, errors, and usage.
 
 ## Trust Boundary
 

@@ -17,8 +17,6 @@ import type {
 export type ResearchToolExecutionStatus = "complete" | "error" | "blocked";
 
 export interface ResearchToolExecutionContext {
-  goalId?: string;
-  subGoalId?: string;
   signal?: AbortSignal;
 }
 
@@ -257,8 +255,6 @@ export function createToolRequestedEvent(
     id: createResearchEventId(),
     kind: "tool.requested",
     timestamp: nowIso(),
-    ...(options.goalId ? { goalId: options.goalId } : {}),
-    ...(options.subGoalId ? { subGoalId: options.subGoalId } : {}),
     payload: {
       toolActionId: action.id,
       toolName: action.toolName,
@@ -266,9 +262,7 @@ export function createToolRequestedEvent(
       normalizedInputs: action.input,
       expectedOutputs: action.expectedOutputs ?? [],
       budgetLimits: action.budget ?? {},
-      memoryWritebackTarget: action.memoryWritebackTargets ?? [],
       summary: `Requested ${action.toolName} for ${action.actionClass}.`,
-      ...(options.subGoalId ? { subGoalId: options.subGoalId } : {}),
     },
   };
 }
@@ -281,8 +275,6 @@ export function createToolObservedEvent(
     id: createResearchEventId(),
     kind: "tool.observed",
     timestamp: nowIso(),
-    ...(options.goalId ? { goalId: options.goalId } : {}),
-    ...(options.subGoalId ? { subGoalId: options.subGoalId } : {}),
     ...(result.artifactRefs?.length ? { artifactRefs: result.artifactRefs } : {}),
     payload: {
       toolActionId: result.action.id,
@@ -295,7 +287,6 @@ export function createToolObservedEvent(
       claimsProposed: result.claims ?? [],
       followUpActionsProposed: result.followUpActions,
       summary: result.summary,
-      ...(options.subGoalId ? { subGoalId: options.subGoalId } : {}),
       ...(result.rawOutputRef ? { rawOutputRef: result.rawOutputRef } : {}),
       ...(result.error ? { error: result.error } : {}),
       ...(result.output !== undefined ? { result: result.output } : {}),
@@ -358,9 +349,6 @@ function createToolActionFromCall(
     actionClass,
     toolName: tool?.descriptor.name ?? toolCall.name,
     input,
-    ...(tool?.descriptor.memoryWritebackDefaults
-      ? { memoryWritebackTargets: tool.descriptor.memoryWritebackDefaults }
-      : {}),
   };
 }
 

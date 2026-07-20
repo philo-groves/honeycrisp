@@ -1,47 +1,9 @@
 import type {
   ResearchGovernancePolicy,
-  ResearchMemorySnapshot,
   ResearchToolBudget,
   ResearchToolDescriptor,
   ResearchToolPermission,
 } from "./types.js";
-
-export function createEmptyMemorySnapshot(
-  eventLog: ResearchMemorySnapshot["eventLog"] = [],
-): ResearchMemorySnapshot {
-  return {
-    eventLog,
-    directEvidence: [],
-    priorEpisodes: [],
-    candidateProcedures: [],
-    currentHypotheses: [],
-    currentFindings: [],
-    contradictions: [],
-    prospectiveCommitments: [],
-    userCommitments: [],
-  };
-}
-
-export function normalizeMemorySnapshot(
-  memory: Partial<ResearchMemorySnapshot> | undefined,
-  eventLog: ResearchMemorySnapshot["eventLog"] = [],
-): ResearchMemorySnapshot {
-  const empty = createEmptyMemorySnapshot(eventLog);
-
-  return {
-    eventLog: memory?.eventLog ?? empty.eventLog,
-    directEvidence: memory?.directEvidence ?? empty.directEvidence,
-    priorEpisodes: memory?.priorEpisodes ?? empty.priorEpisodes,
-    candidateProcedures:
-      memory?.candidateProcedures ?? empty.candidateProcedures,
-    currentHypotheses: memory?.currentHypotheses ?? empty.currentHypotheses,
-    currentFindings: memory?.currentFindings ?? empty.currentFindings,
-    contradictions: memory?.contradictions ?? empty.contradictions,
-    prospectiveCommitments:
-      memory?.prospectiveCommitments ?? empty.prospectiveCommitments,
-    userCommitments: memory?.userCommitments ?? empty.userCommitments,
-  };
-}
 
 export function createToolPermissions(
   tools: readonly ResearchToolDescriptor[],
@@ -67,16 +29,13 @@ function filterActionClasses(
   governance: ResearchGovernancePolicy | undefined,
 ) {
   return actionClasses.filter((actionClass) => {
-    if (governance?.deniedActionClasses?.includes(actionClass)) {
-      return false;
-    }
+    if (governance?.deniedActionClasses?.includes(actionClass)) return false;
     if (
       governance?.allowedActionClasses &&
       !governance.allowedActionClasses.includes(actionClass)
     ) {
       return false;
     }
-
     return true;
   });
 }
@@ -85,16 +44,13 @@ function isSideEffectAllowed(
   sideEffect: ResearchToolDescriptor["sideEffects"],
   governance: ResearchGovernancePolicy | undefined,
 ): boolean {
-  if (governance?.deniedSideEffects?.includes(sideEffect)) {
-    return false;
-  }
+  if (governance?.deniedSideEffects?.includes(sideEffect)) return false;
   if (
     governance?.allowedSideEffects &&
     !governance.allowedSideEffects.includes(sideEffect)
   ) {
     return false;
   }
-
   return true;
 }
 
@@ -109,7 +65,6 @@ function arePermissionsAllowed(
   ) {
     return false;
   }
-
   if (
     governance?.allowedPermissions &&
     permissions.some(
@@ -118,7 +73,6 @@ function arePermissionsAllowed(
   ) {
     return false;
   }
-
   return true;
 }
 

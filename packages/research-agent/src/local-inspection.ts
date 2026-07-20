@@ -91,7 +91,6 @@ export function createLocalInspectionTool(
     requiredPermissions: ["filesystem:read"],
     inputSchema: localInspectionParameters,
     artifactLocations: options.allowedRoots,
-    memoryWritebackDefaults: ["event", "working", "episodic"],
   };
 
   const tool: LocalInspectionTool = {
@@ -179,14 +178,12 @@ export function createLocalInspectionObservationEvent(
   options: {
     id?: string;
     timestamp?: string;
-    goalId?: string;
   } = {},
 ): ResearchEvent {
   return {
     id: options.id ?? createResearchEventId(),
     kind: "tool.observed",
     timestamp: options.timestamp ?? nowIso(),
-    ...(options.goalId ? { goalId: options.goalId } : {}),
     payload: {
       toolName: result.toolName,
       action: result.action,

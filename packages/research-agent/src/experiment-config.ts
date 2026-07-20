@@ -94,7 +94,6 @@ export function createConfiguredExperimentTool(
       sideEffects: "process",
       requiredPermissions,
       inputSchema: EXPERIMENT_CONFIG_PARAMETERS,
-      memoryWritebackDefaults: ["event", "working", "episodic"],
       metadata: {
         provider: "honeycrisp.configured_experiment",
         safetyProfile: "allowlisted-process",

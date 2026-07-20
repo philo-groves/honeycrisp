@@ -9,17 +9,6 @@ export type ResearchActionClass =
   | "respond"
   | "stop";
 
-export type ResearchMemoryStoreKind =
-  | "event"
-  | "evidence"
-  | "finding"
-  | "working"
-  | "episodic"
-  | "semantic"
-  | "procedural"
-  | "hypothesis"
-  | "prospective";
-
 export type ResearchToolSideEffect =
   | "none"
   | "read"
@@ -27,138 +16,20 @@ export type ResearchToolSideEffect =
   | "network"
   | "process";
 
-export type ResearchAcceptedRawEventKind =
-  | "memory.routed"
-  | "memory.reviewed"
+export type ResearchEventKind =
   | "context.compiled"
-  | "artifact.updated"
-  | "artifact.tombstoned"
   | "tool.requested"
   | "tool.observed"
   | "model.visible_note"
   | "model.observation"
   | "model.claim"
   | "model.hypothesis"
-  | "finding.proposed"
-  | "finding.updated"
-  | "finding.reviewed"
-  | "proof.requested"
-  | "proof.attempted"
-  | "proof.observed"
-  | "proof.reviewed"
-  | "user.commitment"
   | "error.observed";
-
-export type ResearchMemoryRouteTarget =
-  | "directEvidence"
-  | "priorEpisodes"
-  | "candidateProcedures"
-  | "currentHypotheses"
-  | "currentFindings"
-  | "contradictions"
-  | "prospectiveCommitments"
-  | "userCommitments";
 
 export type ResearchEventId = `evt_${string}`;
 
 export type ResearchEventSequence = number;
 
-export type ResearchMemoryRecordId = `mem_${string}`;
-
-export type ResearchDerivedMemoryStatus =
-  | "candidate"
-  | "active"
-  | "confirmed"
-  | "contradicted"
-  | "superseded"
-  | "stale"
-  | "tombstoned";
-
-export type ResearchMemoryRecordKind =
-  | "evidence"
-  | "episodic"
-  | "semantic_claim"
-  | "hypothesis"
-  | "finding"
-  | "belief"
-  | "procedure"
-  | "prospective_check"
-  | "working";
-
-export type ResearchFindingStatus =
-  | "candidate"
-  | "needs_evidence"
-  | "supported"
-  | "verified"
-  | "superseded"
-  | "rejected"
-  | "out_of_scope"
-  | "tombstoned";
-
-export type ResearchProofSubjectKind =
-  | "goal"
-  | "sub_goal"
-  | "memory_record"
-  | "artifact"
-  | "external";
-
-export type ResearchProofMethodKind =
-  | "mathematical_proof"
-  | "empirical_reproduction"
-  | "static_analysis"
-  | "dynamic_execution"
-  | "artifact_validation"
-  | "investigation_corroboration"
-  | "human_review"
-  | "domain_skill"
-  | "mcp_provider";
-
-export type ResearchProofObligationStatus =
-  | "open"
-  | "in_progress"
-  | "satisfied"
-  | "failed"
-  | "blocked"
-  | "superseded"
-  | "tombstoned";
-
-export type ResearchProofAttemptStatus =
-  | "planned"
-  | "running"
-  | "completed"
-  | "failed"
-  | "blocked"
-  | "superseded";
-
-export type ResearchProofResultStatus =
-  | "pass"
-  | "fail"
-  | "inconclusive"
-  | "blocked"
-  | "superseded";
-
-export type ResearchMemoryEvidenceRelationship =
-  | "supports"
-  | "weakens"
-  | "contradicts"
-  | "mentions"
-  | "derived_from";
-
-export type ResearchClaimGraphRelationship =
-  | "supports"
-  | "contradicts"
-  | "refines"
-  | "supersedes"
-  | "depends_on";
-
-export type ResearchMemoryAuditOperation =
-  | "write"
-  | "promotion"
-  | "contradiction"
-  | "tombstone"
-  | "supersede"
-  | "expire"
-  | "deletion";
 
 export interface ResearchArtifactRef {
   id: string;
@@ -168,252 +39,17 @@ export interface ResearchArtifactRef {
   contentHash?: string;
 }
 
-export interface ResearchMemoryEvidenceRef {
-  id: string;
-  relationship: ResearchMemoryEvidenceRelationship;
-  sourceEventId?: string;
-  recordId?: string;
-  artifactRefId?: string;
-  summary?: string;
-  confidence?: number;
-}
-
-export type ResearchMemoryDerivationKind =
-  | "direct_evidence"
-  | "model_visible_inference"
-  | "model_visible_hypothesis"
-  | "user_commitment"
-  | "runtime_consolidation"
-  | "context_reference";
-
-export interface ResearchMemoryProvenance {
-  sourceEventIds: readonly string[];
-  evidenceFor: readonly ResearchMemoryEvidenceRef[];
-  evidenceAgainst: readonly ResearchMemoryEvidenceRef[];
-  artifactRefs: readonly ResearchArtifactRef[];
-  derivedFromRecordIds: readonly string[];
-  derivation: ResearchMemoryDerivationKind;
-  note?: string;
-}
-
 export type ResearchRawEventPayload = unknown;
-
-export interface ResearchMemoryRef {
-  store: ResearchMemoryStoreKind;
-  id: string;
-  recordKind?: ResearchMemoryRecordKind;
-  status?: ResearchDerivedMemoryStatus;
-  sourceEventIds?: readonly string[];
-  summary?: string;
-  confidence?: number;
-}
 
 export interface ResearchEvent {
   id: string;
   sequence?: ResearchEventSequence;
-  kind: ResearchAcceptedRawEventKind;
+  kind: ResearchEventKind;
   timestamp: string;
-  goalId?: string;
-  loopId?: string;
-  subGoalId?: string;
   payload: ResearchRawEventPayload;
   payloadHash?: string;
   artifactRefs?: readonly ResearchArtifactRef[];
   schemaVersion?: number;
-}
-
-export interface ResearchBaseMemoryRecord {
-  id: string;
-  kind: ResearchMemoryRecordKind;
-  status: ResearchDerivedMemoryStatus;
-  summary: string;
-  sourceEventIds: readonly string[];
-  evidenceRefIds: readonly string[];
-  provenance: ResearchMemoryProvenance;
-  goalId?: string;
-  subGoalId?: string;
-  confidence?: number;
-  tags: readonly string[];
-  entities: readonly string[];
-  createdAt: string;
-  updatedAt: string;
-  validFrom?: string;
-  validUntil?: string;
-}
-
-export interface ResearchEvidenceMemoryRecord
-  extends ResearchBaseMemoryRecord {
-  kind: "evidence";
-  evidenceKind: "tool_observation" | "user_statement" | "artifact" | "runtime";
-  payloadRef: {
-    sourceEventId: string;
-    payloadHash?: string;
-  };
-}
-
-export interface ResearchEpisodicMemoryRecord
-  extends ResearchBaseMemoryRecord {
-  kind: "episodic";
-  episodeKind:
-    | "goal_transition"
-    | "loop_plan"
-    | "loop_result"
-    | "memory_decision"
-    | "context_compilation"
-    | "visible_note"
-    | "tool_request"
-    | "artifact_lifecycle"
-    | "error";
-}
-
-export interface ResearchSemanticClaimRecord
-  extends ResearchBaseMemoryRecord {
-  kind: "semantic_claim";
-  claim: string;
-}
-
-export interface ResearchHypothesisMemoryRecord
-  extends ResearchBaseMemoryRecord {
-  kind: "hypothesis";
-  hypothesis: string;
-}
-
-export interface ResearchFindingMemoryRecord extends ResearchBaseMemoryRecord {
-  kind: "finding";
-  finding: string;
-  findingStatus: ResearchFindingStatus;
-  linkedHypothesisRecordIds: readonly string[];
-  linkedClaimRecordIds: readonly string[];
-  proofAttemptIds: readonly string[];
-  domainLabels: readonly string[];
-  domainMetadata?: Record<string, unknown>;
-}
-
-export interface ResearchBeliefMemoryRecord extends ResearchBaseMemoryRecord {
-  kind: "belief";
-  belief: string;
-}
-
-export interface ResearchProcedureMemoryRecord
-  extends ResearchBaseMemoryRecord {
-  kind: "procedure";
-  procedure: string;
-  guidance:
-    | {
-        durability: "candidate";
-        promotionRequired: "repeated_usefulness_or_explicit_promotion";
-        observedUsefulCount?: number;
-      }
-    | {
-        durability: "durable";
-        promotionReason: "repeated_usefulness";
-        usefulCount: number;
-        supportingEventIds: readonly string[];
-      }
-    | {
-        durability: "durable";
-        promotionReason: "explicit_promotion";
-        promotedByEventId: string;
-      };
-}
-
-export interface ResearchProspectiveMemoryRecord
-  extends ResearchBaseMemoryRecord {
-  kind: "prospective_check";
-  check: string;
-  trigger: string;
-}
-
-export interface ResearchWorkingMemoryRecord extends ResearchBaseMemoryRecord {
-  kind: "working";
-  expiresAfterLoopId?: string;
-}
-
-export type ResearchDerivedMemoryRecord =
-  | ResearchEvidenceMemoryRecord
-  | ResearchEpisodicMemoryRecord
-  | ResearchSemanticClaimRecord
-  | ResearchHypothesisMemoryRecord
-  | ResearchFindingMemoryRecord
-  | ResearchBeliefMemoryRecord
-  | ResearchProcedureMemoryRecord
-  | ResearchProspectiveMemoryRecord
-  | ResearchWorkingMemoryRecord;
-
-export interface ResearchProofSubjectRef {
-  kind: ResearchProofSubjectKind;
-  id: string;
-  summary?: string;
-}
-
-export interface ResearchProofMethodDescriptor {
-  kind: ResearchProofMethodKind;
-  name: string;
-  description?: string;
-  toolNames?: readonly string[];
-  skillIds?: readonly string[];
-  mcpServerIds?: readonly string[];
-  artifactRequirements?: readonly string[];
-  domainMetadata?: Record<string, unknown>;
-}
-
-export interface ResearchProofObligation {
-  id: string;
-  status: ResearchProofObligationStatus;
-  subject: ResearchProofSubjectRef;
-  question: string;
-  acceptableMethods: readonly ResearchProofMethodDescriptor[];
-  requiredResult?: ResearchProofResultStatus;
-  goalId?: string;
-  subGoalId?: string;
-  findingRecordIds: readonly string[];
-  hypothesisRecordIds: readonly string[];
-  claimRecordIds: readonly string[];
-  evidenceRefIds: readonly string[];
-  artifactRefs: readonly ResearchArtifactRef[];
-  createdAt: string;
-  updatedAt: string;
-  domainMetadata?: Record<string, unknown>;
-}
-
-export interface ResearchProofAttempt {
-  id: string;
-  obligationId: string;
-  status: ResearchProofAttemptStatus;
-  method: ResearchProofMethodDescriptor;
-  summary: string;
-  result?: ResearchProofResultStatus;
-  verifier?: string;
-  sourceEventIds: readonly string[];
-  evidenceRefIds: readonly string[];
-  artifactRefs: readonly ResearchArtifactRef[];
-  createdAt: string;
-  updatedAt: string;
-  domainMetadata?: Record<string, unknown>;
-}
-
-export interface ResearchProofStateReadModel {
-  obligations: readonly ResearchProofObligation[];
-  attempts: readonly ResearchProofAttempt[];
-}
-
-export interface ResearchMemoryReadModel {
-  evidence: readonly ResearchEvidenceMemoryRecord[];
-  episodes: readonly ResearchEpisodicMemoryRecord[];
-  semanticClaims: readonly ResearchSemanticClaimRecord[];
-  hypotheses: readonly ResearchHypothesisMemoryRecord[];
-  findings: readonly ResearchFindingMemoryRecord[];
-  beliefs: readonly ResearchBeliefMemoryRecord[];
-  procedures: readonly ResearchProcedureMemoryRecord[];
-  prospectiveChecks: readonly ResearchProspectiveMemoryRecord[];
-  working: readonly ResearchWorkingMemoryRecord[];
-}
-
-export interface ResearchStorageReadModel {
-  rootPath?: string;
-  databasePath?: string;
-  directories: readonly ResearchStorageDirectory[];
-  artifacts: readonly ResearchArtifactRef[];
 }
 
 export type ResearchWorkspaceRepositoryRole =
@@ -468,65 +104,6 @@ export interface ResearchWorkspaceContext {
   projectNotes: readonly string[];
 }
 
-export interface ResearchContextUsageReadModel {
-  latestContextEventId?: string;
-  estimatedTokens?: number;
-  tokenBudget?: number;
-  compacted?: boolean;
-  removedRecordIds?: readonly string[];
-}
-
-export interface ResearchAgentStateReadModel {
-  latestContext?: ResearchContextPacketRef;
-  memory: ResearchMemoryReadModel;
-  proof: ResearchProofStateReadModel;
-  storage: ResearchStorageReadModel;
-  contextUsage?: ResearchContextUsageReadModel;
-}
-
-export interface ResearchContextPacketRef {
-  refId: string;
-  target:
-    | "event"
-    | "memory_record"
-    | "artifact"
-    | "context_section";
-  summary: string;
-  sourceEventIds?: readonly string[];
-  recordIds?: readonly string[];
-  confidence?: number;
-}
-
-export interface ResearchClaimGraphEdge {
-  id: string;
-  sourceRecordId: string;
-  relationship: ResearchClaimGraphRelationship;
-  targetRecordId?: string;
-  evidenceRefId?: string;
-  summary?: string;
-  createdAt: string;
-}
-
-export interface ResearchMemoryAuditRecord {
-  id: string;
-  recordId: string;
-  operation: ResearchMemoryAuditOperation;
-  timestamp: string;
-  summary: string;
-  policy?: string;
-  relatedRecordId?: string;
-}
-
-export interface ResearchMemoryRoute {
-  id: string;
-  sourceEventId: string;
-  target: ResearchMemoryRouteTarget;
-  reason: string;
-  confidence: number;
-  memoryRef?: ResearchMemoryRef;
-  value?: string;
-}
-
 export interface ResearchTraceItem {
   text: string;
   evidenceRefIds?: readonly string[];
@@ -564,7 +141,6 @@ export interface ResearchToolDescriptor {
   estimatedCost?: string;
   validationHooks?: readonly string[];
   artifactLocations?: readonly string[];
-  memoryWritebackDefaults?: readonly ResearchMemoryStoreKind[];
   metadata?: Record<string, unknown>;
 }
 
@@ -620,7 +196,6 @@ export interface ResearchToolAction {
   input: Record<string, unknown>;
   expectedOutputs?: readonly string[];
   budget?: Partial<ResearchToolBudget>;
-  memoryWritebackTargets?: readonly ResearchMemoryStoreKind[];
 }
 
 export type ResearchSkippedToolActionCode =
@@ -636,18 +211,6 @@ export interface ResearchSkippedToolAction {
   action: ResearchToolAction;
   code: ResearchSkippedToolActionCode;
   reason: string;
-}
-
-export interface ResearchMemorySnapshot {
-  eventLog: readonly ResearchEvent[];
-  directEvidence: readonly ResearchMemoryRef[];
-  priorEpisodes: readonly ResearchMemoryRef[];
-  candidateProcedures: readonly ResearchMemoryRef[];
-  currentHypotheses: readonly ResearchMemoryRef[];
-  currentFindings: readonly ResearchMemoryRef[];
-  contradictions: readonly ResearchMemoryRef[];
-  prospectiveCommitments: readonly string[];
-  userCommitments: readonly string[];
 }
 
 export interface ResearchGovernancePolicy {

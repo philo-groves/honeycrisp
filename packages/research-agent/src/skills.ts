@@ -2,14 +2,12 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type {
   ResearchActionClass,
-  ResearchMemorySnapshot,
   ResearchSelectedSkill,
   ResearchSkillDescriptor,
 } from "./types.js";
 
 export interface SelectResearchSkillsInput {
   prompt?: string;
-  memory?: Partial<ResearchMemorySnapshot>;
   requestedSkillIds?: readonly string[];
   limit?: number;
 }
@@ -65,11 +63,7 @@ export function selectResearchSkills(input: SelectResearchSkillsInput & {
   skills: readonly ResearchSkillDescriptor[];
 }): ResearchSelectedSkill[] {
   const requested = new Set(input.requestedSkillIds ?? []);
-  const goalText = [
-    input.prompt,
-    ...(input.memory?.userCommitments ?? []),
-    ...(input.memory?.prospectiveCommitments ?? []),
-  ].filter((part): part is string => typeof part === "string").join("\n").toLowerCase();
+  const goalText = (input.prompt ?? "").toLowerCase();
 
   return input.skills
     .map((skill) => scoreSkill(skill, goalText, requested))

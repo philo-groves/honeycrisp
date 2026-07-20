@@ -24,7 +24,6 @@ import {
 } from "./code-tools.js";
 import type {
   ResearchArtifactRef,
-  ResearchMemoryRef,
   ResearchStorageLayout,
   ResearchToolAction,
   ResearchToolDescriptor,
@@ -40,14 +39,6 @@ const REPOSITORY_SEARCH_IGNORED_DIRECTORIES = new Set([
   ".beale",
   "node_modules",
 ]);
-const MEMORY_RECALL_PARAMETERS = {
-  type: "object",
-  required: ["query"],
-  properties: {
-    query: { type: "string" },
-    limit: { type: "number" },
-  },
-};
 const REPOSITORY_SEARCH_PARAMETERS = {
   type: "object",
   required: ["query"],
@@ -100,13 +91,6 @@ const STORAGE_LIST_PARAMETERS = {
   },
 };
 
-export interface BuiltInMemoryRecallToolOptions {
-  recall(input: {
-    query: string;
-    limit: number;
-  }): Promise<readonly ResearchMemoryRef[]> | readonly ResearchMemoryRef[];
-}
-
 export interface BuiltInRepositorySearchToolOptions {
   root?: string;
   roots?: readonly string[];
@@ -132,56 +116,11 @@ export interface BuiltInStorageListToolOptions {
 }
 
 export interface DefaultBuiltInToolFamilyOptions {
-  recall?: BuiltInMemoryRecallToolOptions;
   repositorySearch?: BuiltInRepositorySearchToolOptions;
   fileRead?: BuiltInStructuredFileReadToolOptions;
   code?: BuiltInCodeIntelligenceToolOptions;
   experiments?: BuiltInExperimentToolOptions;
   storage?: BuiltInStorageListToolOptions;
-}
-
-export function createMemoryRecallTool(
-  options: BuiltInMemoryRecallToolOptions,
-): ResearchExecutableTool {
-  const descriptor = createDescriptor({
-    name: "memory.recall",
-    transportName: "memory_recall",
-    description: "Recall relevant memory references for a query.",
-    actionClasses: ["recall"],
-    sideEffects: "none",
-    requiredPermissions: [],
-    inputSchema: MEMORY_RECALL_PARAMETERS,
-    metadata: {
-      provider: "honeycrisp.built_in",
-      safetyProfile: "memory-read",
-      defaultBudget: {
-        maxToolCalls: 1,
-      },
-    },
-  });
-
-  return {
-    descriptor,
-    parameters: MEMORY_RECALL_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
-    async execute(action) {
-      const startedAt = nowIso();
-      return completeOrError(action, startedAt, async () => {
-        const query = readRequiredString(action.input, "query");
-        const limit = readPositiveInteger(action.input.limit, DEFAULT_MAX_RESULTS);
-        const refs = await options.recall({ query, limit });
-
-        return completeResult(action, startedAt, {
-          summary: `Recalled ${refs.length} memory reference(s) for query: ${query}`,
-          output: {
-            query,
-            limit,
-            refs,
-          },
-          evidence: refs.map((ref) => ref.summary ?? ref.id),
-        });
-      });
-    },
-  };
 }
 
 export function createRepositorySearchTool(
@@ -549,7 +488,6 @@ export function createDefaultBuiltInToolFamily(
   options: DefaultBuiltInToolFamilyOptions = {},
 ): ResearchExecutableTool[] {
   return [
-    ...(options.recall ? [createMemoryRecallTool(options.recall)] : []),
     ...(options.repositorySearch
       ? [createRepositorySearchTool(options.repositorySearch)]
       : []),
@@ -562,13 +500,8 @@ export function createDefaultBuiltInToolFamily(
   ];
 }
 
-function createDescriptor(
-  input: Omit<ResearchToolDescriptor, "memoryWritebackDefaults">,
-): ResearchToolDescriptor {
-  return {
-    ...input,
-    memoryWritebackDefaults: ["event", "working", "episodic"],
-  };
+function createDescriptor(input: ResearchToolDescriptor): ResearchToolDescriptor {
+  return input;
 }
 
 function completeResult(

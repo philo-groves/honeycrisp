@@ -69,8 +69,8 @@ Use `--mock` for deterministic offline practice runs that do not make model call
 pnpm start --mock -p "Produce a research plan for the local parser implementation"
 ```
 
-For local practice runs, Honeycrisp can seed the raw event log from a bounded
-read-only inspection, execute configured tools, and write a flow-capture artifact:
+For local practice runs, Honeycrisp can capture bounded read-only inspection
+events, execute configured tools, and write a flow-capture artifact:
 
 ```sh
 pnpm start --mock \
@@ -81,9 +81,9 @@ pnpm start --mock \
   -p "Review the local source evidence"
 ```
 
-The schema-v3 capture records the request, agent result, model/tool metadata,
+The schema-v4 capture records the request, agent result, model/tool metadata,
 event timeline, bounded memory context, storage manifest, and workspace context.
-Private model thought traces are not persisted as durable memory.
+Private model thought traces are not persisted in graph memory.
 Subagent identity, lifecycle, model calls, result text, and errors are retained in `agent.raw.subagents` in the flow capture. Research tool events produced by children remain part of the same authorized session event stream.
 
 Durable knowledge uses typed nodes (`asset`, `bug`, `invariant`, `mitigation`, `source`, `sink`, `hypothesis`, `finding`, `primitive`, `chain`, `procedure`, and `trajectory`), directed relationships, tags, asset links, and lightweight evidence references. Saves are additive; exact corrections require the current node revision. Transcripts, task narration, and bulk tool output do not belong in the graph.
@@ -108,7 +108,7 @@ pnpm start \
   -p "Inspect the local target and summarize one evidence-backed finding"
 ```
 
-Review the capture for `runtimeConfig.modelConfig.source`, `runtimeConfig.toolConfig`, `memoryIntegration`, `contextV2`, selected tools, storage directories, storage manifest entries, and tool events. Runtime tool preferences may be persisted with `honeycrisp tools config ...`, which writes `.honeycrisp/tools.json` under the workspace by default. Add `--mcp-config` plus `--allow-mcp-server` for one-off live MCP server runs, or persist them with `tools config set mcp-config <path>` and `tools config add allow-mcp-server <name>`.
+Review the capture for `runtimeConfig.modelConfig.source`, `runtimeConfig.toolConfig`, selected tools, injected graph-memory context, storage directories, storage manifest entries, and tool events. Runtime tool preferences may be persisted with `honeycrisp tools config ...`, which writes `.honeycrisp/tools.json` under the workspace by default. Add `--mcp-config` plus `--allow-mcp-server` for one-off live MCP server runs, or persist them with `tools config set mcp-config <path>` and `tools config add allow-mcp-server <name>`.
 
 ### Host control stream
 
