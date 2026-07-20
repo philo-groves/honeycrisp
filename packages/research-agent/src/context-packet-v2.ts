@@ -232,9 +232,6 @@ function compileWorkspaceSection(
   const summary = truncateToTokenBudget(
     [
       `workspace=${workspaceContext.workspaceRoot}`,
-      `memory_db=${workspaceContext.memory.databasePath}`,
-      `storage_root=${workspaceContext.memory.rootPath}`,
-      `artifact_dir=${workspaceContext.memory.artifactDirectoryPath}`,
       workspaceContext.authorization?.recorded
         ? `authorization=recorded source=${workspaceContext.authorization.source}` +
           (workspaceContext.authorization.scopeName
@@ -254,9 +251,6 @@ function compileWorkspaceSection(
         : "",
       workspaceContext.projectNotes.length > 0
         ? `notes=${workspaceContext.projectNotes.join(" | ")}`
-        : "",
-      workspaceContext.memory.rules.length > 0
-        ? `storage_rules=${workspaceContext.memory.rules.join(" ")}`
         : "",
     ]
       .filter(Boolean)

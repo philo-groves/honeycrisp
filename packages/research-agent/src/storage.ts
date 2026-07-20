@@ -28,36 +28,8 @@ const DEFAULT_STORAGE_DIRECTORIES: readonly {
   purpose: string;
 }[] = [
   {
-    name: "events",
-    purpose: "Append-only event logs, raw transcripts, and event-adjacent file payloads.",
-  },
-  {
-    name: "episodes",
-    purpose: "Loop and session summaries linked to accepted event ids.",
-  },
-  {
-    name: "claims",
-    purpose: "Semantic claim graph data, citations, support links, and contradiction material.",
-  },
-  {
-    name: "procedures",
-    purpose: "Reusable runbooks, scripts, tool recipes, and known recovery patterns.",
-  },
-  {
-    name: "hypotheses",
-    purpose: "Active and retired research hypotheses with evidence for and against.",
-  },
-  {
-    name: "prospective",
-    purpose: "Scheduled follow-ups, monitoring commitments, and future checks.",
-  },
-  {
     name: "artifacts",
     purpose: "Reports, generated files, extracted data, raw tool outputs, and experiment outputs.",
-  },
-  {
-    name: "scratch",
-    purpose: "Miscellaneous persistent workspace files that are not yet structured elsewhere.",
   },
 ];
 
@@ -132,10 +104,8 @@ export function createResearchStorageLayout(
       purpose: directory.purpose,
     })),
     rules: [
-      "Memory is for recallable facts, summaries, claims, decisions, procedures, commitments, and paths to persisted files.",
-      "Storage is for durable files, blobs, artifacts, binaries, raw logs, generated outputs, and other non-memory objects.",
-      "When a stored file should be recalled later, write a memory event or trace that summarizes it and includes the file path or artifact reference.",
-      "Use events, episodes, claims, procedures, hypotheses, prospective, artifacts, and scratch according to their directory purposes.",
+      "Durable memory is stored as typed nodes and relationships in the workspace SQLite database.",
+      "Large raw outputs and generated files are stored as artifacts; memory nodes keep concise references to them.",
     ],
   };
 }

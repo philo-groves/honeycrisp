@@ -24,7 +24,7 @@ The current runtime has the integrated first slice of the architecture in place:
 - Local MCP servers can be configured through an explicit stdio JSON-RPC config and allowlist. MCP outputs are treated as untrusted external content.
 - Local skills can be loaded from `SKILL.md` directories, selected by id, and injected as bounded runtime context without overriding governance.
 - Allowlisted experiments can be configured as local subprocess tools with explicit side-effect policy, permissions, timeouts, output limits, stdout/stderr hashing, and artifact registration.
-- Storage creates the default `.honeycrisp/memory/` directory layout and records persisted artifacts in `artifacts/manifest.json` with size, hash, kind, purpose, path, and source event ids.
+- Storage creates the unified SQLite database plus `.honeycrisp/memory/artifacts/` and records persisted artifacts in `artifacts/manifest.json` with size, hash, kind, purpose, path, and source event ids.
 - Config is preference-only. The CLI reads `.honeycrisp/config.json` under `--workspace-root` by default, provides `honeycrisp config show/set`, and still requires provider credentials to be authorized through the auth layer.
 
 Known limitations after this slice:
@@ -351,16 +351,11 @@ A strong cognitive memory layer is not enough for an agent to perform best. Just
 
 Storage should be treated as durable substrate, not cognition. Memory stores indexes, summaries, claims, and pointers; storage preserves full artifacts, raw logs, generated files, datasets, reports, and reproducible scripts.
 
-Default storage lives next to the SQLite memory database under `.honeycrisp/memory/`:
+Default storage has two durable surfaces under `.honeycrisp/memory/`:
 
-- `memory.sqlite`: durable memory event and record metadata.
-- `events/`: append-only event logs, raw transcripts, and event-adjacent file payloads.
-- `episodes/`: loop and session summaries linked to event ids.
-- `claims/`: semantic claim graph data, citations, support links, and contradiction material.
-- `procedures/`: reusable runbooks, scripts, tool recipes, and known recovery patterns.
-- `hypotheses/`: active and retired research hypotheses with evidence for and against.
-- `prospective/`: scheduled follow-ups, monitoring commitments, and future checks.
+- `memory.sqlite`: the unified source of truth for operational state and typed, tiered durable knowledge.
 - `artifacts/`: reports, generated files, extracted data, raw tool outputs, and experiment outputs.
-- `scratch/`: miscellaneous persistent workspace files that are not yet structured elsewhere.
+
+Events, episodes, claims, procedures, hypotheses, and prospective knowledge are SQLite records, not parallel filesystem directories. Storage paths are runtime implementation details and are not included in model-facing workspace context.
 
 The memory controller should store summaries, claims, decisions, procedures, commitments, and pointers to files rather than copying large artifacts into model context. Anything that should be recalled later belongs in memory, including paths or artifact references for persisted files. Storage is for full file contents, blobs, binaries, logs, generated artifacts, and other non-memory objects.

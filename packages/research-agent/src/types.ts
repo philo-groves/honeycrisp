@@ -430,14 +430,6 @@ export interface ResearchWorkspaceRepositoryContext {
   notes?: readonly string[];
 }
 
-export interface ResearchWorkspaceStorageContext {
-  rootPath: string;
-  databasePath: string;
-  artifactDirectoryPath: string;
-  directories: readonly ResearchStorageDirectory[];
-  rules: readonly string[];
-}
-
 export interface ResearchWorkspaceAuthorizationContext {
   recorded: true;
   source: "beale" | "cli" | "config";
@@ -469,7 +461,6 @@ export interface ResearchMemoryTierContext {
 export interface ResearchWorkspaceContext {
   schemaVersion: 1;
   workspaceRoot: string;
-  memory: ResearchWorkspaceStorageContext;
   memoryTierContext?: ResearchMemoryTierContext;
   authorization?: ResearchWorkspaceAuthorizationContext;
   knownRepositories: readonly ResearchWorkspaceRepositoryContext[];
@@ -673,15 +664,7 @@ export interface ResearchGovernancePolicy {
   maxTokens?: number;
 }
 
-export type ResearchStorageDirectoryName =
-  | "events"
-  | "episodes"
-  | "claims"
-  | "procedures"
-  | "hypotheses"
-  | "prospective"
-  | "artifacts"
-  | "scratch";
+export type ResearchStorageDirectoryName = "artifacts";
 
 export interface ResearchStorageDirectory {
   name: ResearchStorageDirectoryName;

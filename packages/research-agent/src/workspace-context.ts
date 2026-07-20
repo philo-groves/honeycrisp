@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
-  ResearchStorageLayout,
   ResearchMemoryTierContext,
   ResearchWorkspaceAuthorizationContext,
   ResearchWorkspaceContext,
@@ -11,7 +10,6 @@ import type {
 
 export interface CreateResearchWorkspaceContextInput {
   workspaceRoot: string;
-  storageLayout: ResearchStorageLayout;
   knownRepositories?: readonly WorkspaceRepositoryInput[];
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
@@ -31,7 +29,6 @@ export interface MergeResearchWorkspaceContextInput {
 export interface ResearchWorkspaceContextOverlay {
   schemaVersion?: 1;
   workspaceRoot?: string;
-  memory?: Partial<ResearchWorkspaceContext["memory"]>;
   knownRepositories?: readonly ResearchWorkspaceRepositoryContext[];
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
@@ -58,13 +55,6 @@ export function createResearchWorkspaceContext(
   return {
     schemaVersion: 1,
     workspaceRoot,
-    memory: {
-      rootPath: resolve(input.storageLayout.rootPath),
-      databasePath: resolve(input.storageLayout.databasePath),
-      artifactDirectoryPath: resolve(input.storageLayout.artifactDirectoryPath),
-      directories: input.storageLayout.directories,
-      rules: input.storageLayout.rules,
-    },
     ...(input.authorization ? { authorization: input.authorization } : {}),
     ...(input.memoryTierContext ? { memoryTierContext: input.memoryTierContext } : {}),
     knownRepositories: uniqueRepositories(repositories),
@@ -100,30 +90,9 @@ export function loadResearchWorkspaceContextFile(
   ]);
   const authorization = normalizeAuthorization(parsed.authorization);
   const memoryTierContext = normalizeMemoryTierContext(parsed.memoryTierContext);
-  const memory = isRecord(parsed.memory)
-    ? {
-        ...(typeof parsed.memory.rootPath === "string"
-          ? { rootPath: resolve(parsed.memory.rootPath) }
-          : {}),
-        ...(typeof parsed.memory.databasePath === "string"
-          ? { databasePath: resolve(parsed.memory.databasePath) }
-          : {}),
-        ...(typeof parsed.memory.artifactDirectoryPath === "string"
-          ? { artifactDirectoryPath: resolve(parsed.memory.artifactDirectoryPath) }
-          : {}),
-        ...(Array.isArray(parsed.memory.directories)
-          ? { directories: parsed.memory.directories as ResearchStorageLayout["directories"] }
-          : {}),
-        ...(Array.isArray(parsed.memory.rules)
-          ? { rules: readStringArray(parsed.memory.rules) }
-          : {}),
-      }
-    : undefined;
-
   return {
     schemaVersion: 1,
     ...(workspaceRoot ? { workspaceRoot } : {}),
-    ...(memory ? { memory } : {}),
     ...(authorization ? { authorization } : {}),
     ...(memoryTierContext ? { memoryTierContext } : {}),
     ...(knownRepositories.length > 0 ? { knownRepositories } : {}),
@@ -143,18 +112,6 @@ export function mergeResearchWorkspaceContexts(
   return {
     ...input.base,
     ...(overlay.workspaceRoot ? { workspaceRoot: resolve(overlay.workspaceRoot) } : {}),
-    memory: {
-      ...input.base.memory,
-      ...(overlay.memory?.rootPath ? { rootPath: resolve(overlay.memory.rootPath) } : {}),
-      ...(overlay.memory?.databasePath
-        ? { databasePath: resolve(overlay.memory.databasePath) }
-        : {}),
-      ...(overlay.memory?.artifactDirectoryPath
-        ? { artifactDirectoryPath: resolve(overlay.memory.artifactDirectoryPath) }
-        : {}),
-      ...(overlay.memory?.directories ? { directories: overlay.memory.directories } : {}),
-      ...(overlay.memory?.rules ? { rules: overlay.memory.rules } : {}),
-    },
     ...(overlay.authorization
       ? { authorization: overlay.authorization }
       : input.base.authorization
@@ -247,8 +204,6 @@ export function workspaceContextFileReadHints(
     context.workspaceRoot,
     ...context.knownRepositories.map((repository) => repository.rootPath),
     ...context.materializedSourcePaths,
-    context.memory.rootPath,
-    context.memory.artifactDirectoryPath,
   ]);
 }
 

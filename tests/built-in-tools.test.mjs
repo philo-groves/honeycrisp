@@ -429,7 +429,7 @@ test("storage list tool exposes manifest artifact metadata read-only", async () 
     assert.equal(result.result.status, "complete");
     assert.equal(result.result.output.artifactCount, 1);
     assert.equal(result.result.output.artifacts[0].id, entry.id);
-    assert.equal(result.result.output.directories.length, 8);
+    assert.deepEqual(result.result.output.directories.map((directory) => directory.name), ["artifacts"]);
     assert.match(result.result.evidence[0], /analysis-note/);
     assert.equal(tool.descriptor.sideEffects, "read");
     assert.deepEqual(tool.descriptor.requiredPermissions, ["storage:read"]);

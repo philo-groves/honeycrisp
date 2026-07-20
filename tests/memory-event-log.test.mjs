@@ -46,16 +46,7 @@ test("sqlite memory event log appends accepted events in deterministic sequence 
   assert.equal(existsSync(artifactDirectoryPath), true);
   assert.deepEqual(
     log.storageLayout.directories.map((directory) => directory.name),
-    [
-      "events",
-      "episodes",
-      "claims",
-      "procedures",
-      "hypotheses",
-      "prospective",
-      "artifacts",
-      "scratch",
-    ],
+    ["artifacts"],
   );
   for (const directory of log.storageLayout.directories) {
     assert.equal(existsSync(directory.path), true);

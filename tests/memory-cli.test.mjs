@@ -551,6 +551,9 @@ test("main CLI capture includes runtime tool and skill configuration", async () 
   );
   assert.deepEqual(capture.runtimeConfig.skills.selectedIds, ["parser-cli"]);
   assert.equal(capture.runtimeConfig.governance.maxToolCalls, 2);
+  assert.equal("memory" in capture.runtimeConfig.workspaceContext, false);
+  assert.equal(JSON.stringify(capture.runtimeConfig.workspaceContext).includes("episodes"), false);
+  assert.equal(JSON.stringify(capture.runtimeConfig.workspaceContext).includes("prospective"), false);
 });
 
 test("memory CLI shows subcommand help", () => {

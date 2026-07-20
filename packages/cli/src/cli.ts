@@ -2817,7 +2817,6 @@ async function createRuntimeConfig(args: {
   const workspaceContext = mergeResearchWorkspaceContexts({
     base: createResearchWorkspaceContext({
       workspaceRoot,
-      storageLayout,
       knownRepositories: runtimeTools.repoRoots.map((root) => ({
         rootPath: root,
         role: "known_repository",

@@ -132,7 +132,6 @@ export async function runResearchAgent(
     input.workspaceContext ??
     createResearchWorkspaceContext({
       workspaceRoot: input.workspaceRoot ?? process.cwd(),
-      storageLayout,
     });
   const durableMemory = createDurableMemoryRuntime({
     option: input.durableMemory,

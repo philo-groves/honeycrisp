@@ -66,7 +66,7 @@ Storage direction:
 
 - Store accepted events in SQLite under `.honeycrisp/memory/memory.sqlite`.
 - Store large binary or text artifacts on disk under `.honeycrisp/memory/artifacts/`.
-- Keep storage directories for persistent non-memory objects beside the SQLite database.
+- Keep persistent non-memory objects in the artifact directory beside the SQLite database.
 - Store artifact metadata and event artifact references in SQLite.
 - Do not add derived-memory record tables in this phase.
 - Do not mutate or delete accepted event rows during ordinary operation.
@@ -78,14 +78,7 @@ Suggested layout:
 .honeycrisp/
   memory/
     memory.sqlite
-    events/
-    episodes/
-    claims/
-    procedures/
-    hypotheses/
-    prospective/
     artifacts/
-    scratch/
 ```
 
 Suggested `memory_events` schema:

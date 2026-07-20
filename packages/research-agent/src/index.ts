@@ -445,7 +445,6 @@ export type {
   ResearchWorkspaceContext,
   ResearchWorkspaceRepositoryContext,
   ResearchWorkspaceRepositoryRole,
-  ResearchWorkspaceStorageContext,
   ResearchContextUsageReadModel,
   ResearchLiveEvent,
   ResearchLiveEventKind,
