@@ -170,7 +170,11 @@ export function createPiAgentExecutor(
               executionRecords.set(toolCall.id, preflight);
               capturedToolCalls.add(toolCall.id);
               toolEvents.push(...preflight.events);
-              emitResearchEvents(input.eventSink, preflight.events);
+              emitResearchEvents(input.eventSink, preflight.events, {
+                agentId: request.id,
+                agentPath: request.path,
+                parentAgentId: request.parentId,
+              });
               return { block: true, reason: preflight.result.summary };
             },
             afterToolCall: async (hookContext) => {
@@ -178,7 +182,11 @@ export function createPiAgentExecutor(
               if (record && !capturedToolCalls.has(hookContext.toolCall.id)) {
                 capturedToolCalls.add(hookContext.toolCall.id);
                 toolEvents.push(...record.events);
-                emitResearchEvents(input.eventSink, record.events);
+                emitResearchEvents(input.eventSink, record.events, {
+                  agentId: request.id,
+                  agentPath: request.path,
+                  parentAgentId: request.parentId,
+                });
               }
               return record
                 ? {
@@ -490,6 +498,7 @@ function captureAgentEvent(
 function emitResearchEvents(
   sink: ResearchLiveEventSink | undefined,
   events: readonly ResearchEvent[],
+  agent: { agentId: string; agentPath: string; parentAgentId: string },
 ): void {
   if (!sink) return;
   for (const event of events) {
@@ -497,7 +506,7 @@ function emitResearchEvents(
       schemaVersion: 1,
       kind: "research.event",
       timestamp: nowIso(),
-      payload: { event },
+      payload: { event, ...agent },
     });
   }
 }

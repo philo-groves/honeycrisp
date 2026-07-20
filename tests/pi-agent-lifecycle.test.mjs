@@ -168,8 +168,17 @@ test("Pi Agent beforeToolCall preflight preserves blocked tool events", async ()
 test("Pi Agent coordinates a partial-context subagent with a model and effort override", async () => {
   const contexts = [];
   const liveEvents = [];
+  const calls = [];
+  const tool = createFixtureInspectTool(calls);
   const result = await runResearchAgent({
     prompt: "Delegate a bounded parser review, then incorporate the result.",
+    tools: [tool.descriptor],
+    governance: {
+      allowedActionClasses: ["inspect"],
+      allowedSideEffects: ["read"],
+      allowedPermissions: ["filesystem:read"],
+      maxToolCalls: 2,
+    },
     eventSink(event) {
       liveEvents.push(event);
     },
@@ -178,6 +187,7 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
       model: "faux-model",
       reasoning: "high",
       models: createSubagentModels(contexts),
+      toolRegistry: createResearchToolRegistry([tool]),
     }),
   });
 
@@ -195,6 +205,8 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   assert.equal(child.reasoningEffort, "low");
   assert.equal(child.forkTurns, "1");
   assert.equal(child.output, "CHILD_RESULT: parser boundary inspected.");
+  assert.equal(child.toolCallCount, 1);
+  assert.deepEqual(calls, [{ path: "parse.c" }]);
   assert.ok(childContext);
   assert.equal(childContext.reasoning, "low");
   assert.ok(childContext.messageContents.some((content) => content.includes("Delegate a bounded parser review")));
@@ -202,6 +214,11 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   assert.ok(rootContexts.at(-1).messageContents.some((content) => content.includes("CHILD_RESULT")));
   assert.deepEqual(activity, ["spawned", "completed"]);
   assert.ok(liveEvents.some((event) => event.payload.agentPath === "/root/parser_review"));
+  assert.ok(liveEvents.some((event) =>
+    event.kind === "research.event" &&
+    event.payload.agentPath === "/root/parser_review" &&
+    event.payload.event.kind === "tool.observed"
+  ));
 });
 
 test("Pi Agent executor streams live thought events", async () => {
@@ -451,6 +468,13 @@ function createSubagentModels(contexts) {
       };
       contexts.push(captured);
       if (model.id === "child-model") {
+        const joined = captured.messageContents.join("\n");
+        if (!joined.includes('"name":"fixture_inspect"')) {
+          return streamFrom({
+            ...assistant(toolCall("fixture_inspect", { path: "parse.c" }, "child_tool_1"), "toolUse"),
+            model: model.id,
+          });
+        }
         return streamFrom({
           ...assistant("CHILD_RESULT: parser boundary inspected."),
           model: model.id,
