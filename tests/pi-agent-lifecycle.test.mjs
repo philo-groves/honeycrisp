@@ -136,6 +136,8 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   assert.equal(calls.length, 1);
   assert.equal(observed.payload.toolName, "fixture.inspect");
   assert.equal(observed.payload.status, "complete");
+  assert.equal("evidenceExtracted" in observed.payload, false);
+  assert.equal("claimsProposed" in observed.payload, false);
   assert.ok(raw.agentEvents.some((event) => event.type === "tool_execution_update"));
   assert.deepEqual(contexts[0].toolNames, ["fixture_inspect", ...COLLABORATION_TOOL_NAMES]);
   assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
@@ -412,8 +414,6 @@ function createFixtureInspectTool(calls) {
         output: {
           path: action.input.path,
         },
-        evidence: [`Fixture inspected ${action.input.path}.`],
-        claims: [],
         artifactRefs: [],
         followUpActions: [],
       };

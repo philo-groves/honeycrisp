@@ -41,8 +41,6 @@ export interface ResearchToolExecutionResult {
   output?: unknown;
   rawOutputRef?: string;
   artifactRefs?: readonly ResearchArtifactRef[];
-  evidence?: readonly unknown[];
-  claims?: readonly unknown[];
   followUpActions: readonly string[];
   error?: {
     message: string;
@@ -283,8 +281,6 @@ export function createToolObservedEvent(
       normalizedInputs: result.action.input,
       generatedArtifactRefs: result.artifactRefs ?? [],
       status: result.status,
-      evidenceExtracted: result.evidence ?? [],
-      claimsProposed: result.claims ?? [],
       followUpActionsProposed: result.followUpActions,
       summary: result.summary,
       ...(result.rawOutputRef ? { rawOutputRef: result.rawOutputRef } : {}),

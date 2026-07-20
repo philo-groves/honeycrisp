@@ -284,10 +284,6 @@ export function createCodeIntelligenceTools(
             detectedCount: detections.length,
             detections,
           },
-          evidence: detections.map(
-            (item) =>
-              `${item.path} language=${item.language} parseError=${item.parseHealth.hasError}`,
-          ),
         });
       },
     }),
@@ -323,10 +319,6 @@ export function createCodeIntelligenceTools(
             parseHealth,
             symbols,
           },
-          evidence: symbols.map(
-            (symbol) =>
-              `${parse.relativePath}:${symbol.range.startLine}: ${symbol.kind} ${symbol.name}`,
-          ),
         });
       },
     }),
@@ -371,10 +363,6 @@ export function createCodeIntelligenceTools(
             exceededMatchLimit,
             matches,
           },
-          evidence: matches.map(
-            (match) =>
-              `${parse.relativePath}: pattern ${match.patternIndex} captures ${match.captures.map((capture) => capture.name).join(", ")}`,
-          ),
         });
       },
     }),
@@ -425,10 +413,6 @@ export function createCodeIntelligenceTools(
             enclosingSymbol: enclosingSymbol ?? null,
             ancestors,
           },
-          evidence: ancestors.map(
-            (ancestor) =>
-              `${parse.relativePath}:${ancestor.range.startLine}: ${ancestor.nodeType} ${ancestor.textPreview}`,
-          ),
         });
       },
     }),
@@ -456,10 +440,6 @@ export function createCodeIntelligenceTools(
             symbol,
             references: refs,
           },
-          evidence: refs.map(
-            (ref) =>
-              `${ref.path}:${ref.range.startLine}: ${ref.kind} ${ref.name}`,
-          ),
         });
       },
     }),
@@ -488,10 +468,6 @@ export function createCodeIntelligenceTools(
             callCandidates: refs,
             precision: "best_effort_tree_sitter_tag_query",
           },
-          evidence: refs.map(
-            (ref) =>
-              `${ref.path}:${ref.range.startLine}: call ${ref.name}`,
-          ),
         });
       },
     }),
@@ -1056,7 +1032,6 @@ function completeResult(
   input: {
     summary: string;
     output: unknown;
-    evidence?: readonly unknown[];
   },
 ): ResearchToolExecutionResult {
   return {
@@ -1066,8 +1041,6 @@ function completeResult(
     completedAt: nowIso(),
     summary: input.summary,
     output: input.output,
-    evidence: input.evidence ?? [],
-    claims: [],
     artifactRefs: [],
     followUpActions: [],
   };

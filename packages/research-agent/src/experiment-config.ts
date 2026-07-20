@@ -160,9 +160,6 @@ async function runConfiguredExperiment(input: {
         ...(input.experiment.cwd ? { cwd: input.experiment.cwd } : {}),
         spawnError: message,
       },
-      evidence: [
-        `Experiment ${input.experiment.name} failed to start: ${message}`,
-      ],
       followUpActions: [
         "Check the configured experiment command, working directory, and arguments.",
       ],
@@ -212,9 +209,6 @@ async function runConfiguredExperiment(input: {
     summary,
     output,
     artifactRefs,
-    evidence: [
-      `Experiment ${input.experiment.name} exit=${result.exitCode ?? "none"} stdout=${output.stdoutHash} stderr=${output.stderrHash}`,
-    ],
     followUpActions: completed
       ? []
       : ["Review experiment stdout/stderr artifacts before continuing."],
@@ -363,7 +357,6 @@ function createExperimentResult(input: {
   summary: string;
   output?: unknown;
   artifactRefs?: readonly ResearchArtifactRef[];
-  evidence?: readonly unknown[];
   followUpActions: readonly string[];
   errorMessage?: string;
 }): ResearchToolExecutionResult {
@@ -375,8 +368,6 @@ function createExperimentResult(input: {
     summary: input.summary,
     ...(input.output !== undefined ? { output: input.output } : {}),
     artifactRefs: input.artifactRefs ?? [],
-    evidence: input.evidence ?? [],
-    claims: [],
     followUpActions: input.followUpActions,
     ...(input.errorMessage ? { error: { message: input.errorMessage } } : {}),
   };

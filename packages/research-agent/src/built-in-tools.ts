@@ -192,9 +192,6 @@ export function createRepositorySearchTool(
             query,
             matches,
           },
-          evidence: matches.map(
-            (match) => `${match.root}:${match.path}:${match.line}: ${match.preview}`,
-          ),
         });
       });
     },
@@ -266,7 +263,6 @@ export function createStructuredFileReadTool(
             containsNulByte: slice.includes(0),
             text,
           },
-          evidence: [text.slice(0, 700)],
         });
       });
     },
@@ -309,7 +305,6 @@ export function createAnalysisTool(): ResearchExecutableTool {
         return completeResult(action, startedAt, {
           summary: `Analysis transform ${operation} completed.`,
           output,
-          evidence: [JSON.stringify(output).slice(0, 700)],
         });
       });
     },
@@ -358,7 +353,6 @@ export function createExperimentTool(
             name,
             output,
           },
-          evidence: [JSON.stringify(output).slice(0, 700)],
         });
       });
     },
@@ -412,7 +406,6 @@ export function createSynthesisTool(): ResearchExecutableTool {
             text,
           },
           artifactRefs: [artifactRef],
-          claims: sections,
         });
       });
     },
@@ -474,10 +467,6 @@ export function createStorageListTool(
             artifactCount: artifacts.length,
             artifacts,
           },
-          evidence: artifacts.map(
-            (artifact) =>
-              `${artifact.id} ${artifact.kind} ${artifact.relativePath} ${artifact.contentHash}`,
-          ),
         });
       });
     },
@@ -510,8 +499,6 @@ function completeResult(
   input: {
     summary: string;
     output: unknown;
-    evidence?: readonly unknown[];
-    claims?: readonly unknown[];
     artifactRefs?: readonly ResearchArtifactRef[];
   },
 ): ResearchToolExecutionResult {
@@ -522,8 +509,6 @@ function completeResult(
     completedAt: nowIso(),
     summary: input.summary,
     output: input.output,
-    evidence: input.evidence ?? [],
-    claims: input.claims ?? [],
     artifactRefs: input.artifactRefs ?? [],
     followUpActions: [],
   };

@@ -218,8 +218,6 @@ async function executeLocalInspectionAction(
       completedAt: nowIso(),
       summary: result.summary,
       output: result,
-      evidence: [result.summary],
-      claims: [],
       followUpActions: createLocalInspectionFollowUps(result),
     };
   } catch (error) {
@@ -285,8 +283,6 @@ function createLocalInspectionErrorResult(
     startedAt,
     completedAt: nowIso(),
     summary: message,
-    claims: [],
-    evidence: [],
     followUpActions: ["Report the local inspection error before continuing."],
     error: {
       message,

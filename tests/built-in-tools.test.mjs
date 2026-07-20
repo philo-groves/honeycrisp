@@ -361,7 +361,6 @@ test("synthesis tool returns report output and artifact references", async () =>
   assert.equal(result.result.status, "complete");
   assert.equal(result.result.output.text, "# Parser Notes\n\nObserved bounded parsing behavior.");
   assert.equal(result.result.artifactRefs[0].kind, "report");
-  assert.deepEqual(result.result.claims, ["Observed bounded parsing behavior."]);
 });
 
 test("storage list tool exposes manifest artifact metadata read-only", async () => {
@@ -395,7 +394,6 @@ test("storage list tool exposes manifest artifact metadata read-only", async () 
     assert.equal(result.result.output.artifactCount, 1);
     assert.equal(result.result.output.artifacts[0].id, entry.id);
     assert.deepEqual(result.result.output.directories.map((directory) => directory.name), ["artifacts"]);
-    assert.match(result.result.evidence[0], /analysis-note/);
     assert.equal(tool.descriptor.sideEffects, "read");
     assert.deepEqual(tool.descriptor.requiredPermissions, ["storage:read"]);
   } finally {

@@ -214,8 +214,6 @@ function createMcpExecutableTool(
           completedAt: nowIso(),
           summary: `MCP tool ${mcpTool.serverName}/${mcpTool.name} returned untrusted output.`,
           output: normalized,
-          evidence: [normalized.summary],
-          claims: [],
           followUpActions: [],
         };
       } catch (error) {
@@ -293,8 +291,6 @@ function createMcpResourceReadTool(
           completedAt: nowIso(),
           summary: `MCP resource ${resource.serverName}/${resource.uri} returned untrusted content.`,
           output: normalized,
-          evidence: [normalized.summary],
-          claims: [],
           followUpActions: [],
         };
       } catch (error) {
