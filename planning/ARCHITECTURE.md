@@ -16,6 +16,7 @@ Honeycrisp does not maintain an outer goal tree, generated subgoals, a triager, 
 2. Honeycrisp selects concise relevant tiered knowledge from the unified SQLite database.
 3. Honeycrisp compiles projected workspace identity, source references, selected memory, and skills into model context. Database paths and storage layout remain runtime-only.
 4. Pi runs the selected model with research tools and collaboration tools.
+   Honeycrisp retries a model turn when the provider reports a retryable transient failure before emitting substantive output; partial turns and non-retryable failures remain terminal.
 5. Research tool observations are appended to the operational event stream. The model explicitly saves or updates concise graph knowledge when it is reusable.
 6. The model may spawn bounded child sessions, communicate with them, and incorporate their results.
 7. Honeycrisp returns the root response and writes a schema-v4 flow capture containing the root result, child sessions, tools, compiled context, and operational storage metadata.
@@ -66,6 +67,8 @@ Knowledge is tiered by:
 Transcripts, narration, and bulk tool output are operational data, not durable knowledge. Large outputs remain artifact files referenced by concise graph nodes.
 
 The agent searches memory early and when research crosses system boundaries. It records relevant historical bugs with affected assets, user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, exploitation blockers as mitigations, and reusable sequences of important research actions as trajectories. Routine action narration is not durable knowledge.
+
+Memory queries are tokenized and relevance-ranked across ids, types, content, assets, tags, and evidence. An exact node id embedded in a broader natural-language query remains directly retrievable.
 
 An individual flaw becomes a primitive only with static-analysis support and code or tool evidence. A chain links its sources, primitives, sinks, and assets only after they establish end-to-end attacker reachability and security impact. Confirming a chain additionally requires a realistic proof-of-vulnerability and independent approval from a review subagent; absent or inconclusive review leaves the chain suspected.
 

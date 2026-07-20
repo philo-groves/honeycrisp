@@ -5,13 +5,18 @@ import type {
   AgentTool,
   AgentToolResult,
   BeforeToolCallContext,
+  StreamFn,
   ToolExecutionMode,
 } from "@earendil-works/pi-agent-core";
-import type {
-  Message,
-  Models,
-  SimpleStreamOptions,
-  ToolCall,
+import {
+  createAssistantMessageEventStream,
+  isRetryableAssistantError,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type Message,
+  type Models,
+  type SimpleStreamOptions,
+  type ToolCall,
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
 import { nowIso } from "./ids.js";
@@ -141,6 +146,35 @@ export function createPiAgentExecutor(
         });
         const collaborationTools = subagents?.createTools(request.id) ?? [];
         const tools = [...researchTools, ...collaborationTools];
+        const streamFn = createRetryingStreamFn(models.streamSimple.bind(models), {
+          signal: request.signal,
+          onRetry: async ({ retry, maxRetries, errorMessage }) => {
+            const retryEvent = {
+              type: "model_retry",
+              turn: currentTurn,
+              retry,
+              maxRetries,
+              errorMessage,
+            };
+            agentEvents.push({
+              ...retryEvent,
+              agentId: request.id,
+              agentPath: request.path,
+            });
+            if (!input.eventSink) return;
+            await emitLiveEvent(input.eventSink, {
+              schemaVersion: 1,
+              kind: "agent.event",
+              timestamp: nowIso(),
+              payload: {
+                ...retryEvent,
+                agentId: request.id,
+                agentPath: request.path,
+                parentAgentId: request.parentId,
+              },
+            });
+          },
+        });
         const agentMessages = await runAgentLoop(
           [request.root ? createUserMessage(input.modelInput) : createTaskMessage(request.prompt)],
           {
@@ -247,7 +281,7 @@ export function createPiAgentExecutor(
             });
           },
           request.signal,
-          models.streamSimple.bind(models),
+          streamFn,
         );
         const assistantMessages = agentMessages.filter(isAssistantMessage);
         const finalAssistant = assistantMessages.at(-1);
@@ -297,6 +331,121 @@ export function createPiAgentExecutor(
         },
       };
     },
+  };
+}
+
+const MODEL_RETRY_DELAYS_MS = [250, 1_000] as const;
+
+function createRetryingStreamFn(
+  streamFn: StreamFn,
+  options: {
+    signal?: AbortSignal;
+    onRetry?: (event: { retry: number; maxRetries: number; errorMessage: string }) => Promise<void> | void;
+  } = {},
+): StreamFn {
+  return (model, context, streamOptions) => {
+    const output = createAssistantMessageEventStream();
+    void (async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        let pendingStart: Extract<AssistantMessageEvent, { type: "start" }> | null = null;
+        let emittedContent = false;
+        let retryError: AssistantMessage | null = null;
+        try {
+          const upstream = await streamFn(model, context, streamOptions);
+          for await (const event of upstream) {
+            if (event.type === "start" && !emittedContent) {
+              pendingStart = event;
+              continue;
+            }
+            if (
+              event.type === "error"
+              && !emittedContent
+              && attempt < MODEL_RETRY_DELAYS_MS.length
+              && isRetryableAssistantError(event.error)
+            ) {
+              retryError = event.error;
+              break;
+            }
+            if (pendingStart) {
+              output.push(pendingStart);
+              pendingStart = null;
+            }
+            output.push(event);
+            if (event.type === "done" || event.type === "error") return;
+            emittedContent = true;
+          }
+        } catch (error) {
+          const message = assistantErrorMessage(model, error);
+          if (!emittedContent && attempt < MODEL_RETRY_DELAYS_MS.length && isRetryableAssistantError(message)) {
+            retryError = message;
+          } else {
+            if (pendingStart) output.push(pendingStart);
+            output.push({ type: "error", reason: "error", error: message });
+            return;
+          }
+        }
+
+        if (!retryError) {
+          const message = assistantErrorMessage(model, "Model stream ended before a terminal event.");
+          if (pendingStart) output.push(pendingStart);
+          output.push({ type: "error", reason: "error", error: message });
+          return;
+        }
+
+        const retry = attempt + 1;
+        await options.onRetry?.({
+          retry,
+          maxRetries: MODEL_RETRY_DELAYS_MS.length,
+          errorMessage: retryError.errorMessage ?? "Transient model error.",
+        });
+        if (!await retryDelay(MODEL_RETRY_DELAYS_MS[attempt]!, options.signal)) {
+          output.push({
+            type: "error",
+            reason: "aborted",
+            error: { ...retryError, stopReason: "aborted", errorMessage: "Model retry aborted." },
+          });
+          return;
+        }
+      }
+    })();
+    return output;
+  };
+}
+
+function retryDelay(delayMs: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolveDelay) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolveDelay(true);
+    }, delayMs);
+    const abort = () => {
+      clearTimeout(timeout);
+      resolveDelay(false);
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function assistantErrorMessage(model: Parameters<StreamFn>[0], error: unknown): AssistantMessage {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorMessage,
+    timestamp: Date.now(),
   };
 }
 

@@ -221,6 +221,31 @@ test("Pi Agent keeps tools available without an explicit governance call limit",
   assert.ok(contexts.slice(0, 5).every((context) => context.toolNames.includes("fixture_inspect")));
 });
 
+test("Pi Agent retries a transient provider failure before emitting a terminal error", async () => {
+  const contexts = [];
+  const liveEvents = [];
+  const result = await runResearchAgent({
+    prompt: "Continue after a transient provider failure.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistantError("Codex error: An error occurred while processing your request. You can retry your request."),
+        assistant("## Result\nRecovered without losing the active turn."),
+      ], contexts),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.match(result.agentRun.output.text, /Recovered without losing/);
+  assert.equal(contexts.length, 2);
+  assert.ok(result.agentRun.output.raw.agentEvents.some((event) => event.type === "model_retry" && event.retry === 1));
+  assert.ok(liveEvents.some((event) => event.kind === "agent.event" && event.payload.type === "model_retry"));
+});
+
 test("Pi Agent beforeToolCall preflight preserves blocked tool events", async () => {
   const calls = [];
   const contexts = [];
@@ -643,6 +668,13 @@ function assistant(content, stopReason = "stop") {
     usage: ZERO_USAGE,
     stopReason,
     timestamp: Date.now(),
+  };
+}
+
+function assistantError(errorMessage) {
+  return {
+    ...assistant([], "error"),
+    errorMessage,
   };
 }
 

@@ -271,8 +271,12 @@ export class MemoryGraphStore {
   public search(input: SearchMemoryNodesInput = {}): MemoryNode[] {
     const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
     const nodes = this.bindings.flatMap((binding) => this.searchBinding(binding, input));
+    const query = input.query?.trim() ?? "";
     return nodes
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
+      .sort((left, right) =>
+        (query ? memorySearchScore(right, query) - memorySearchScore(left, query) : 0)
+        || right.updatedAt.localeCompare(left.updatedAt)
+        || left.id.localeCompare(right.id))
       .slice(0, limit);
   }
 
@@ -284,8 +288,11 @@ export class MemoryGraphStore {
     clauses.push(visibility.sql);
     params.push(...visibility.params);
     if (input.query?.trim()) {
-      const query = `%${input.query.trim().toLowerCase()}%`;
-      clauses.push(`(
+      const terms = memorySearchTerms(input.query);
+      if (terms.length === 0) return [];
+      const termClause = `(
+        lower(n.id) LIKE ? OR
+        lower(n.type) LIKE ? OR
         lower(n.title) LIKE ? OR
         lower(n.summary) LIKE ? OR
         lower(n.body) LIKE ? OR
@@ -300,8 +307,12 @@ export class MemoryGraphStore {
             lower(e_query.summary) LIKE ?
           )
         )
-      )`);
-      params.push(query, query, query, query, query, query, query, query, query);
+      )`;
+      clauses.push(`(${terms.map(() => termClause).join(" OR ")})`);
+      for (const term of terms) {
+        const query = `%${term}%`;
+        params.push(query, query, query, query, query, query, query, query, query, query, query);
+      }
     }
     if (input.types?.length) {
       clauses.push(`n.type IN (${input.types.map(() => "?").join(",")})`);
@@ -545,6 +556,38 @@ export class MemoryGraphStore {
   private strings(database: DatabaseSync, sql: string, value: string): string[] {
     return (database.prepare(sql).all(value) as { value?: unknown }[]).flatMap((row) => (typeof row.value === "string" ? [row.value] : []));
   }
+}
+
+function memorySearchTerms(query: string): string[] {
+  const terms = query.toLowerCase().match(/[a-z0-9][a-z0-9_./:-]*/g) ?? [];
+  return [...new Set(terms.filter((term) => term.length > 1))].slice(0, 20);
+}
+
+function memorySearchScore(node: MemoryNode, query: string): number {
+  const terms = memorySearchTerms(query);
+  const id = node.id.toLowerCase();
+  const type = node.type.toLowerCase();
+  const title = node.title.toLowerCase();
+  const summary = node.summary.toLowerCase();
+  const body = node.body.toLowerCase();
+  const attributes = JSON.stringify(node.attributes).toLowerCase();
+  const assets = node.assetIds.join("\n").toLowerCase();
+  const tags = node.tags.join("\n").toLowerCase();
+  const evidence = node.evidence.map((item) => `${item.path ?? ""}\n${JSON.stringify(item.locator)}\n${item.summary}`).join("\n").toLowerCase();
+  let score = query.toLowerCase().trim() === id ? 10_000 : 0;
+  for (const term of terms) {
+    if (id === term) score += 1_000;
+    else if (id.includes(term)) score += 200;
+    if (type === term) score += 80;
+    if (title.includes(term)) score += 40;
+    if (summary.includes(term)) score += 20;
+    if (body.includes(term)) score += 10;
+    if (attributes.includes(term)) score += 8;
+    if (assets.includes(term)) score += 8;
+    if (tags.includes(term)) score += 8;
+    if (evidence.includes(term)) score += 6;
+  }
+  return score;
 }
 
 function validateNodeInput(input: { type: unknown; title: unknown; tier?: unknown; status?: unknown; confidence?: unknown; attributes?: unknown }): void {

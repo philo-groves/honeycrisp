@@ -41,6 +41,8 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
     assert.equal(store.search({ query: "asset_api" })[0]?.id, first.id);
     assert.equal(store.search({ query: "src/parser.ts" })[0]?.id, first.id);
     assert.equal(store.search({ query: "42" })[0]?.id, first.id);
+    assert.equal(store.search({ query: `${first.id} unrelated FTP sink terms` })[0]?.id, first.id);
+    assert.equal(store.search({ query: "shared cleanup unrelated" })[0]?.id, first.id);
 
     assert.throws(() => store.correct(first.id, 1, { status: "confirmed" }), /revision conflict/);
     const corrected = store.correct(first.id, 2, { status: "rejected", summary: "Cleanup prevents state reuse." });
