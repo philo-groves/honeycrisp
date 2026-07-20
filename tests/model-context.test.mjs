@@ -9,8 +9,10 @@ import {
   compileMemoryModelContext,
   createAvailableToolContext,
   createModelWorkspaceContext,
+  createResearchWorkspaceContext,
   MemoryGraphStore,
   selectMemoryModelContext,
+  workspaceContextFileReadHints,
 } from "../packages/research-agent/dist/index.js";
 
 test("model workspace context preserves research identity without storage paths", () => {
@@ -40,6 +42,7 @@ test("model workspace context preserves research identity without storage paths"
     },
     knownRepositories: [{
       rootPath: "/sources/zsh",
+      contentRoots: ["/sources/zsh/zsh"],
       role: "materialized_source",
       source: "beale",
     }],
@@ -55,6 +58,24 @@ test("model workspace context preserves research identity without storage paths"
   assert.equal("workspaceRoot" in context, false);
   assert.doesNotMatch(JSON.stringify(context), /memory\.sqlite|private\/workspaces/);
   assert.match(JSON.stringify(context), /\/sources\/zsh/);
+  assert.match(JSON.stringify(context), /\/sources\/zsh\/zsh/);
+});
+
+test("repository content roots become bounded file-read hints", () => {
+  const context = createResearchWorkspaceContext({
+    workspaceRoot: "/workspaces/zsh",
+    knownRepositories: [{
+      rootPath: "/sources/zsh/default",
+      contentRoots: ["/sources/zsh/default/zsh"],
+      role: "materialized_source",
+    }],
+  });
+
+  assert.deepEqual(workspaceContextFileReadHints(context), [
+    "/workspaces/zsh",
+    "/sources/zsh/default",
+    "/sources/zsh/default/zsh",
+  ]);
 });
 
 test("memory context selects bounded tiered nodes with evidence and relationships", () => {

@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { applyDatabaseMigrations } from "./database-migrations.js";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
 
 const require = createRequire(import.meta.url);
@@ -410,8 +411,12 @@ export class MemoryGraphStore {
   }
 
   private initializeSchema(database: DatabaseSync): void {
-    database.exec(`
-      CREATE TABLE IF NOT EXISTS honeycrisp_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    applyDatabaseMigrations(database, "honeycrisp_core", [
+      {
+        version: 1,
+        name: "tiered_memory_graph_baseline",
+        up(database) {
+          database.exec(`
       CREATE TABLE IF NOT EXISTS memory_nodes (
         id TEXT PRIMARY KEY,
         tier TEXT NOT NULL,
@@ -482,8 +487,11 @@ export class MemoryGraphStore {
       CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges(to_id, relation);
       CREATE INDEX IF NOT EXISTS memory_federated_edges_to_idx ON memory_federated_edges(to_id, relation);
       CREATE INDEX IF NOT EXISTS memory_evidence_node_idx ON memory_evidence_refs(node_id);
-      INSERT OR REPLACE INTO honeycrisp_meta(key, value) VALUES ('schema_version', '2');
-    `);
+      DROP TABLE IF EXISTS honeycrisp_meta;
+          `);
+        },
+      },
+    ]);
   }
 
   private writeNode(database: DatabaseSync, node: MemoryNode, titleNorm: string, scopeKey: string, expectedRevision?: number): void {

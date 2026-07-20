@@ -487,6 +487,7 @@ function createCodeTool(input: {
     startedAt: string,
   ) => Promise<ResearchToolExecutionResult>;
 }): ResearchExecutableTool {
+  const parameters = constrainMaxBytes(input.parameters, input.maxFileBytes);
   const descriptor: ResearchToolDescriptor = {
     name: input.name,
     transportName: input.transportName,
@@ -494,7 +495,7 @@ function createCodeTool(input: {
     actionClasses: input.actionClasses,
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
-    inputSchema: input.parameters,
+    inputSchema: parameters,
     artifactLocations: input.rootHints,
     metadata: {
       provider: "honeycrisp.built_in",
@@ -509,10 +510,30 @@ function createCodeTool(input: {
 
   return {
     descriptor,
-    parameters: input.parameters as NonNullable<ResearchExecutableTool["parameters"]>,
+    parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action) {
       const startedAt = nowIso();
       return completeOrError(action, startedAt, () => input.run(action, startedAt));
+    },
+  };
+}
+
+function constrainMaxBytes(parameters: unknown, maximum: number): unknown {
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return parameters;
+  const schema = parameters as Record<string, unknown>;
+  const properties = schema.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return parameters;
+  const maxBytes = (properties as Record<string, unknown>).maxBytes;
+  if (!maxBytes || typeof maxBytes !== "object" || Array.isArray(maxBytes)) return parameters;
+  return {
+    ...schema,
+    properties: {
+      ...(properties as Record<string, unknown>),
+      maxBytes: {
+        ...(maxBytes as Record<string, unknown>),
+        maximum,
+        description: `Maximum bytes to inspect; cannot exceed ${maximum}.`,
+      },
     },
   };
 }

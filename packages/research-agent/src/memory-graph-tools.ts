@@ -44,8 +44,33 @@ const SAVE_PARAMETERS = {
   properties: {
     id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string", enum: [...MEMORY_NODE_TYPES] }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
     status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
-    tags: { type: "array", items: { type: "string" } }, attributes: { type: "object" }, evidence: { type: "array", items: EVIDENCE_ITEM_PARAMETERS },
+    tags: { type: "array", items: { type: "string" } },
+    attributes: {
+      type: "object",
+      description: "Type-specific structured details. Chain memories require non-empty impact and reachability strings.",
+      properties: {
+        impact: { type: "string", description: "Security consequence if the chain succeeds." },
+        reachability: { type: "string", description: "Conditions and path by which the chain can be reached." },
+      },
+    },
+    evidence: { type: "array", items: EVIDENCE_ITEM_PARAMETERS },
   },
+  allOf: [{
+    if: { properties: { type: { const: "chain" } }, required: ["type"] },
+    then: {
+      required: ["attributes"],
+      properties: {
+        attributes: {
+          type: "object",
+          required: ["impact", "reachability"],
+          properties: {
+            impact: { type: "string", minLength: 1 },
+            reachability: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+  }],
 };
 const CORRECT_PARAMETERS = {
   type: "object",

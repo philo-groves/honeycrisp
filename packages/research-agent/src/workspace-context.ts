@@ -203,6 +203,7 @@ export function workspaceContextFileReadHints(
   return uniqueResolvedPaths([
     context.workspaceRoot,
     ...context.knownRepositories.map((repository) => repository.rootPath),
+    ...context.knownRepositories.flatMap((repository) => repository.contentRoots ?? []),
     ...context.materializedSourcePaths,
   ]);
 }
@@ -230,6 +231,9 @@ function normalizeRepositoryInputs(
     const role = normalizeRepositoryRole(input.role);
     return [{
       rootPath: resolve(input.rootPath),
+      ...(Array.isArray(input.contentRoots)
+        ? { contentRoots: uniqueResolvedPaths(input.contentRoots.filter((value): value is string => typeof value === "string")) }
+        : {}),
       role,
       ...(input.label ? { label: String(input.label) } : {}),
       source: normalizeRepositorySource(input.source) ?? fallbackSource,
@@ -285,6 +289,9 @@ function uniqueRepositories(
     unique.push({
       ...repository,
       rootPath,
+      ...(repository.contentRoots
+        ? { contentRoots: uniqueResolvedPaths(repository.contentRoots) }
+        : {}),
     });
   }
   return unique;

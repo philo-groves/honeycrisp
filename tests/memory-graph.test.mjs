@@ -69,6 +69,7 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     assert.deepEqual(saveSchema.properties.status.enum, ["draft", "suspected", "confirmed", "rejected", "stale"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.kind.enum, ["code", "artifact", "command", "url", "human_note"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.pathBase.enum, ["workspace", "repository", "asset_root", "external"]);
+    assert.deepEqual(saveSchema.allOf[0].then.properties.attributes.required, ["impact", "reachability"]);
     const source = await registry.execute({ id: "save_source", actionClass: "synthesize", toolName: "memory.save", input: { type: "source", title: "Request body" } });
     const sink = await registry.execute({ id: "save_sink", actionClass: "synthesize", toolName: "memory.save", input: { type: "sink", title: "Template renderer" } });
     assert.equal(source.result.status, "complete");
@@ -100,7 +101,18 @@ test("memory graph shares a database without disturbing host operational tables"
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
   await mkdir(join(workspaceRoot, ".honeycrisp", "memory"), { recursive: true });
   const host = new DatabaseSync(databasePath);
-  host.exec("CREATE TABLE host_runs (id TEXT PRIMARY KEY, title TEXT NOT NULL); INSERT INTO host_runs VALUES ('run_one', 'Host run');");
+  host.exec(`
+    CREATE TABLE host_runs (id TEXT PRIMARY KEY, title TEXT NOT NULL);
+    INSERT INTO host_runs VALUES ('run_one', 'Host run');
+    CREATE TABLE schema_migrations (
+      component TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK (version > 0),
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL,
+      PRIMARY KEY(component, version)
+    );
+    INSERT INTO schema_migrations VALUES ('beale_workbench', 1, 'workspace_schema_baseline', '2026-07-20T00:00:00.000Z');
+  `);
   host.close();
 
   const store = new MemoryGraphStore({ workspaceRoot });
@@ -113,8 +125,45 @@ test("memory graph shares a database without disturbing host operational tables"
     assert.equal(hostRun.id, "run_one");
     assert.equal(hostRun.title, "Host run");
     assert.equal(reopened.prepare("SELECT COUNT(*) AS count FROM memory_nodes").get().count, 1);
+    assert.deepEqual(
+      { ...reopened.prepare("SELECT component, version, name FROM schema_migrations WHERE component = 'honeycrisp_core'").get() },
+      { component: "honeycrisp_core", version: 1, name: "tiered_memory_graph_baseline" },
+    );
+    assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'beale_workbench'").get().name, "workspace_schema_baseline");
+    assert.equal(reopened.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
   } finally {
     reopened.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("memory graph adopts the migration baseline without rewriting existing knowledge", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-migration-"));
+  const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
+  const initial = new MemoryGraphStore({ workspaceRoot });
+  const node = initial.save({ type: "finding", title: "Preserved finding", summary: "Durable research result." });
+  initial.close();
+
+  const legacy = new DatabaseSync(databasePath);
+  legacy.prepare("DELETE FROM schema_migrations WHERE component = 'honeycrisp_core'").run();
+  legacy.exec("CREATE TABLE honeycrisp_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO honeycrisp_meta VALUES ('schema_version', '2');");
+  legacy.close();
+
+  const migrated = new MemoryGraphStore({ workspaceRoot });
+  try {
+    assert.equal(migrated.get(node.id)?.title, "Preserved finding");
+    const database = new DatabaseSync(databasePath);
+    try {
+      assert.deepEqual(
+        { ...database.prepare("SELECT version, name FROM schema_migrations WHERE component = 'honeycrisp_core'").get() },
+        { version: 1, name: "tiered_memory_graph_baseline" },
+      );
+      assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
+    } finally {
+      database.close();
+    }
+  } finally {
+    migrated.close();
     await rm(workspaceRoot, { recursive: true, force: true });
   }
 });

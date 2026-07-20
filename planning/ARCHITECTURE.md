@@ -32,7 +32,7 @@ The compiled workspace context is guidance, not a repository permission fence. I
 
 Pi presents the tools themselves through their typed definitions. Honeycrisp enforces permissions and budgets in lifecycle hooks instead of restating that policy as prompt prose. The compiled-context event records concise summaries of the tools actually available for inspection by host interfaces.
 
-Repository paths help the model discover likely source. A repository need not be known before research begins, and the same user-global checkout may be referenced by multiple workspaces.
+Repository paths help the model discover likely source. A repository may include bounded nested content roots when a host checkout wraps the actual project directory. A repository need not be known before research begins, and the same user-global checkout may be referenced by multiple workspaces.
 
 ## Native Agent And Subagents
 
@@ -79,6 +79,8 @@ The default durable surfaces are:
 
 - `.honeycrisp/memory/memory.sqlite` for operational state and tiered knowledge; and
 - `.honeycrisp/memory/artifacts/` for files, raw outputs, logs, generated material, and reproducible scripts.
+
+The shared SQLite database uses an append-only, component-scoped migration ledger. Honeycrisp owns the `honeycrisp_core` sequence and adopts the idempotent graph baseline for databases created before the ledger existed.
 
 Schema-v4 flow captures summarize the request, root result, child session tree, model calls, tool events, compiled context with selected graph knowledge, and storage manifest. Child metadata includes path, parent, lifecycle state, model, effort, inheritance mode, timestamps, result, errors, and usage.
 

@@ -1,4 +1,5 @@
 export * from "./memory-graph.js";
+export * from "./database-migrations.js";
 export * from "./memory-graph-tools.js";
 export * from "./model-context.js";
 export * from "./auth.js";

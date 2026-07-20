@@ -212,6 +212,9 @@ test("code intelligence tools expose Tree-sitter detect, outline, query, context
         maxFileBytes: 20_000,
       }),
     );
+    for (const descriptor of registry.listDescriptors()) {
+      assert.equal(descriptor.inputSchema.properties.maxBytes.maximum, 20_000);
+    }
     const detect = await registry.execute({
       id: "code_detect_1",
       actionClass: "inspect",

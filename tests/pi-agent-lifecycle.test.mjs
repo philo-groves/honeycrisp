@@ -274,6 +274,11 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
     event.payload.agentPath === "/root/parser_review" &&
     event.payload.event.kind === "tool.observed"
   ));
+  const liveToolEvents = liveEvents.filter((event) => event.kind === "research.event" && event.payload.event.kind.startsWith("tool."));
+  assert.equal(new Set(liveToolEvents.map((event) => event.payload.event.id)).size, liveToolEvents.length);
+  const capturedChildTool = result.agentRun.output.toolEvents.find((event) => event.agentPath === "/root/parser_review");
+  assert.equal(capturedChildTool.agentId, child.id);
+  assert.equal(capturedChildTool.parentAgentId, "root");
 });
 
 test("Pi Agent executor streams live thought events", async () => {

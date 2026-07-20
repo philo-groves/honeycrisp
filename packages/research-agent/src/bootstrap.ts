@@ -154,8 +154,7 @@ export async function runResearchAgent(
     };
   }
 
-  const completionEvents: ResearchEvent[] = [
-    ...(agentRun.output.toolEvents ?? []),
+  const terminalEvents: ResearchEvent[] = [
     ...(agentRun.output.researchTrace
       ? createResearchTraceEvents(agentRun.output.researchTrace)
       : []),
@@ -175,8 +174,8 @@ export async function runResearchAgent(
       },
     },
   ];
-  emitLiveResearchEvents(input.eventSink, completionEvents);
-  events.push(...completionEvents);
+  emitLiveResearchEvents(input.eventSink, terminalEvents);
+  events.push(...(agentRun.output.toolEvents ?? []), ...terminalEvents);
 
   return {
     prompt: input.prompt,

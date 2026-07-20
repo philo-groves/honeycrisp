@@ -1096,7 +1096,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           },
         );
         if (!args.json) {
-          console.log(`Flow capture: ${capturePath}`);
+          if (!args.eventStream) console.log(`Flow capture: ${capturePath}`);
         }
       }
 
@@ -1105,7 +1105,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         return;
       }
 
-      console.log(result.response);
+      if (!args.eventStream) console.log(result.response);
     } finally {
       controlStream?.close();
       await runtimeConfig.cleanup?.();

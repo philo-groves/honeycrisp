@@ -46,6 +46,9 @@ export interface ResearchEvent {
   sequence?: ResearchEventSequence;
   kind: ResearchEventKind;
   timestamp: string;
+  agentId?: string;
+  agentPath?: string;
+  parentAgentId?: string;
   payload: ResearchRawEventPayload;
   payloadHash?: string;
   artifactRefs?: readonly ResearchArtifactRef[];
@@ -59,6 +62,7 @@ export type ResearchWorkspaceRepositoryRole =
 
 export interface ResearchWorkspaceRepositoryContext {
   rootPath: string;
+  contentRoots?: readonly string[];
   label?: string;
   role: ResearchWorkspaceRepositoryRole;
   source?: "cli" | "config" | "beale" | "inferred";

@@ -24,6 +24,9 @@ export interface ResearchFlowEventCapture {
   id: string;
   kind: ResearchEvent["kind"];
   timestamp: string;
+  agentId?: string;
+  agentPath?: string;
+  parentAgentId?: string;
   summary: string;
   payload: unknown;
 }
@@ -134,6 +137,9 @@ function captureEvent(event: ResearchEvent): ResearchFlowEventCapture {
     id: event.id,
     kind: event.kind,
     timestamp: event.timestamp,
+    ...(event.agentId ? { agentId: event.agentId } : {}),
+    ...(event.agentPath ? { agentPath: event.agentPath } : {}),
+    ...(event.parentAgentId ? { parentAgentId: event.parentAgentId } : {}),
     summary:
       typeof payload.summary === "string" ? payload.summary : event.kind,
     payload: event.payload,

@@ -169,8 +169,13 @@ export function createPiAgentExecutor(
               reserveToolCall(toolCall.id);
               executionRecords.set(toolCall.id, preflight);
               capturedToolCalls.add(toolCall.id);
-              toolEvents.push(...preflight.events);
-              emitResearchEvents(input.eventSink, preflight.events, {
+              const attributedEvents = attributeResearchEvents(preflight.events, {
+                agentId: request.id,
+                agentPath: request.path,
+                parentAgentId: request.parentId,
+              });
+              toolEvents.push(...attributedEvents);
+              emitResearchEvents(input.eventSink, attributedEvents, {
                 agentId: request.id,
                 agentPath: request.path,
                 parentAgentId: request.parentId,
@@ -181,8 +186,13 @@ export function createPiAgentExecutor(
               const record = executionRecords.get(hookContext.toolCall.id);
               if (record && !capturedToolCalls.has(hookContext.toolCall.id)) {
                 capturedToolCalls.add(hookContext.toolCall.id);
-                toolEvents.push(...record.events);
-                emitResearchEvents(input.eventSink, record.events, {
+                const attributedEvents = attributeResearchEvents(record.events, {
+                  agentId: request.id,
+                  agentPath: request.path,
+                  parentAgentId: request.parentId,
+                });
+                toolEvents.push(...attributedEvents);
+                emitResearchEvents(input.eventSink, attributedEvents, {
                   agentId: request.id,
                   agentPath: request.path,
                   parentAgentId: request.parentId,
@@ -509,6 +519,13 @@ function emitResearchEvents(
       payload: { event, ...agent },
     });
   }
+}
+
+function attributeResearchEvents(
+  events: readonly ResearchEvent[],
+  agent: { agentId: string; agentPath: string; parentAgentId: string },
+): ResearchEvent[] {
+  return events.map((event) => ({ ...event, ...agent }));
 }
 
 async function emitAgentEvent(
