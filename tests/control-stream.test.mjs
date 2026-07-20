@@ -27,6 +27,7 @@ test("control stream queues steering and holds it while paused", async () => {
     ["pause", "steer", "resume"],
   );
   controls.close();
+  assert.equal(input.isPaused(), true);
   input.destroy();
 });
 
@@ -43,5 +44,6 @@ test("control stream rejects malformed messages without closing", async () => {
   assert.equal(events[0]?.accepted, false);
   assert.equal(events[1]?.accepted, true);
   controls.close();
+  assert.equal(input.isPaused(), true);
   input.destroy();
 });

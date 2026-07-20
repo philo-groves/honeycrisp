@@ -17,6 +17,7 @@ export {
   createAuthenticatedModels,
   createCredentialStore,
   FileCredentialStore,
+  getCodexAuthFile,
   getAuthStatus,
   getDefaultAuthFile,
   listAuthProviders,
@@ -27,10 +28,10 @@ export {
 } from "./auth.js";
 export type {
   AuthEvent,
-  AuthLoginCallbacks,
   AuthPrompt,
 } from "@earendil-works/pi-ai";
 export type {
+  AuthLoginCallbacks,
   AuthLoginResult,
   AuthProviderSummary,
   AuthStatus,

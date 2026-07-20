@@ -144,6 +144,8 @@ are reported as `agent.event` records with `eventType: "control.received"`.
 
 Honeycrisp stores provider credentials in `~/.honeycrisp/auth.json` by default, or the path set in `HONEYCRISP_AUTH_FILE`.
 
+When launched by a host workbench, `HONEYCRISP_CODEX_AUTH_FILE` may point to an existing Codex `auth.json`. Honeycrisp uses the fresher `openai-codex` OAuth credential without modifying the Codex file; any refreshed credential is written to Honeycrisp's own auth file.
+
 ```sh
 pnpm start auth list
 pnpm start auth login openai-codex

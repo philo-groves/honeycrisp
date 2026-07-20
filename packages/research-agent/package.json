@@ -19,8 +19,8 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.80.2",
-    "@earendil-works/pi-ai": "0.80.2",
+    "@earendil-works/pi-agent-core": "0.80.10",
+    "@earendil-works/pi-ai": "0.80.10",
     "tree-sitter-wasm": "1.1.1",
     "web-tree-sitter": "0.26.9"
   },

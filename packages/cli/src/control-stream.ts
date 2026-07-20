@@ -35,6 +35,7 @@ export class HoneycrispControlStream {
     this.started = false;
     this.input.off("data", this.handleData);
     this.input.off("end", this.handleEnd);
+    this.input.pause();
     this.buffer = "";
     this.paused = false;
     this.resolveResumeWaiters();

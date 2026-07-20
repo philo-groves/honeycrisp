@@ -5,11 +5,63 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
+  createAuthenticatedModels,
+  createCredentialStore,
   getDefaultResearchModelConfigPath,
   loadResearchModelConfig,
   resolveResearchModelConfig,
   writeResearchModelConfig,
 } from "../packages/research-agent/dist/index.js";
+
+test("built-in Codex model catalog includes GPT-5.6 Sol", () => {
+  const models = createAuthenticatedModels();
+  const model = models.getModel("openai-codex", "gpt-5.6-sol");
+
+  assert.equal(model?.id, "gpt-5.6-sol");
+  assert.equal(model?.provider, "openai-codex");
+});
+
+test("credential store prefers a fresher host Codex OAuth credential", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-codex-bridge-"));
+  const authFile = join(directory, "honeycrisp-auth.json");
+  const codexAuthFile = join(directory, "codex-auth.json");
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const jwt = (expires) =>
+    `header.${Buffer.from(JSON.stringify({ exp: expires })).toString("base64url")}.signature`;
+
+  await writeFile(
+    authFile,
+    JSON.stringify({
+      "openai-codex": {
+        type: "oauth",
+        access: jwt(nowSeconds - 60),
+        refresh: "stale-refresh",
+        expires: (nowSeconds - 60) * 1000,
+        accountId: "stale-account",
+      },
+    }),
+    "utf8",
+  );
+  await writeFile(
+    codexAuthFile,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: jwt(nowSeconds + 3600),
+        refresh_token: "host-refresh",
+        account_id: "host-account",
+      },
+    }),
+    "utf8",
+  );
+
+  const credential = await createCredentialStore({ authFile, codexAuthFile }).read(
+    "openai-codex",
+  );
+  assert.equal(credential?.type, "oauth");
+  assert.equal(credential?.accountId, "host-account");
+  assert.equal(credential?.expires, (nowSeconds + 3600) * 1000);
+});
 
 test("research model config loads provider, model, and effort preferences only", async () => {
   const configPath = await writeConfig({

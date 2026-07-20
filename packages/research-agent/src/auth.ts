@@ -3,14 +3,19 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type {
-  AuthLoginCallbacks,
+  AuthInteraction,
   Credential,
+  CredentialInfo,
   CredentialStore,
   Models,
+  OAuthCredential,
 } from "@earendil-works/pi-ai";
+
+export type AuthLoginCallbacks = AuthInteraction;
 
 export interface FileCredentialStoreOptions {
   authFile?: string;
+  codexAuthFile?: string;
 }
 
 export interface AuthProviderSummary {
@@ -48,10 +53,12 @@ type CredentialFile = Record<string, Credential>;
 
 export class FileCredentialStore implements CredentialStore {
   readonly #authFile: string;
+  readonly #codexAuthFile: string | undefined;
   readonly #chains = new Map<string, Promise<unknown>>();
 
   constructor(options: FileCredentialStoreOptions = {}) {
     this.#authFile = options.authFile ?? getDefaultAuthFile();
+    this.#codexAuthFile = options.codexAuthFile ?? getCodexAuthFile();
   }
 
   get authFile(): string {
@@ -60,7 +67,20 @@ export class FileCredentialStore implements CredentialStore {
 
   async read(providerId: string): Promise<Credential | undefined> {
     const credentials = await this.#readAll();
-    return credentials[providerId];
+    return this.#currentCredential(credentials, providerId);
+  }
+
+  async list(): Promise<readonly CredentialInfo[]> {
+    const credentials = await this.#readAll();
+    const providerIds = new Set(Object.keys(credentials));
+    if (await this.#readCodexCredential()) providerIds.add("openai-codex");
+
+    const result: CredentialInfo[] = [];
+    for (const providerId of providerIds) {
+      const credential = await this.#currentCredential(credentials, providerId);
+      if (credential) result.push({ providerId, type: credential.type });
+    }
+    return result.sort((left, right) => left.providerId.localeCompare(right.providerId));
   }
 
   async modify(
@@ -70,7 +90,7 @@ export class FileCredentialStore implements CredentialStore {
     const previous = this.#chains.get(providerId) ?? Promise.resolve();
     const next = previous.then(async () => {
       const credentials = await this.#readAll();
-      const current = credentials[providerId];
+      const current = await this.#currentCredential(credentials, providerId);
       const updated = await fn(current);
 
       if (updated) {
@@ -132,6 +152,30 @@ export class FileCredentialStore implements CredentialStore {
       mode: 0o600,
     });
   }
+
+  async #currentCredential(
+    credentials: CredentialFile,
+    providerId: string,
+  ): Promise<Credential | undefined> {
+    const stored = credentials[providerId];
+    if (providerId !== "openai-codex") return stored;
+
+    const bridged = await this.#readCodexCredential();
+    if (!bridged) return stored;
+    if (!stored || stored.type !== "oauth") return bridged;
+    return bridged.expires > stored.expires ? bridged : stored;
+  }
+
+  async #readCodexCredential(): Promise<OAuthCredential | undefined> {
+    if (!this.#codexAuthFile) return undefined;
+    try {
+      const raw = await readFile(this.#codexAuthFile, "utf8");
+      return codexCredentialFromAuthFile(JSON.parse(raw) as unknown);
+    } catch (error) {
+      if (isNotFoundError(error)) return undefined;
+      throw new Error(`Unable to read Codex OAuth credential bridge: ${errorMessage(error)}`);
+    }
+  }
 }
 
 export function getDefaultAuthFile(): string {
@@ -141,6 +185,13 @@ export function getDefaultAuthFile(): string {
   }
 
   return join(homedir(), ".honeycrisp", "auth.json");
+}
+
+export function getCodexAuthFile(): string | undefined {
+  const configured = process.env.HONEYCRISP_CODEX_AUTH_FILE?.trim();
+  return configured
+    ? resolve(configured.replace(/^~(?=$|\/)/, homedir()))
+    : undefined;
 }
 
 export function createCredentialStore(
@@ -275,6 +326,56 @@ export async function removeAuthFile(
 ): Promise<void> {
   const store = createCredentialStore(options);
   await rm(store.authFile, { force: true });
+}
+
+function codexCredentialFromAuthFile(value: unknown): OAuthCredential | undefined {
+  const root = recordValue(value);
+  const tokens = recordValue(root?.tokens);
+  if (!root || root.auth_mode !== "chatgpt" || !tokens) return undefined;
+
+  const access = stringValue(tokens.access_token);
+  const refresh = stringValue(tokens.refresh_token);
+  const accountId = stringValue(tokens.account_id);
+  const expires = access ? jwtExpiration(access) : undefined;
+  if (!access || !refresh || !expires) return undefined;
+
+  return {
+    type: "oauth",
+    access,
+    refresh,
+    expires,
+    ...(accountId ? { accountId } : {}),
+  };
+}
+
+function jwtExpiration(token: string): number | undefined {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return undefined;
+    const decoded = recordValue(
+      JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as unknown,
+    );
+    const expires = decoded?.exp;
+    return typeof expires === "number" && Number.isFinite(expires)
+      ? expires * 1000
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function getProviderAuthMethods(
