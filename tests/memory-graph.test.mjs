@@ -47,7 +47,7 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
     assert.equal(corrected.status, "rejected");
     assert.equal(corrected.revision, 3);
     assert.throws(
-      () => store.save({ type: "finding", title: "Absolute evidence", evidence: [{ kind: "code", pathBase: "repository", path: "/tmp/parser.ts", locator: {}, summary: "bad path" }] }),
+      () => store.save({ type: "primitive", title: "Absolute evidence", evidence: [{ kind: "code", pathBase: "repository", path: "/tmp/parser.ts", locator: {}, summary: "bad path" }] }),
       /must be relative/,
     );
     assert.equal(store.databasePath, getDefaultMemoryDatabasePath(workspaceRoot));
@@ -65,7 +65,7 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     const descriptors = registry.listDescriptors();
     assert.deepEqual(descriptors.map((tool) => tool.name), ["memory.search", "memory.get", "memory.save", "memory.correct", "memory.link"]);
     const saveSchema = descriptors.find((tool) => tool.name === "memory.save").inputSchema;
-    assert.deepEqual(saveSchema.properties.type.enum, ["asset", "bug", "invariant", "mitigation", "source", "sink", "hypothesis", "finding", "primitive", "chain", "procedure", "trajectory"]);
+    assert.deepEqual(saveSchema.properties.type.enum, ["asset", "bug", "invariant", "mitigation", "source", "sink", "hypothesis", "primitive", "chain", "procedure", "trajectory"]);
     assert.deepEqual(saveSchema.properties.status.enum, ["draft", "suspected", "confirmed", "rejected", "stale"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.kind.enum, ["code", "artifact", "command", "url", "human_note"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.pathBase.enum, ["workspace", "repository", "asset_root", "external"]);
@@ -129,6 +129,7 @@ test("memory graph shares a database without disturbing host operational tables"
       { ...reopened.prepare("SELECT component, version, name FROM schema_migrations WHERE component = 'honeycrisp_core'").get() },
       { component: "honeycrisp_core", version: 1, name: "tiered_memory_graph_baseline" },
     );
+    assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
     assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'beale_workbench'").get().name, "workspace_schema_baseline");
     assert.equal(reopened.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
   } finally {
@@ -137,27 +138,41 @@ test("memory graph shares a database without disturbing host operational tables"
   }
 });
 
-test("memory graph adopts the migration baseline without rewriting existing knowledge", async () => {
+test("memory graph migrates legacy finding knowledge to a trajectory", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-migration-"));
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
   const initial = new MemoryGraphStore({ workspaceRoot });
-  const node = initial.save({ type: "finding", title: "Preserved finding", summary: "Durable research result." });
   initial.close();
 
   const legacy = new DatabaseSync(databasePath);
-  legacy.prepare("DELETE FROM schema_migrations WHERE component = 'honeycrisp_core'").run();
-  legacy.exec("CREATE TABLE honeycrisp_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO honeycrisp_meta VALUES ('schema_version', '2');");
+  legacy.prepare("DELETE FROM schema_migrations WHERE component = 'honeycrisp_core' AND version >= 2").run();
+  legacy.prepare(`INSERT INTO memory_nodes (
+    id, tier, scope_key, session_id, workspace_id, workspace_name, subject_id, subject_name,
+    type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision
+  ) VALUES (?, 'workspace', 'workspace_default', NULL, 'workspace_default', 'Default Workspace', NULL, NULL,
+    'finding', 'Preserved finding', 'preserved finding', 'Durable research result.', '', 'confirmed', 0.9, '{}', ?, ?, 1)`)
+    .run('finding_legacy', '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z');
+  legacy.prepare("INSERT INTO memory_node_tags (node_id, tag) VALUES ('finding_legacy', 'parser')").run();
+  legacy.prepare("INSERT INTO memory_evidence_refs (id, node_id, kind, path_base, path, locator_json, summary, created_at) VALUES ('evidence_legacy', 'finding_legacy', 'code', 'repository', 'src/parser.c', '{}', 'Legacy reference', '2026-07-20T00:00:00.000Z')").run();
   legacy.close();
 
   const migrated = new MemoryGraphStore({ workspaceRoot });
   try {
-    assert.equal(migrated.get(node.id)?.title, "Preserved finding");
     const database = new DatabaseSync(databasePath);
     try {
+      const migratedNode = database.prepare("SELECT id, title, type FROM memory_nodes WHERE title = 'Preserved finding'").get();
+      assert.equal(migratedNode.id.startsWith('trajectory_'), true);
+      assert.equal(migratedNode.title, "Preserved finding");
+      assert.equal(migratedNode.type, "trajectory");
+      assert.equal(database.prepare("SELECT id FROM memory_nodes WHERE id = 'finding_legacy'").get(), undefined);
+      assert.equal(database.prepare("SELECT node_id FROM memory_node_tags WHERE tag = 'parser'").get().node_id, migratedNode.id);
+      assert.equal(database.prepare("SELECT node_id FROM memory_evidence_refs WHERE id = 'evidence_legacy'").get().node_id, migratedNode.id);
       assert.deepEqual(
         { ...database.prepare("SELECT version, name FROM schema_migrations WHERE component = 'honeycrisp_core'").get() },
         { version: 1, name: "tiered_memory_graph_baseline" },
       );
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 3").get().name, "rename_legacy_finding_memory_ids");
       assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
     } finally {
       database.close();

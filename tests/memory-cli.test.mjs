@@ -641,22 +641,22 @@ test("memory CLI shows subcommand help", () => {
 test("memory CLI saves, searches, corrects, and links durable knowledge", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-cli-"));
   const hypothesis = runMemoryCliJson("save", "hypothesis", "Parser state crosses requests", "--workspace-root", workspaceRoot, "--summary", "Shared state may survive cleanup.", "--status", "suspected", "--tag", "parser");
-  const finding = runMemoryCliJson("save", "finding", "Parser state reuse", "--workspace-root", workspaceRoot, "--summary", "State reuse was reproduced.", "--status", "confirmed", "--asset", "asset_api");
+  const trajectory = runMemoryCliJson("save", "trajectory", "Parser state reuse", "--workspace-root", workspaceRoot, "--summary", "State reuse investigation route was productive.", "--status", "confirmed", "--asset", "asset_api");
 
   const search = runMemoryCliJson("search", "parser", "--workspace-root", workspaceRoot);
-  assert.deepEqual(search.map((node) => node.id).sort(), [finding.id, hypothesis.id].sort());
+  assert.deepEqual(search.map((node) => node.id).sort(), [trajectory.id, hypothesis.id].sort());
 
   const corrected = runMemoryCliJson("correct", hypothesis.id, "--workspace-root", workspaceRoot, "--expected-revision", "1", "--status", "rejected", "--summary", "Cleanup covers the suspected path.");
   assert.equal(corrected.status, "rejected");
   assert.equal(corrected.revision, 2);
 
-  const edge = runMemoryCliJson("link", hypothesis.id, finding.id, "promoted_to", "--workspace-root", workspaceRoot, "--summary", "Reproduction created a finding.");
-  assert.equal(edge.relation, "promoted_to");
+  const edge = runMemoryCliJson("link", hypothesis.id, trajectory.id, "informed", "--workspace-root", workspaceRoot, "--summary", "The hypothesis informed a reusable trajectory.");
+  assert.equal(edge.relation, "informed");
 
   const state = runMemoryCliJson("state", "--workspace-root", workspaceRoot);
   assert.equal(state.nodeCount, 2);
   assert.equal(state.edgeCount, 1);
-  assert.deepEqual(state.typeCounts, { finding: 1, hypothesis: 1 });
+  assert.deepEqual(state.typeCounts, { hypothesis: 1, trajectory: 1 });
 });
 
 test("memory CLI requires revision guards for corrections", async () => {

@@ -170,7 +170,7 @@ test("memory context retrieves an older relevant node beyond the recent context 
   const store = new MemoryGraphStore({ workspaceRoot });
   try {
     const relevant = store.save({
-      type: "finding",
+      type: "primitive",
       title: "ZFTP signed length",
       summary: "A negative ZFTP length reaches allocation.",
       status: "confirmed",

@@ -330,7 +330,7 @@ function relevanceScore(node: MemoryNode, terms: readonly string[]): number {
 function rankScore(node: MemoryNode, relevance: number, linked: boolean): number {
   const tierWeight = node.tier === "session" ? 1_000 : node.tier === "workspace" ? 80 : 0;
   const statusWeight = node.status === "confirmed" ? 20 : node.status === "rejected" ? -20 : 0;
-  const typeWeight = node.type === "finding" ? 12 : node.type === "hypothesis" ? 8 : 0;
+  const typeWeight = node.type === "hypothesis" ? 8 : 0;
   return tierWeight + relevance * 100 + (linked ? 40 : 0) + statusWeight + typeWeight;
 }
 

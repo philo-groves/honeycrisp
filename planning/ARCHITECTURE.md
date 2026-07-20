@@ -71,7 +71,7 @@ Research tools expose concrete capabilities such as repository search, bounded f
 
 Each research tool has a typed schema, action class, side-effect profile, required permissions, and structured result. Honeycrisp enforces tool governance in lifecycle hooks. Collaboration tools are orchestration primitives and remain available when a research-call budget is exhausted.
 
-Tool-backed observations may support durable findings. Model or child prose alone does not become evidence.
+Tool-backed observations may support confirmed primitives or chains. Model or child prose alone does not become evidence.
 
 ## Storage And Capture
 

@@ -16,7 +16,6 @@ export const MEMORY_NODE_TYPES = [
   "source",
   "sink",
   "hypothesis",
-  "finding",
   "primitive",
   "chain",
   "procedure",
@@ -491,6 +490,20 @@ export class MemoryGraphStore {
           `);
         },
       },
+      {
+        version: 2,
+        name: "replace_finding_memory_with_trajectory",
+        up(database) {
+          database.prepare("UPDATE memory_nodes SET type = 'trajectory' WHERE type = 'finding'").run();
+        },
+      },
+      {
+        version: 3,
+        name: "rename_legacy_finding_memory_ids",
+        up(database) {
+          renameLegacyFindingMemoryIds(database);
+        },
+      },
     ]);
   }
 
@@ -670,6 +683,34 @@ function validateEvidence(item: Omit<MemoryEvidenceRef, "id" | "createdAt">): vo
 function normalizeTitle(value: string): string { return value.trim().replace(/\s+/g, " ").toLowerCase(); }
 function normalizeTag(value: string): string { return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); }
 function stableNodeId(tier: MemoryTier, scopeKey: string, type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${tier}:${scopeKey}:${type}:${title}`).digest("hex").slice(0, 20)}`; }
+function renameLegacyFindingMemoryIds(database: DatabaseSync): void {
+  database.exec("PRAGMA defer_foreign_keys = ON");
+  const rows = database
+    .prepare("SELECT id, tier, scope_key, title_norm FROM memory_nodes WHERE type = 'trajectory' AND id GLOB 'finding_*'")
+    .all() as Array<{ id: string; tier: MemoryTier; scope_key: string; title_norm: string }>;
+  for (const row of rows) {
+    const nextId = stableNodeId(row.tier, row.scope_key, "trajectory", row.title_norm);
+    if (database.prepare("SELECT id FROM memory_nodes WHERE id = ?").get(nextId)) {
+      throw new Error(`Cannot rename legacy finding memory ${row.id}; trajectory id already exists: ${nextId}.`);
+    }
+    database.prepare("UPDATE memory_nodes SET id = ? WHERE id = ?").run(nextId, row.id);
+    database.prepare("UPDATE memory_node_assets SET node_id = ? WHERE node_id = ?").run(nextId, row.id);
+    database.prepare("UPDATE memory_node_tags SET node_id = ? WHERE node_id = ?").run(nextId, row.id);
+    database.prepare("UPDATE memory_evidence_refs SET node_id = ? WHERE node_id = ?").run(nextId, row.id);
+    replaceMemoryEdgeNodeId(database, "memory_edges", row.id, nextId);
+    replaceMemoryEdgeNodeId(database, "memory_federated_edges", row.id, nextId);
+  }
+}
+function replaceMemoryEdgeNodeId(database: DatabaseSync, table: "memory_edges" | "memory_federated_edges", previousId: string, nextId: string): void {
+  const edges = database
+    .prepare(`SELECT from_id, to_id, relation, note, created_at, updated_at FROM ${table} WHERE from_id = ? OR to_id = ?`)
+    .all(previousId, previousId) as Array<{ from_id: string; to_id: string; relation: string; note: string; created_at: string; updated_at: string }>;
+  database.prepare(`DELETE FROM ${table} WHERE from_id = ? OR to_id = ?`).run(previousId, previousId);
+  const insert = database.prepare(`INSERT INTO ${table} (from_id, to_id, relation, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
+  for (const edge of edges) {
+    insert.run(edge.from_id === previousId ? nextId : edge.from_id, edge.to_id === previousId ? nextId : edge.to_id, edge.relation, edge.note, edge.created_at, edge.updated_at);
+  }
+}
 function unique(values: readonly string[]): string[] { return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort(); }
 function mergeObjects(base: Record<string, unknown>, update: Record<string, unknown>): Record<string, unknown> { return { ...base, ...update }; }
 function mergeEvidence(existing: readonly MemoryEvidenceRef[], incoming: readonly Omit<MemoryEvidenceRef, "id" | "createdAt">[], nodeId: string, now: string): MemoryEvidenceRef[] {
