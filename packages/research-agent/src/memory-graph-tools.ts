@@ -42,7 +42,7 @@ const SAVE_PARAMETERS = {
   type: "object",
   required: ["type", "title"],
   properties: {
-    id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string", enum: [...MEMORY_NODE_TYPES] }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
+    id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string", enum: [...MEMORY_NODE_TYPES], description: "Use bug only for confirmed historical flaw precedent; use primitive for a flaw established during current research." }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
     status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
     tags: { type: "array", items: { type: "string" } },
     attributes: {
@@ -55,28 +55,46 @@ const SAVE_PARAMETERS = {
     },
     evidence: { type: "array", items: EVIDENCE_ITEM_PARAMETERS },
   },
-  allOf: [{
-    if: { properties: { type: { const: "chain" } }, required: ["type"] },
-    then: {
-      required: ["attributes"],
-      properties: {
-        attributes: {
-          type: "object",
-          required: ["impact", "reachability"],
-          properties: {
-            impact: { type: "string", minLength: 1 },
-            reachability: { type: "string", minLength: 1 },
+  allOf: [
+    {
+      if: { properties: { type: { const: "chain" } }, required: ["type"] },
+      then: {
+        required: ["attributes"],
+        properties: {
+          attributes: {
+            type: "object",
+            required: ["impact", "reachability"],
+            properties: {
+              impact: { type: "string", minLength: 1 },
+              reachability: { type: "string", minLength: 1 },
+            },
           },
         },
       },
     },
-  }],
+    {
+      if: { properties: { type: { const: "bug" } }, required: ["type"] },
+      then: {
+        required: ["status", "assetIds", "attributes", "evidence"],
+        properties: {
+          status: { const: "confirmed" },
+          assetIds: { type: "array", minItems: 1, items: { type: "string" } },
+          attributes: {
+            type: "object",
+            required: ["historicalPrecedent"],
+            properties: { historicalPrecedent: { const: true } },
+          },
+          evidence: { type: "array", minItems: 1, items: EVIDENCE_ITEM_PARAMETERS },
+        },
+      },
+    },
+  ],
 };
 const CORRECT_PARAMETERS = {
   type: "object",
   required: ["id", "expectedRevision"],
   properties: {
-    id: { type: "string" }, expectedRevision: { type: "number" }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
+    id: { type: "string" }, expectedRevision: { type: "number" }, type: { type: "string", enum: [...MEMORY_NODE_TYPES], description: "Reclassify a miscategorized node while preserving its evidence and relationships." }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
     status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
     tags: { type: "array", items: { type: "string" } }, attributes: { type: "object" }, evidence: { type: "array", items: EVIDENCE_ITEM_PARAMETERS },
   },
@@ -106,7 +124,7 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
       });
     }),
     tool("memory.get", "memory_get", "Read one durable memory node with evidence references.", "read", GET_PARAMETERS, (input) => store.get(requiredString(input.id, "id"))),
-    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge with asset links and evidence. Choose session for run-specific state, workspace for target-specific knowledge, or subject for knowledge useful across this owner's workspaces. Use trajectories for reusable research sequences, primitives for statically supported flaws, and chains for reviewed end-to-end reachability and impact. Do not store transcripts, routine narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
+    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge with asset links and evidence. Choose session for run-specific state, workspace for target-specific knowledge, or subject for knowledge useful across this owner's workspaces. Use bug only for a confirmed historical flaw precedent with an affected asset and precedent evidence. Use primitive for a flaw established during current research, trajectories for reusable research sequences, and chains for reviewed end-to-end reachability and impact. Do not store transcripts, routine narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
       const id = string(input.id);
       const tier = string(input.tier);
       return store.save({
@@ -124,8 +142,9 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
         ...(Array.isArray(input.evidence) ? { evidence: input.evidence.map(parseEvidence) } : {}),
       });
     }),
-    tool("memory.correct", "memory_correct", "Exactly correct supplied fields on a memory node using its current revision.", "write", CORRECT_PARAMETERS, (input) => {
-      const patch: Partial<Omit<SaveMemoryNodeInput, "id" | "type">> = {};
+    tool("memory.correct", "memory_correct", "Exactly correct supplied fields or reclassify a memory node using its current revision. Reclassification preserves evidence and relationships and returns a new type-derived id.", "write", CORRECT_PARAMETERS, (input) => {
+      const patch: Partial<Omit<SaveMemoryNodeInput, "id">> = {};
+      if ("type" in input) patch.type = requiredString(input.type, "type") as MemoryNodeType;
       if ("title" in input) patch.title = requiredString(input.title, "title");
       if ("summary" in input) patch.summary = requiredString(input.summary, "summary", true);
       if ("body" in input) patch.body = requiredString(input.body, "body", true);

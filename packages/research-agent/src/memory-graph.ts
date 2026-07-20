@@ -203,11 +203,12 @@ export class MemoryGraphStore {
           updatedAt: now,
           revision: 1,
         };
+    validateCompleteNode(next);
     this.writeNode(target.database, next, titleNorm, scopeKey);
     return this.getFromDatabase(target.database, id)!;
   }
 
-  public correct(id: string, expectedRevision: number, patch: Partial<Omit<SaveMemoryNodeInput, "id" | "type">>): MemoryNode {
+  public correct(id: string, expectedRevision: number, patch: Partial<Omit<SaveMemoryNodeInput, "id">>): MemoryNode {
     if (patch.tier !== undefined) throw new Error("Memory tier is immutable; save a new node in the intended tier.");
     const located = this.locate(id);
     const existing = located?.node;
@@ -216,9 +217,14 @@ export class MemoryGraphStore {
       throw new Error(`Memory node revision conflict for ${id}: expected ${expectedRevision}, found ${existing.revision}.`);
     }
     const now = new Date().toISOString();
+    const type = patch.type ?? existing.type;
+    const title = patch.title?.trim() ?? existing.title;
+    const nextId = type === existing.type ? id : stableNodeId(existing.tier, scopeKeyForNode(existing), type, normalizeTitle(title));
     const next: MemoryNode = {
       ...existing,
-      ...(patch.title !== undefined ? { title: patch.title.trim() } : {}),
+      id: nextId,
+      type,
+      title,
       ...(patch.summary !== undefined ? { summary: patch.summary.trim() } : {}),
       ...(patch.body !== undefined ? { body: patch.body.trim() } : {}),
       ...(patch.status !== undefined ? { status: patch.status } : {}),
@@ -226,13 +232,18 @@ export class MemoryGraphStore {
       ...(patch.assetIds !== undefined ? { assetIds: unique(patch.assetIds) } : {}),
       ...(patch.tags !== undefined ? { tags: unique(patch.tags.map(normalizeTag)) } : {}),
       ...(patch.attributes !== undefined ? { attributes: patch.attributes } : {}),
-      ...(patch.evidence !== undefined ? { evidence: mergeEvidence([], patch.evidence, id, now) } : {}),
+      ...(patch.evidence !== undefined ? { evidence: mergeEvidence([], patch.evidence, nextId, now) } : {}),
       updatedAt: now,
       revision: existing.revision + 1,
     };
     validateNodeInput(next);
-    this.writeNode(located.binding.database, next, normalizeTitle(next.title), scopeKeyForNode(next), expectedRevision);
-    return this.getFromDatabase(located.binding.database, id)!;
+    validateCompleteNode(next);
+    if (nextId === id) {
+      this.writeNode(located.binding.database, next, normalizeTitle(next.title), scopeKeyForNode(next), expectedRevision);
+    } else {
+      this.writeRetypedNode(located.binding.database, id, next, normalizeTitle(next.title), expectedRevision);
+    }
+    return this.getFromDatabase(located.binding.database, nextId)!;
   }
 
   public get(id: string): MemoryNode | null {
@@ -553,6 +564,43 @@ export class MemoryGraphStore {
     }
   }
 
+  private writeRetypedNode(
+    database: DatabaseSync,
+    previousId: string,
+    node: MemoryNode,
+    titleNorm: string,
+    expectedRevision: number,
+  ): void {
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      database.exec("PRAGMA defer_foreign_keys = ON");
+      const row = database.prepare("SELECT revision FROM memory_nodes WHERE id = ?").get(previousId) as { revision?: unknown } | undefined;
+      if (typeof row?.revision !== "number" || row.revision !== expectedRevision) {
+        throw new Error(`Memory node revision conflict for ${previousId}: expected ${expectedRevision}, found ${String(row?.revision ?? "missing")}.`);
+      }
+      if (database.prepare("SELECT id FROM memory_nodes WHERE id = ?").get(node.id)) {
+        throw new Error(`Memory node reclassification conflicts with existing node: ${node.id}`);
+      }
+      database
+        .prepare(
+          `UPDATE memory_nodes
+           SET id = ?, type = ?, title = ?, title_norm = ?, summary = ?, body = ?, status = ?, confidence = ?,
+               attributes_json = ?, updated_at = ?, revision = ?
+           WHERE id = ?`,
+        )
+        .run(node.id, node.type, node.title, titleNorm, node.summary, node.body, node.status, node.confidence, JSON.stringify(node.attributes), node.updatedAt, node.revision, previousId);
+      database.prepare("UPDATE memory_node_assets SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
+      database.prepare("UPDATE memory_node_tags SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
+      database.prepare("UPDATE memory_evidence_refs SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
+      replaceMemoryEdgeNodeId(database, "memory_edges", previousId, node.id);
+      replaceMemoryEdgeNodeId(database, "memory_federated_edges", previousId, node.id);
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   private strings(database: DatabaseSync, sql: string, value: string): string[] {
     return (database.prepare(sql).all(value) as { value?: unknown }[]).flatMap((row) => (typeof row.value === "string" ? [row.value] : []));
   }
@@ -604,6 +652,14 @@ function validateNodeInput(input: { type: unknown; title: unknown; tier?: unknow
       throw new Error("Chain nodes require non-empty impact and reachability attributes.");
     }
   }
+}
+
+function validateCompleteNode(node: Pick<MemoryNode, "type" | "status" | "attributes" | "assetIds" | "evidence">): void {
+  if (node.type !== "bug") return;
+  if (node.status !== "confirmed") throw new Error("Bug memories are reserved for confirmed historical flaw precedents.");
+  if (node.attributes.historicalPrecedent !== true) throw new Error("Bug memories require attributes.historicalPrecedent=true.");
+  if (node.assetIds.length === 0) throw new Error("Historical bug memories require at least one affected asset.");
+  if (node.evidence.length === 0) throw new Error("Historical bug memories require precedent evidence.");
 }
 
 function readStoredTierContext(Database: new (path: string) => DatabaseSync, databasePath: string): MemoryTierContext | undefined {

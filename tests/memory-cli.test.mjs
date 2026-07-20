@@ -653,10 +653,15 @@ test("memory CLI saves, searches, corrects, and links durable knowledge", async 
   const edge = runMemoryCliJson("link", hypothesis.id, trajectory.id, "informed", "--workspace-root", workspaceRoot, "--summary", "The hypothesis informed a reusable trajectory.");
   assert.equal(edge.relation, "informed");
 
+  const reclassified = runMemoryCliJson("correct", hypothesis.id, "--workspace-root", workspaceRoot, "--expected-revision", "2", "--type", "primitive");
+  assert.equal(reclassified.type, "primitive");
+  assert.match(reclassified.id, /^primitive_/);
+
   const state = runMemoryCliJson("state", "--workspace-root", workspaceRoot);
   assert.equal(state.nodeCount, 2);
   assert.equal(state.edgeCount, 1);
-  assert.deepEqual(state.typeCounts, { hypothesis: 1, trajectory: 1 });
+  assert.deepEqual(state.typeCounts, { primitive: 1, trajectory: 1 });
+  assert.ok(state.edges.some((stateEdge) => stateEdge.fromId === reclassified.id && stateEdge.toId === trajectory.id));
 });
 
 test("memory CLI requires revision guards for corrections", async () => {

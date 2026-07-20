@@ -52,6 +52,32 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
       () => store.save({ type: "primitive", title: "Absolute evidence", evidence: [{ kind: "code", pathBase: "repository", path: "/tmp/parser.ts", locator: {}, summary: "bad path" }] }),
       /must be relative/,
     );
+    assert.throws(
+      () => store.save({ type: "bug", title: "Current parser flaw", status: "confirmed" }),
+      /historicalPrecedent/,
+    );
+
+    const candidate = store.save({
+      type: "primitive",
+      title: "Historical parser overflow",
+      status: "confirmed",
+      assetIds: ["asset_parser"],
+      attributes: { historicalPrecedent: true },
+      evidence: [{ kind: "url", pathBase: "external", path: "https://example.test/advisory", locator: {}, summary: "Fixed advisory" }],
+    });
+    store.link(candidate.id, first.id, "precedes");
+    const historicalBug = store.correct(candidate.id, 1, { type: "bug" });
+    assert.match(historicalBug.id, /^bug_/);
+    assert.equal(historicalBug.type, "bug");
+    assert.equal(store.get(candidate.id), null);
+    assert.ok(store.listEdges().some((edge) => edge.fromId === historicalBug.id && edge.toId === first.id));
+    assert.equal(historicalBug.evidence.length, 1);
+
+    const rediscoveredPrimitive = store.correct(historicalBug.id, 2, { type: "primitive", attributes: {} });
+    assert.match(rediscoveredPrimitive.id, /^primitive_/);
+    assert.equal(rediscoveredPrimitive.type, "primitive");
+    assert.equal(store.get(historicalBug.id), null);
+    assert.ok(store.listEdges().some((edge) => edge.fromId === rediscoveredPrimitive.id && edge.toId === first.id));
     assert.equal(store.databasePath, getDefaultMemoryDatabasePath(workspaceRoot));
   } finally {
     store.close();
@@ -72,6 +98,10 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     assert.deepEqual(saveSchema.properties.evidence.items.properties.kind.enum, ["code", "artifact", "command", "url", "human_note"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.pathBase.enum, ["workspace", "repository", "asset_root", "external"]);
     assert.deepEqual(saveSchema.allOf[0].then.properties.attributes.required, ["impact", "reachability"]);
+    assert.deepEqual(saveSchema.allOf[1].then.required, ["status", "assetIds", "attributes", "evidence"]);
+    assert.deepEqual(saveSchema.allOf[1].then.properties.attributes.required, ["historicalPrecedent"]);
+    const correctSchema = descriptors.find((tool) => tool.name === "memory.correct").inputSchema;
+    assert.deepEqual(correctSchema.properties.type.enum, saveSchema.properties.type.enum);
     const source = await registry.execute({ id: "save_source", actionClass: "synthesize", toolName: "memory.save", input: { type: "source", title: "Request body" } });
     const sink = await registry.execute({ id: "save_sink", actionClass: "synthesize", toolName: "memory.save", input: { type: "sink", title: "Template renderer" } });
     assert.equal(source.result.status, "complete");

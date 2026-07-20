@@ -66,7 +66,7 @@ Knowledge is tiered by:
 
 Transcripts, narration, and bulk tool output are operational data, not durable knowledge. Large outputs remain artifact files referenced by concise graph nodes.
 
-The agent searches memory early and when research crosses system boundaries. It records relevant historical bugs with affected assets, user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, exploitation blockers as mitigations, and reusable sequences of important research actions as trajectories. Routine action narration is not durable knowledge.
+The agent searches memory early and when research crosses system boundaries. `bug` is reserved for a confirmed historical flaw precedent that predates the current research, is linked to affected assets, and carries precedent evidence. A flaw established during current research is a `primitive`, or part of a `chain` when reachability and impact are established. The graph also records user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, exploitation blockers as mitigations, and reusable sequences of important research actions as trajectories. Routine action narration is not durable knowledge. Exact correction can reclassify a node without discarding its evidence or relationships.
 
 Memory queries are tokenized and relevance-ranked across ids, types, content, assets, tags, and evidence. An exact node id embedded in a broader natural-language query remains directly retrievable.
 

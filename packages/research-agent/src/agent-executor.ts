@@ -465,7 +465,8 @@ function createSystemPrompt(options: {
     ...(options.hasMemoryTools ? [
       "Use durable memory as a concise research graph:",
       "- Search memory early and as research crosses system boundaries. Favor security-sensitive code near dangerous sinks, established primitives, historical bugs, and relevant successful trajectories.",
-      "- Save relevant historical bugs with affected assets. Save reusable sequences of key research actions as trajectories; omit routine narration.",
+      "- Use bug only for a confirmed historical flaw precedent that predates the current research, such as a fixed advisory, patch, or prior incident; link its affected assets and precedent evidence. Never classify a flaw established during the current research as a bug: save it as a primitive, or as a chain when its linked reachability and impact are established.",
+      "- Save reusable sequences of key research actions as trajectories; omit routine narration.",
       "- Save user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, and system- or hardware-level exploitation blockers as mitigations.",
       "- Save an individual flaw as a primitive only after proving it through static analysis and attaching code or tool evidence.",
       "- Save a chain only when linked sources, primitives, sinks, and assets establish end-to-end attacker reachability and security impact. A realistic proof-of-vulnerability is required. Have a review subagent independently approve it before marking the chain confirmed; if review is unavailable or inconclusive, leave it suspected.",

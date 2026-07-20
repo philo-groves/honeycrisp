@@ -974,7 +974,7 @@ function usage(): string {
     "",
     "Memory options:",
     "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
-    "  --type <type>           Filter node type (repeatable)",
+    "  --type <type>           Filter nodes; with correct, reclassify one node",
     "  --status <status>       Filter or set node status",
     "  --tag <tag>             Filter or add a tag (repeatable)",
     "  --asset <asset-id>      Filter or add an asset link (repeatable)",
@@ -1212,7 +1212,9 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
     if (args.command === "correct") {
       const id = requireMemoryPositional(args, "correct <node-id> --expected-revision <n>");
       if (args.expectedRevision === undefined) throw new Error("correct requires --expected-revision.");
+      if (args.types.length > 1) throw new Error("correct accepts at most one --type value.");
       const node = store.correct(id, args.expectedRevision, {
+        ...(args.types[0] ? { type: args.types[0] } : {}),
         ...(args.summary !== undefined ? { summary: args.summary } : {}),
         ...(args.body !== undefined ? { body: args.body } : {}),
         ...(args.status ? { status: args.status as MemoryNodeStatus } : {}),
@@ -1949,7 +1951,7 @@ function memoryUsage(): string {
     "",
     "Options:",
     "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
-    "  --type <type>           Filter node type (repeatable)",
+    "  --type <type>           Filter nodes; with correct, reclassify one node",
     "  --status <status>       Filter or set node status",
     "  --tag <tag>             Filter or add a tag (repeatable)",
     "  --asset <asset-id>      Filter or add an asset link (repeatable)",
