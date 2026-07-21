@@ -18,6 +18,8 @@ const MAX_CONCURRENCY = 64;
 const LEASE_RETRY_MS = 50;
 const NEW_LEASE_GRACE_MS = 5_000;
 const UTILITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/u;
+const FORBIDDEN_HOME_REFERENCE_PATTERN = /(?:\$(?:HOME|home|CODEX_HOME)(?![A-Za-z0-9_])|\$\{(?:HOME|home|CODEX_HOME)\b)/u;
+const FORBIDDEN_HOME_ASSIGNMENT_PATTERN = /(?:^|[\s;])(?:export\s+)?(?:HOME|home|CODEX_HOME)\s*=/u;
 
 const SHELL_PARAMETERS = {
   type: "object",
@@ -100,6 +102,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
         const args = readArguments(action.input.args);
         const cwd = readWorkingDirectory(action.input.cwd, workspaceRoot);
         const stdin = readOptionalString(action.input.stdin, "stdin");
+        assertNoHomeVariableUsage([cwd, ...args, ...(stdin === undefined ? [] : [stdin])]);
         const timeoutMs = Math.min(
           positiveInteger(action.input.timeoutMs, DEFAULT_TIMEOUT_MS),
           MAX_TIMEOUT_MS,
@@ -554,11 +557,23 @@ function createOutputCollector(maxBytes: number): {
 function shellEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (value === undefined || isSensitiveEnvironmentName(name)) continue;
+    if (value === undefined || isSensitiveEnvironmentName(name) || isHomeEnvironmentName(name)) continue;
     environment[name] = value;
   }
   environment.HONEYCRISP_SHELL = "1";
   return environment;
+}
+
+function assertNoHomeVariableUsage(values: readonly string[]): void {
+  if (values.some((value) => FORBIDDEN_HOME_REFERENCE_PATTERN.test(value) || FORBIDDEN_HOME_ASSIGNMENT_PATTERN.test(value))) {
+    throw new Error(
+      "Shell input cannot reference or assign $HOME, $home, or $CODEX_HOME; use an explicit narrowly scoped path.",
+    );
+  }
+}
+
+function isHomeEnvironmentName(name: string): boolean {
+  return name === "HOME" || name === "CODEX_HOME" || name === "HOMEDRIVE" || name === "HOMEPATH";
 }
 
 function isSensitiveEnvironmentName(name: string): boolean {

@@ -51,6 +51,24 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
       toolName: "shell.run",
       input: { utility: "printf", args: ["%s", "argv-safe"] },
     });
+    const homeReference = await registry.execute({
+      id: "shell_home_reference",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "printf", args: ["%s", "${HOME:-/}"] },
+    });
+    const homeAssignment = await registry.execute({
+      id: "shell_home_assignment",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "env", args: ["HOME=/tmp", "printf", "safe"] },
+    });
+    const environment = await registry.execute({
+      id: "shell_environment",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "env" },
+    });
     const protectedDelete = await registry.execute({
       id: "shell_protected_delete",
       actionClass: "experiment",
@@ -93,6 +111,12 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
     assert.equal(completed.result.status, "complete");
     assert.equal(completed.result.output.stdout, "argv-safe");
     assert.equal(completed.result.output.cwd, root);
+    assert.equal(homeReference.result.status, "error");
+    assert.match(homeReference.result.error.message, /cannot reference or assign \$HOME/);
+    assert.equal(homeAssignment.result.status, "error");
+    assert.match(homeAssignment.result.error.message, /cannot reference or assign \$HOME/);
+    assert.equal(environment.result.status, "complete");
+    assert.doesNotMatch(environment.result.output.stdout, /^(?:HOME|CODEX_HOME|HOMEDRIVE|HOMEPATH)=/m);
     assert.equal(protectedDelete.result.status, "error");
     assert.match(protectedDelete.result.error.message, /Folder delete guard blocked rm/);
     assert.equal(workspaceDelete.result.status, "error");

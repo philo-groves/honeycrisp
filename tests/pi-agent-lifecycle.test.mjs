@@ -142,6 +142,7 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   assert.deepEqual(contexts[0].toolNames, ["fixture_inspect", ...COLLABORATION_TOOL_NAMES]);
   assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
   assert.doesNotMatch(contexts[0].systemPrompt, /Use durable memory as a concise research graph/);
+  assert.match(contexts[0].systemPrompt, /Never use the \$HOME environment variable/);
   const initialMessage = contexts[0].messageContents.join("\n");
   assert.match(initialMessage, /### memory/);
   assert.match(initialMessage, /mem_fixture_parser/);
@@ -184,6 +185,7 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   });
 
   const systemPrompt = contexts[0].systemPrompt;
+  assert.match(systemPrompt, /Never use the \$HOME environment variable/);
   assert.match(systemPrompt, /Use durable memory as a concise research graph/);
   assert.match(systemPrompt, /Save user-controlled ingress as sources/);
   assert.match(systemPrompt, /static analysis/);
