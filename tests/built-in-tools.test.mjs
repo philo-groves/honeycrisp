@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,12 +12,130 @@ import {
   createRepositorySearchTool,
   createResearchStorageLayout,
   createResearchToolRegistry,
+  createShellTool,
   createStorageListTool,
   createStructuredFileReadTool,
   createSynthesisTool,
   ensureResearchStorageLayout,
   registerResearchStorageArtifact,
 } from "../packages/research-agent/dist/index.js";
+
+test("shell tool enforces disabled utilities before spawning and captures argv output", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-tool-"));
+  const optionsPath = join(root, "shell-options.json");
+  const protectedDirectory = join(root, "protected-core");
+  const protectedChildDirectory = join(protectedDirectory, "nested");
+  const disposableDirectory = join(root, "build-output");
+  await mkdir(protectedChildDirectory, { recursive: true });
+  await mkdir(disposableDirectory);
+  await writeFile(optionsPath, JSON.stringify({
+    schemaVersion: 1,
+    defaultConcurrency: 2,
+    utilities: { sudo: 0 },
+    leaseDirectory: join(root, "leases"),
+  }));
+
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath, protectedDirectories: [protectedDirectory] }),
+    ]);
+    const disabled = await registry.execute({
+      id: "shell_disabled",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "sudo", args: ["true"] },
+    });
+    const completed = await registry.execute({
+      id: "shell_completed",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "printf", args: ["%s", "argv-safe"] },
+    });
+    const protectedDelete = await registry.execute({
+      id: "shell_protected_delete",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "rm", args: ["-rf", protectedDirectory] },
+    });
+    const workspaceDelete = await registry.execute({
+      id: "shell_workspace_delete",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "rm", args: ["-rf", root] },
+    });
+    const protectedChildDelete = await registry.execute({
+      id: "shell_protected_child_delete",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "rmdir", args: [protectedChildDirectory] },
+    });
+    const findDelete = await registry.execute({
+      id: "shell_find_delete",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "find", args: [protectedDirectory, "-depth", "-delete"] },
+    });
+    const gitClean = await registry.execute({
+      id: "shell_git_clean",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "git", args: ["-C", root, "clean", "-fdx"] },
+    });
+    const disposableDelete = await registry.execute({
+      id: "shell_disposable_delete",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "rm", args: ["-rf", disposableDirectory] },
+    });
+
+    assert.equal(disabled.result.status, "error");
+    assert.match(disabled.result.error.message, /disabled by the harness-wide/);
+    assert.equal(completed.result.status, "complete");
+    assert.equal(completed.result.output.stdout, "argv-safe");
+    assert.equal(completed.result.output.cwd, root);
+    assert.equal(protectedDelete.result.status, "error");
+    assert.match(protectedDelete.result.error.message, /Folder delete guard blocked rm/);
+    assert.equal(workspaceDelete.result.status, "error");
+    assert.match(workspaceDelete.result.error.message, /Folder delete guard blocked rm/);
+    assert.equal(protectedChildDelete.result.status, "error");
+    assert.match(protectedChildDelete.result.error.message, /Folder delete guard blocked rmdir/);
+    assert.equal(findDelete.result.status, "error");
+    assert.match(findDelete.result.error.message, /Folder delete guard blocked find/);
+    assert.equal(gitClean.result.status, "error");
+    assert.match(gitClean.result.error.message, /Folder delete guard blocked git/);
+    assert.equal(disposableDelete.result.status, "complete");
+    await access(protectedDirectory);
+    await assert.rejects(access(disposableDirectory));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell tool serializes the same utility across tool instances", { skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-concurrency-"));
+  const optionsPath = join(root, "shell-options.json");
+  await writeFile(optionsPath, JSON.stringify({
+    schemaVersion: 1,
+    defaultConcurrency: 4,
+    utilities: { sleep: 1 },
+    leaseDirectory: join(root, "leases"),
+  }));
+
+  try {
+    const first = createResearchToolRegistry([createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath })]);
+    const second = createResearchToolRegistry([createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath })]);
+    const startedAt = Date.now();
+    const results = await Promise.all([
+      first.execute({ id: "sleep_1", actionClass: "experiment", toolName: "shell.run", input: { utility: "sleep", args: ["0.15"] } }),
+      second.execute({ id: "sleep_2", actionClass: "experiment", toolName: "shell.run", input: { utility: "sleep", args: ["0.15"] } }),
+    ]);
+
+    assert.ok(results.every((result) => result.result.status === "complete"));
+    assert.ok(Date.now() - startedAt >= 250, "same-utility calls should not overlap at concurrency 1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("repository search finds bounded local source matches", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-"));

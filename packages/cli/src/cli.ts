@@ -20,6 +20,7 @@ import {
   createResearchAgentFlowCapture,
   createResearchStorageLayout,
   createResearchToolRegistry,
+  createShellTool,
   createResearchWorkspaceContext,
   createMcpResearchTools,
   MemoryGraphStore,
@@ -74,6 +75,7 @@ const VERSION = "0.1.0";
 const LIVE_EVENT_PREFIX = "HONEYCRISP_EVENT ";
 
 type ToolFamily =
+  | "shell"
   | "local-inspection"
   | "repository-search"
   | "file-read"
@@ -99,6 +101,7 @@ interface RuntimeToolConfig {
   mcpConfigPath?: string;
   mcpTimeoutMs?: number;
   experimentConfigPath?: string;
+  shellOptionsPath?: string;
   selectedSkillIds: readonly string[];
   skillDirs: readonly string[];
   toolMaxCalls?: number;
@@ -231,6 +234,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
   let experimentConfigPath: string | undefined;
+  let shellOptionsPath: string | undefined;
   const selectedSkillIds: string[] = [];
   const skillDirs: string[] = [];
   let toolMaxCalls: number | undefined;
@@ -380,6 +384,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--experiment-config") {
       experimentConfigPath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--shell-options") {
+      shellOptionsPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -446,6 +453,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
       ...(experimentConfigPath ? { experimentConfigPath } : {}),
+      ...(shellOptionsPath ? { shellOptionsPath } : {}),
       selectedSkillIds,
       skillDirs,
       ...(toolMaxCalls ? { toolMaxCalls } : {}),
@@ -601,6 +609,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
   let experimentConfigPath: string | undefined;
+  let shellOptionsPath: string | undefined;
   const selectedSkillIds: string[] = [];
   const skillDirs: string[] = [];
   let toolMaxCalls: number | undefined;
@@ -685,6 +694,9 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
     } else if (arg === "--experiment-config") {
       experimentConfigPath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--shell-options") {
+      shellOptionsPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -717,6 +729,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
       ...(experimentConfigPath ? { experimentConfigPath } : {}),
+      ...(shellOptionsPath ? { shellOptionsPath } : {}),
       selectedSkillIds,
       skillDirs,
       ...(toolMaxCalls ? { toolMaxCalls } : {}),
@@ -824,6 +837,7 @@ function parseToolExecutionMode(value: string): CliToolExecutionMode {
 
 function parseToolFamily(value: string): ToolFamily {
   if (
+    value === "shell" ||
     value === "local-inspection" ||
     value === "repository-search" ||
     value === "file-read" ||
@@ -837,7 +851,7 @@ function parseToolFamily(value: string): ToolFamily {
   }
 
   throw new Error(
-    "--tool-family must be one of local-inspection, repository-search, file-read, code, analysis, synthesis, storage, experiment.",
+    "--tool-family must be one of shell, local-inspection, repository-search, file-read, code, analysis, synthesis, storage, experiment.",
   );
 }
 
@@ -934,7 +948,8 @@ function usage(): string {
     "  --inspect-path <path>  Make a local path available for inspection",
     "  --inspect-action <a>   Inspection action: read_text or list",
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
-    "  --tool-family <name>   Enable local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
+    "  --tool-family <name>   Enable shell, local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
+    "  --shell-options <path> Harness-wide shell utility policy JSON",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --tool-config <path>   Runtime tool preference config (default: .honeycrisp/tools.json)",
     "  --no-default-tool-config Ignore .honeycrisp/tools.json unless --tool-config is provided",
@@ -1879,7 +1894,8 @@ function toolsUsage(): string {
     "Usage: honeycrisp tools list [options]",
     "",
     "Options:",
-    "  --tool-family <name>        Enable local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
+    "  --tool-family <name>        Enable shell, local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
+    "  --shell-options <path>      Harness-wide shell utility policy JSON",
     "  --disable-tool-family <n>   Disable a tool family after implicit/default enables",
     "  --tool-config <path>        Runtime tool preference config (default: .honeycrisp/tools.json)",
     "  --no-default-tool-config    Ignore .honeycrisp/tools.json unless --tool-config is provided",
@@ -2082,6 +2098,20 @@ async function createRuntimeConfig(args: {
     );
   }
 
+  if (families.has("shell")) {
+    const tool = createShellTool({
+      workspaceRoot,
+      ...(runtimeTools.shellOptionsPath
+        ? { shellOptionsPath: runtimeTools.shellOptionsPath }
+        : {}),
+      ...(runtimeTools.toolMaxBytes
+        ? { maxOutputBytes: runtimeTools.toolMaxBytes }
+        : {}),
+    });
+    executableTools.push(tool);
+    toolDescriptors.push(tool.descriptor);
+  }
+
   if (families.has("repository-search")) {
     const tool = createRepositorySearchTool({
       roots: repositorySearchRootsFromWorkspaceContext(workspaceContext),
@@ -2245,6 +2275,9 @@ function runtimeToolConfigFromPreference(
     ...(preference.toolMaxBytes ? { toolMaxBytes: preference.toolMaxBytes } : {}),
     ...(preference.toolMaxTokens ? { toolMaxTokens: preference.toolMaxTokens } : {}),
     ...(runtimeTools.toolConfigPath ? { toolConfigPath: runtimeTools.toolConfigPath } : {}),
+    ...(runtimeTools.shellOptionsPath
+      ? { shellOptionsPath: runtimeTools.shellOptionsPath }
+      : {}),
     disableDefaultToolConfig: runtimeTools.disableDefaultToolConfig,
   };
 }
@@ -2297,6 +2330,9 @@ function mergeRuntimeToolConfig(
           experimentConfigPath:
             cli.experimentConfigPath ?? persisted.experimentConfigPath,
         }
+      : {}),
+    ...(cli.shellOptionsPath || persisted.shellOptionsPath
+      ? { shellOptionsPath: cli.shellOptionsPath ?? persisted.shellOptionsPath }
       : {}),
     selectedSkillIds: uniqueRuntimeStrings([
       ...persisted.selectedSkillIds,
