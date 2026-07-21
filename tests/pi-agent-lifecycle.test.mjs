@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   createPiAgentExecutor,
+  createResearchPiAgent,
+  createResearchSystemPrompt,
   createResearchToolRegistry,
   runResearchAgent,
 } from "../packages/research-agent/dist/index.js";
@@ -46,6 +48,46 @@ const COLLABORATION_TOOL_NAMES = [
   "list_agents",
   "wait_agent",
 ];
+
+test("direct Pi Agent and executor use the shared research system prompt", async () => {
+  const directAgent = createResearchPiAgent({
+    model: FAUX_MODEL,
+    models: {
+      streamSimple() {
+        throw new Error("streamSimple should not run while inspecting initial state");
+      },
+    },
+  });
+
+  assert.equal(
+    directAgent.state.systemPrompt,
+    createResearchSystemPrompt({ hasTools: false }),
+  );
+
+  const contexts = [];
+  await runResearchAgent({
+    prompt: "Orient to the target.",
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistant("## Result\nTarget orientation complete."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry(),
+    }),
+  });
+
+  assert.equal(
+    contexts[0].systemPrompt,
+    createResearchSystemPrompt({
+      hasTools: true,
+      hasMemoryTools: false,
+      hasCollaborationTools: true,
+    }),
+  );
+  assert.match(contexts[0].systemPrompt, /expert cyber research assistant/);
+  assert.doesNotMatch(contexts[0].systemPrompt, /decide how to investigate it and when the work is complete/);
+});
 
 test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", async () => {
   const calls = [];

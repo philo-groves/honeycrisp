@@ -6,6 +6,7 @@ import type {
   ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
+import { createResearchSystemPrompt } from "./system-prompt.js";
 
 export interface CreateResearchPiAgentOptions {
   model: Model<any>;
@@ -14,14 +15,6 @@ export interface CreateResearchPiAgentOptions {
   systemPrompt?: string;
   thinkingLevel?: ThinkingLevel;
   agentOptions?: Omit<AgentOptions, "initialState" | "streamFn">;
-}
-
-export function createResearchSystemPrompt(): string {
-  return [
-    "You are Honeycrisp, an autonomous research agent built on Pi.",
-    "Work directly on the user's request and decide how to investigate it and when the work is complete.",
-    "Treat supplied workspace context as the authorized research scope. Do not claim evidence you did not inspect.",
-  ].join("\n");
 }
 
 export function createResearchPiAgent(
@@ -33,7 +26,9 @@ export function createResearchPiAgent(
     ...options.agentOptions,
     initialState: {
       model: options.model,
-      systemPrompt: options.systemPrompt ?? createResearchSystemPrompt(),
+      systemPrompt: options.systemPrompt ?? createResearchSystemPrompt({
+        hasTools: (options.tools?.length ?? 0) > 0,
+      }),
       thinkingLevel: options.thinkingLevel ?? "medium",
       tools: [...(options.tools ?? [])],
     },
