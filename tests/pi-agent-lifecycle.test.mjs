@@ -115,6 +115,8 @@ test("direct Pi Agent and executor use the shared research system prompt", async
     }),
   );
   assert.match(contexts[0].systemPrompt, /expert cyber research assistant/);
+  assert.match(contexts[0].systemPrompt, /sharp, curious research collaborator/);
+  assert.match(contexts[0].systemPrompt, /Do not narrate routine memory updates unless they materially affect the conclusion/);
   assert.doesNotMatch(contexts[0].systemPrompt, /decide how to investigate it and when the work is complete/);
 });
 
