@@ -543,7 +543,39 @@ test("Pi Agent executor streams live thought events", async () => {
   assert.equal(agentEvents.length, 1);
   assert.equal(agentEvents[0].payload.type, "turn_completed");
   assert.equal(agentEvents[0].payload.turn, 1);
-  assert.deepEqual(agentEvents[0].payload.usage, ZERO_USAGE);
+  assert.deepEqual(agentEvents[0].payload.usage, { ...ZERO_USAGE, cacheHitRate: 0 });
+});
+
+test("Pi Agent executor reports prompt cache hit rate in live and captured usage", async () => {
+  const liveEvents = [];
+  const cachedResponse = {
+    ...assistant("Cache-aware response."),
+    usage: {
+      input: 200,
+      output: 50,
+      cacheRead: 800,
+      cacheWrite: 0,
+      totalTokens: 1_050,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  };
+  const result = await runResearchAgent({
+    prompt: "Measure prompt caching.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([cachedResponse]),
+    }),
+  });
+
+  const completedTurn = liveEvents.find(
+    (event) => event.kind === "agent.event" && event.payload.type === "turn_completed",
+  );
+  assert.equal(completedTurn.payload.usage.cacheHitRate, 0.8);
+  assert.equal(result.agentRun.output.raw.modelCalls[0].usage.cacheHitRate, 0.8);
 });
 
 test("Pi Agent executor injects live steering into the next model turn", async () => {

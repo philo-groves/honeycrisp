@@ -17,6 +17,7 @@ import {
   type Models,
   type SimpleStreamOptions,
   type ToolCall,
+  type Usage,
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
 import { nowIso } from "./ids.js";
@@ -876,8 +877,16 @@ function modelCallMetadata(
   return {
     stopReason: message.stopReason,
     responseId: message.responseId,
-    usage: message.usage,
+    usage: usageWithCacheHitRate(message.usage),
     contentTypes: message.content.map((item) => item.type),
+  };
+}
+
+function usageWithCacheHitRate(usage: Usage): Record<string, unknown> {
+  const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+  return {
+    ...usage,
+    cacheHitRate: promptTokens > 0 ? usage.cacheRead / promptTokens : 0,
   };
 }
 
@@ -1058,7 +1067,7 @@ function agentLiveEvent(
         turn,
         responseId: event.message.responseId,
         stopReason: event.message.stopReason,
-        usage: event.message.usage,
+        usage: usageWithCacheHitRate(event.message.usage),
         contentTypes: event.message.content.map((item) => item.type),
       },
     };
