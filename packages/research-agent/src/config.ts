@@ -13,7 +13,8 @@ export type ResearchModelEffort =
   | "low"
   | "medium"
   | "high"
-  | "xhigh";
+  | "xhigh"
+  | "max";
 
 export interface ResearchModelConfigPreference {
   provider?: string;
@@ -226,13 +227,14 @@ function normalizeResearchModelEffort(
     value === "low" ||
     value === "medium" ||
     value === "high" ||
-    value === "xhigh"
+    value === "xhigh" ||
+    value === "max"
   ) {
     return value;
   }
 
   throw new Error(
-    `Research config ${configPath} has invalid effort; expected minimal, low, medium, high, or xhigh.`,
+    `Research config ${configPath} has invalid effort; expected minimal, low, medium, high, xhigh, or max.`,
   );
 }
 

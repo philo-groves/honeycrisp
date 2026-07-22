@@ -8,6 +8,7 @@ import {
   createAuthenticatedModels,
   createCredentialStore,
   getDefaultResearchModelConfigPath,
+  getProviderModelCatalog,
   loadResearchModelConfig,
   resolveResearchModelConfig,
   writeResearchModelConfig,
@@ -19,6 +20,21 @@ test("built-in Codex model catalog includes GPT-5.6 Sol", () => {
 
   assert.equal(model?.id, "gpt-5.6-sol");
   assert.equal(model?.provider, "openai-codex");
+});
+
+test("provider catalog reports Pi model names and model-specific effort levels", () => {
+  const [catalog] = getProviderModelCatalog("xai");
+  assert.equal(catalog?.providerId, "xai");
+  const grok43 = catalog?.models.find((model) => model.id === "grok-4.3");
+  const grok45 = catalog?.models.find((model) => model.id === "grok-4.5");
+  assert.equal(grok43?.name, "Grok 4.3");
+  assert.deepEqual(grok43?.effortLevels, ["off", "minimal", "low", "medium", "high"]);
+  assert.deepEqual(grok45?.effortLevels, ["low", "medium", "high"]);
+});
+
+test("research model config accepts Pi max effort", async () => {
+  const configPath = await writeConfig({ provider: "openai-codex", model: "gpt-5.6-sol", effort: "max" });
+  assert.equal((await loadResearchModelConfig(configPath)).effort, "max");
 });
 
 test("credential store prefers a fresher host Codex OAuth credential", async () => {

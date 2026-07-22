@@ -10,6 +10,7 @@ import type {
   Models,
   OAuthCredential,
 } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 
 export type AuthLoginCallbacks = AuthInteraction;
 
@@ -47,6 +48,21 @@ export interface AuthVerifyResult {
   modelId: string;
   configured: boolean;
   source?: string;
+}
+
+export interface ProviderModelCatalogEntry {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  effortLevels: ReturnType<typeof getSupportedThinkingLevels>;
+  contextWindow: number;
+  maxTokens: number;
+}
+
+export interface ProviderModelCatalog {
+  providerId: string;
+  providerName: string;
+  models: ProviderModelCatalogEntry[];
 }
 
 type CredentialFile = Record<string, Credential>;
@@ -218,6 +234,25 @@ export function listAuthProviders(): AuthProviderSummary[] {
     }))
     .filter((provider) => provider.authMethods.length > 0)
     .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function getProviderModelCatalog(providerId?: string): ProviderModelCatalog[] {
+  const models = builtinModels();
+  return models
+    .getProviders()
+    .filter((provider) => !providerId || provider.id === providerId)
+    .map((provider) => ({
+      providerId: provider.id,
+      providerName: provider.name,
+      models: models.getModels(provider.id).map((model) => ({
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
+        effortLevels: getSupportedThinkingLevels(model),
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+      })),
+    }));
 }
 
 export async function getAuthStatus(

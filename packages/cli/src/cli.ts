@@ -32,6 +32,7 @@ import {
   getDefaultResearchToolConfigPath,
   createSynthesisTool,
   getAuthStatus,
+  getProviderModelCatalog,
   listAuthProviders,
   loadResearchSkillsFromDirectory,
   loadResearchStorageManifest,
@@ -805,12 +806,13 @@ function parseReasoning(value: string): ResearchModelEffort {
     value === "low" ||
     value === "medium" ||
     value === "high" ||
-    value === "xhigh"
+    value === "xhigh" ||
+    value === "max"
   ) {
     return value;
   }
 
-  throw new Error("--reasoning must be one of minimal, low, medium, high, xhigh.");
+  throw new Error("--reasoning must be one of minimal, low, medium, high, xhigh, max.");
 }
 
 function parseInspectionAction(value: string): LocalInspectionAction {
@@ -943,7 +945,7 @@ function usage(): string {
     "  --model <model>        Override configured/default model for real mode",
     "  --executor <kind>      agent (default: agent)",
     "  --max-tokens <n>       Max output tokens for real mode",
-    "  --effort <level>       Model effort for real mode: minimal, low, medium, high, xhigh",
+    "  --effort <level>       Model effort for real mode: minimal, low, medium, high, xhigh, max",
     "  --reasoning <level>    Alias for --effort",
     "  --tool-execution <m>   Agent tool execution mode: sequential or parallel",
     "  --inspect-root <path>  Allow a local root for read-only inspection",
@@ -1002,6 +1004,9 @@ function usage(): string {
     "  --limit <n>             Limit returned nodes",
     "  --json                  Print JSON",
     "",
+    "Model commands:",
+    "  models list [provider]          List Pi models and supported effort levels",
+    "",
     "Tool debug commands:",
     "  tools list                       Show configured tools, MCP allowlist, and selected skills",
     "  tools config show                Show project runtime tool preferences",
@@ -1014,6 +1019,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
   try {
     if (argv[0] === "auth") {
       await handleAuthCommand(argv.slice(1));
+      return;
+    }
+
+    if (argv[0] === "models") {
+      handleModelsCommand(argv.slice(1));
       return;
     }
 
@@ -1482,7 +1492,7 @@ function configUsage(): string {
     "  show                       Show model preference and authorization status",
     "  set provider <id>          Set preferred provider",
     "  set model <id>             Set preferred model",
-    "  set effort <level>         Set effort: minimal, low, medium, high, or xhigh",
+    "  set effort <level>         Set effort: minimal, low, medium, high, xhigh, or max",
     "",
     "Options:",
     "  --config <path>            Preference config path",
@@ -2686,6 +2696,29 @@ async function handleAuthCommand(argv: readonly string[]): Promise<void> {
   throw new Error(
     "Usage: honeycrisp auth <list|status|login|logout|verify> [provider] [model]",
   );
+}
+
+function handleModelsCommand(argv: readonly string[]): void {
+  const command = argv[0] ?? "list";
+  if (command !== "list") {
+    throw new Error("Usage: honeycrisp models list [provider] [--json]");
+  }
+  const providerId = argv.find((value, index) => index > 0 && !value.startsWith("--"));
+  const catalogs = getProviderModelCatalog(providerId);
+  if (providerId && catalogs.length === 0) {
+    throw new Error(`Unknown provider: ${providerId}`);
+  }
+  if (argv.includes("--json")) {
+    console.log(JSON.stringify({ providers: catalogs }, null, 2));
+    return;
+  }
+  for (const provider of catalogs) {
+    for (const model of provider.models) {
+      console.log(
+        `${provider.providerId}\t${model.id}\t${model.name}\t${model.effortLevels.join(", ")}`,
+      );
+    }
+  }
 }
 
 function createTerminalAuthCallbacks(): AuthLoginCallbacks & { close(): void } {

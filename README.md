@@ -65,6 +65,13 @@ pnpm start config show
 
 CLI flags such as `--provider`, `--model`, and `--effort` override the config file for a run. The selected provider/model must already be authorized through the auth CLI.
 
+Inspect the provider models and model-specific reasoning levels supplied by the installed Pi runtime with:
+
+```sh
+pnpm start models list
+pnpm start models list anthropic --json
+```
+
 Use `--mock` for deterministic offline practice runs that do not make model calls.
 
 ```sh

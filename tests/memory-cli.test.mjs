@@ -12,6 +12,18 @@ import {
 
 const cliPath = fileURLToPath(new URL("../packages/cli/dist/cli.js", import.meta.url));
 
+test("models list exposes the installed Pi catalog as JSON", () => {
+  const result = runTopCli(["models", "list", "xai", "--json"]);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.providers[0].providerId, "xai");
+  assert.ok(output.providers[0].models.some((model) => model.id === "grok-4.3"));
+  assert.deepEqual(
+    output.providers[0].models.find((model) => model.id === "grok-4.5").effortLevels,
+    ["low", "medium", "high"],
+  );
+});
+
 test("main CLI defaults to real mode and preflights auth", async () => {
   const authFile = await createEmptyAuthFilePath();
   const result = runTopCli(["-p", "Goal: Check real-mode preflight"], {
