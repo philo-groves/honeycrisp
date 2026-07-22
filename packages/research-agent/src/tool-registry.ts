@@ -195,12 +195,18 @@ export class ResearchToolRegistry {
     toolCall: Pick<ToolCall, "id" | "name" | "arguments">,
     options: ExecuteToolCallOptions = {},
   ): Promise<ResearchToolExecutionRecord> {
-    const tool = this.find(toolCall.name);
-    const action = createToolActionFromCall(toolCall, tool, options);
+    const action = this.createActionFromToolCall(toolCall, options);
     return this.execute(action, {
       ...options,
       toolCallId: toolCall.id,
     });
+  }
+
+  createActionFromToolCall(
+    toolCall: Pick<ToolCall, "id" | "name" | "arguments">,
+    options: ExecuteToolCallOptions = {},
+  ): ResearchToolAction {
+    return createToolActionFromCall(toolCall, this.find(toolCall.name), options);
   }
 
   preflight(

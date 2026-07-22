@@ -277,6 +277,60 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   assert.match(systemPrompt, /leave it suspected/);
 });
 
+test("Pi Agent streams a tool request before long-running execution completes", async () => {
+  const calls = [];
+  const liveEvents = [];
+  const tool = createFixtureInspectTool(calls);
+  const execute = tool.execute;
+  let markToolStarted;
+  let releaseTool;
+  const toolStarted = new Promise((resolve) => { markToolStarted = resolve; });
+  const toolReleased = new Promise((resolve) => { releaseTool = resolve; });
+  tool.execute = async (action) => {
+    markToolStarted();
+    await toolReleased;
+    return execute(action);
+  };
+
+  const runPromise = runResearchAgent({
+    prompt: "Inspect a slow fixture path.",
+    tools: [tool.descriptor],
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistant(toolCall("fixture_inspect", { path: "slow.c" }, "tool_slow"), "toolUse"),
+        assistant("## Result\nSlow fixture inspected."),
+      ]),
+      toolRegistry: createResearchToolRegistry([tool]),
+    }),
+  });
+
+  await toolStarted;
+  let pendingAssertionError;
+  try {
+    const pendingEvents = liveEvents.filter((event) =>
+      event.kind === "research.event"
+      && event.payload.event.payload.toolActionId === "tool_slow"
+    );
+    assert.deepEqual(pendingEvents.map((event) => event.payload.event.kind), ["tool.requested"]);
+  } catch (error) {
+    pendingAssertionError = error;
+  } finally {
+    releaseTool();
+  }
+
+  const result = await runPromise;
+  if (pendingAssertionError) throw pendingAssertionError;
+  const capturedEvents = result.agentRun.output.toolEvents.filter(
+    (event) => event.payload.toolActionId === "tool_slow",
+  );
+  assert.deepEqual(capturedEvents.map((event) => event.kind), ["tool.requested", "tool.observed"]);
+});
+
 test("Pi Agent keeps tools available without an explicit governance call limit", async () => {
   const calls = [];
   const contexts = [];

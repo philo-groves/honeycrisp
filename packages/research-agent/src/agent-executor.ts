@@ -22,6 +22,7 @@ import {
 import { createAuthenticatedModels } from "./auth.js";
 import { nowIso } from "./ids.js";
 import {
+  createToolRequestedEvent,
   getToolTransportName,
   type ResearchToolExecutionRecord,
   type ResearchToolExecutionResult,
@@ -40,6 +41,7 @@ import type {
   ResearchAgentModelInput,
   ResearchEvent,
   ResearchLiveEventSink,
+  ResearchToolAction,
 } from "./types.js";
 
 export interface CreatePiAgentExecutorOptions {
@@ -145,6 +147,7 @@ export function createPiAgentExecutor(
         const agentEvents: Record<string, unknown>[] = [];
         const executionRecords = new Map<string, ResearchToolExecutionRecord>();
         const capturedToolCalls = new Set<string>();
+        const requestedToolCalls = new Set<string>();
         const reservations = new Map<string, number>();
         let toolCallCount = 0;
         let currentTurn = 0;
@@ -160,6 +163,21 @@ export function createPiAgentExecutor(
           toolRegistry: options.toolRegistry,
           governance: input.governance,
           reserveToolCall,
+          recordExecutionStart(action) {
+            if (requestedToolCalls.has(action.id)) return;
+            requestedToolCalls.add(action.id);
+            const attributedEvents = attributeResearchEvents([createToolRequestedEvent(action)], {
+              agentId: request.id,
+              agentPath: request.path,
+              parentAgentId: request.parentId,
+            });
+            toolEvents.push(...attributedEvents);
+            emitResearchEvents(input.eventSink, attributedEvents, {
+              agentId: request.id,
+              agentPath: request.path,
+              parentAgentId: request.parentId,
+            });
+          },
           recordExecution(record) {
             executionRecords.set(record.action.id, record);
           },
@@ -286,11 +304,14 @@ export function createPiAgentExecutor(
               const record = executionRecords.get(hookContext.toolCall.id);
               if (record && !capturedToolCalls.has(hookContext.toolCall.id)) {
                 capturedToolCalls.add(hookContext.toolCall.id);
-                const attributedEvents = attributeResearchEvents(record.events, {
-                  agentId: request.id,
-                  agentPath: request.path,
-                  parentAgentId: request.parentId,
-                });
+                const attributedEvents = attributeResearchEvents(
+                  record.events.filter((event) => event.kind !== "tool.requested" || !requestedToolCalls.has(hookContext.toolCall.id)),
+                  {
+                    agentId: request.id,
+                    agentPath: request.path,
+                    parentAgentId: request.parentId,
+                  },
+                );
                 toolEvents.push(...attributedEvents);
                 emitResearchEvents(input.eventSink, attributedEvents, {
                   agentId: request.id,
@@ -659,6 +680,7 @@ function createAgentTools(input: {
   toolRegistry: ResearchToolRegistry | undefined;
   governance: ResearchAgentExecutionInput["governance"];
   reserveToolCall(toolCallId: string): number;
+  recordExecutionStart(action: ResearchToolAction): void;
   recordExecution(record: ResearchToolExecutionRecord): void;
 }): AgentTool[] {
   if (!input.toolRegistry) return [];
@@ -688,18 +710,18 @@ function createAgentTools(input: {
             ],
             details: { phase: "executing", toolName: tool.descriptor.name },
           });
-          const record = await input.toolRegistry!.executeToolCall(
-            {
-              id: toolCallId,
-              name: getToolTransportName(tool),
-              arguments: params,
-            },
-            {
-              ...(input.governance ? { governance: input.governance } : {}),
-              toolCallCount: input.reserveToolCall(toolCallId),
-              ...(signal ? { signal } : {}),
-            },
-          );
+          const toolCall = {
+            id: toolCallId,
+            name: getToolTransportName(tool),
+            arguments: params,
+          };
+          const executionOptions = {
+            ...(input.governance ? { governance: input.governance } : {}),
+            toolCallCount: input.reserveToolCall(toolCallId),
+            ...(signal ? { signal } : {}),
+          };
+          input.recordExecutionStart(input.toolRegistry!.createActionFromToolCall(toolCall, executionOptions));
+          const record = await input.toolRegistry!.executeToolCall(toolCall, executionOptions);
           input.recordExecution(record);
           return {
             content: toolResultContent(record.result),

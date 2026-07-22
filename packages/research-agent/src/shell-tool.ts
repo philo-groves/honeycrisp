@@ -450,23 +450,38 @@ async function runUtility(input: {
     let settled = false;
     let timedOut = false;
     let aborted = false;
+    let stopping = false;
+    let forceStop: ReturnType<typeof setTimeout> | undefined;
     const output = createOutputCollector(input.maxOutputBytes);
     const child = spawn(input.utility, input.args, {
       cwd: input.cwd,
       env: shellEnvironment(),
+      detached: process.platform !== "win32",
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
     child.stdout.on("data", (chunk: Buffer) => output.appendStdout(chunk));
     child.stderr.on("data", (chunk: Buffer) => output.appendStderr(chunk));
 
+    const killProcessTree = (signal: NodeJS.Signals): void => {
+      if (process.platform !== "win32" && child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The process group may already be gone; fall back to the direct child.
+        }
+      }
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+    };
     const stop = (reason: "timeout" | "abort"): void => {
       if (reason === "timeout") timedOut = true;
       if (reason === "abort") aborted = true;
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      }, 1_000).unref();
+      if (stopping) return;
+      stopping = true;
+      killProcessTree("SIGTERM");
+      forceStop = setTimeout(() => killProcessTree("SIGKILL"), 1_000);
+      forceStop.unref();
     };
     const timeout = setTimeout(() => stop("timeout"), input.timeoutMs);
     const abort = (): void => stop("abort");
@@ -476,6 +491,7 @@ async function runUtility(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (forceStop) clearTimeout(forceStop);
       input.signal?.removeEventListener("abort", abort);
       resolvePromise(errorResult(input.action, input.startedAt, errorMessage(error)));
     });
@@ -483,6 +499,7 @@ async function runUtility(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (forceStop) clearTimeout(forceStop);
       input.signal?.removeEventListener("abort", abort);
       const captured = output.value();
       const resultOutput = {

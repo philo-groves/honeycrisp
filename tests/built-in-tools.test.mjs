@@ -161,6 +161,29 @@ test("shell tool serializes the same utility across tool instances", { skip: pro
   }
 });
 
+test("shell tool terminates descendant processes when a command times out", { skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-timeout-"));
+  try {
+    const registry = createResearchToolRegistry([createShellTool({ workspaceRoot: root })]);
+    const startedAt = Date.now();
+    const timedOut = await registry.execute({
+      id: "shell_timeout_tree",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "sh", args: ["-c", "sleep 30 & echo $!; wait"], timeoutMs: 50 },
+    });
+
+    assert.equal(timedOut.result.status, "error");
+    assert.match(timedOut.result.error.message, /timed out/);
+    assert.ok(Date.now() - startedAt < 5_000, "timed-out descendant must not hold the tool output pipes open");
+    const descendantPid = Number.parseInt(timedOut.result.output.stdout.trim(), 10);
+    assert.ok(Number.isInteger(descendantPid));
+    await assertProcessExited(descendantPid);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("repository search finds bounded local source matches", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-"));
   await mkdir(join(root, "Src"));
@@ -507,6 +530,19 @@ test("synthesis tool returns report output and artifact references", async () =>
   assert.equal(result.result.output.text, "# Parser Notes\n\nObserved bounded parsing behavior.");
   assert.equal(result.result.artifactRefs[0].kind, "report");
 });
+
+async function assertProcessExited(pid) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`descendant process ${pid} remained alive after shell timeout`);
+}
 
 test("storage list tool exposes manifest artifact metadata read-only", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-storage-tool-"));
