@@ -213,6 +213,8 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
       assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
       assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 3").get().name, "rename_legacy_finding_memory_ids");
       assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 4").get().name, "remove_peer_database_federation");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 5").get().name, "workspace_runbook_artifacts");
+      assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_runbooks'").get().name, "honeycrisp_runbooks");
       assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_federated_edges'").get(), undefined);
       assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
     } finally {

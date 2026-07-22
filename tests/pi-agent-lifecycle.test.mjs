@@ -120,6 +120,13 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   assert.doesNotMatch(contexts[0].systemPrompt, /decide how to investigate it and when the work is complete/);
 });
 
+test("research system prompt separates reusable runbooks from execution and memory", () => {
+  const prompt = createResearchSystemPrompt({ hasTools: true, hasRunbookTools: true });
+  assert.match(prompt, /Use runbooks as durable executable research artifacts/);
+  assert.match(prompt, /Use shell\.run for execution; a runbook never executes itself/);
+  assert.match(prompt, /Keep concise research facts in memory and multi-step procedures in runbooks/);
+});
+
 test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", async () => {
   const calls = [];
   const contexts = [];

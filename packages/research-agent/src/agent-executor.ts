@@ -134,6 +134,9 @@ export function createPiAgentExecutor(
       const hasMemoryTools = researchToolNames.has("memory_search")
         && researchToolNames.has("memory_save")
         && researchToolNames.has("memory_link");
+      const hasRunbookTools = researchToolNames.has("runbook_list")
+        && researchToolNames.has("runbook_create")
+        && researchToolNames.has("runbook_append");
 
       runSession = async (request) => {
         const sessionModel = request.root ? model : models.getModel(options.provider, request.model);
@@ -235,6 +238,7 @@ export function createPiAgentExecutor(
             systemPrompt: createResearchSystemPrompt({
               hasTools: tools.length > 0,
               hasMemoryTools,
+              hasRunbookTools,
               ...(request.root ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),
             }),

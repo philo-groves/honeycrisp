@@ -1,6 +1,7 @@
 export interface CreateResearchSystemPromptOptions {
   hasTools: boolean;
   hasMemoryTools?: boolean;
+  hasRunbookTools?: boolean;
   agentPath?: string;
   hasCollaborationTools?: boolean;
 }
@@ -27,6 +28,13 @@ export function createResearchSystemPrompt(
       "- Save an individual flaw as a primitive only after proving it through static analysis and attaching code or tool evidence.",
       "- Save a chain only when linked sources, primitives, sinks, and assets establish end-to-end attacker reachability and security impact. A realistic proof-of-vulnerability is required. Have a review subagent independently approve it before marking the chain confirmed; if review is unavailable or inconclusive, leave it suspected.",
       "- Evidence is attached to graph nodes as supporting references, not stored as its own memory type. Do not create finding memories; represent proven flaws as primitives or chains.",
+    ] : []),
+    ...(options.hasRunbookTools ? [
+      "Use runbooks as durable executable research artifacts:",
+      "- List existing workspace runbooks before creating one. Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
+      "- Keep runbooks operational and reproducible: record exact commands or code, required context, decisive bounded outputs, and interpretation. Use shell.run for execution; a runbook never executes itself.",
+      "- Prefer appending to the relevant runbook over scattering reusable procedure across narration or memory. Keep concise research facts in memory and multi-step procedures in runbooks.",
+      "- Mark a runbook completed when its procedure is proven and reusable; leave exploratory work active, and archive superseded procedures.",
     ] : []),
   ].join("\n");
 }

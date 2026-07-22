@@ -137,6 +137,10 @@ export class MemoryGraphStore {
     this.local.database.close();
   }
 
+  public getContext(): MemoryTierContext {
+    return { ...this.local.context };
+  }
+
   public save(input: SaveMemoryNodeInput): MemoryNode {
     validateNodeInput(input);
     const tier = input.tier ?? "workspace";
@@ -400,11 +404,11 @@ export class MemoryGraphStore {
     const database = new Database(databasePath);
     if (databasePath !== ":memory:") chmodSync(databasePath, 0o600);
     database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
-    this.initializeSchema(database);
+    MemoryGraphStore.initializeSchema(database);
     return { database, databasePath: resolveDatabasePath(databasePath), context };
   }
 
-  private initializeSchema(database: DatabaseSync): void {
+  public static initializeSchema(database: DatabaseSync): void {
     applyDatabaseMigrations(database, "honeycrisp_core", [
       {
         version: 1,
@@ -511,6 +515,36 @@ export class MemoryGraphStore {
             insert.run(row.from_id, row.to_id, row.relation, row.note, row.created_at, row.updated_at);
           }
           database.exec("DROP TABLE memory_federated_edges");
+        },
+      },
+      {
+        version: 5,
+        name: "workspace_runbook_artifacts",
+        up(database) {
+          database.exec(`
+            CREATE TABLE IF NOT EXISTS honeycrisp_runbooks (
+              id TEXT PRIMARY KEY,
+              workspace_id TEXT NOT NULL,
+              workspace_name TEXT NOT NULL,
+              subject_id TEXT,
+              subject_name TEXT,
+              session_id TEXT,
+              title TEXT NOT NULL,
+              purpose TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL CHECK (status IN ('draft', 'active', 'completed', 'archived')),
+              artifact_id TEXT NOT NULL UNIQUE,
+              relative_path TEXT NOT NULL UNIQUE,
+              content_hash TEXT NOT NULL,
+              size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+              revision INTEGER NOT NULL CHECK (revision > 0),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS honeycrisp_runbooks_workspace_updated_idx
+              ON honeycrisp_runbooks(workspace_id, updated_at);
+            CREATE INDEX IF NOT EXISTS honeycrisp_runbooks_session_updated_idx
+              ON honeycrisp_runbooks(session_id, updated_at);
+          `);
         },
       },
     ]);

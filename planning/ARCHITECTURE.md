@@ -68,6 +68,8 @@ Knowledge records share the user-global SQLite database and are tiered by:
 
 Transcripts, narration, and bulk tool output are operational data, not durable knowledge. Large outputs remain artifact files referenced by concise graph nodes.
 
+Runbooks are a separate workspace-scoped artifact family for reusable multi-step procedures. SQLite stores their ownership, lifecycle, artifact identity, and optimistic revision. Valid Jupyter `nbformat 4` files store ordered markdown/code cells and bounded recorded results under `~/.honeycrisp/artifacts/runbooks/<workspace-id>/`. Runbooks are portable documents, not an alternate executor; all commands run through the normal research tools.
+
 The agent searches memory early and when research crosses system boundaries. A `hypothesis` records a specific, testable but unproven security proposition: it remains suspected while active, becomes rejected when disproven, and is reclassified as a primitive or chain when proof establishes its role. `bug` is reserved for a confirmed historical flaw precedent that predates the current research, is linked to affected assets, and carries precedent evidence. A flaw established during current research is a `primitive`, or part of a `chain` when reachability and impact are established. The graph also records user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, exploitation blockers as mitigations, and reusable sequences of important research actions as trajectories. Evidence is attached to nodes as supporting references rather than stored as an `evidence` node, and proven flaws use primitives or chains rather than a `finding` node. Routine action narration is not durable knowledge. Exact correction can reclassify a node without discarding its evidence or relationships.
 
 Memory queries are tokenized and relevance-ranked across ids, types, content, assets, tags, and evidence. An exact node id embedded in a broader natural-language query remains directly retrievable.
@@ -76,7 +78,7 @@ An individual flaw becomes a primitive only with static-analysis support and cod
 
 ## Research Tools
 
-Research tools expose concrete capabilities such as repository search, bounded file reads, structural code intelligence, analysis, experiments, storage inspection, memory access, skills, and configured MCP servers.
+Research tools expose concrete capabilities such as repository search, bounded file reads, structural code intelligence, analysis, experiments, runbook artifacts, storage inspection, memory access, skills, and configured MCP servers.
 
 Each research tool has a typed schema, action class, side-effect profile, required permissions, and structured result. Honeycrisp enforces tool governance in lifecycle hooks. Collaboration tools are orchestration primitives and remain available when a research-call budget is exhausted.
 

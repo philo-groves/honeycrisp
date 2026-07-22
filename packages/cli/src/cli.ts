@@ -14,6 +14,7 @@ import {
   createLocalInspectionTool,
   createDeterministicAgentExecutor,
   createMemoryGraphTools,
+  createRunbookTools,
   compileMemoryModelContext,
   createPiAgentExecutor,
   createRepositorySearchTool,
@@ -24,6 +25,7 @@ import {
   createResearchWorkspaceContext,
   createMcpResearchTools,
   MemoryGraphStore,
+  RunbookStore,
   createStorageListTool,
   createStructuredFileReadTool,
   getDefaultResearchModelConfigPath,
@@ -2060,6 +2062,11 @@ async function createRuntimeConfig(args: {
   executableTools.push(...memoryTools);
   toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));
   cleanupCallbacks.push(async () => memoryGraph.close());
+  const runbooks = new RunbookStore(memoryGraph.databasePath, storageLayout, memoryGraph.getContext());
+  const runbookTools = createRunbookTools(runbooks);
+  executableTools.push(...runbookTools);
+  toolDescriptors.push(...runbookTools.map((tool) => tool.descriptor));
+  cleanupCallbacks.push(async () => runbooks.close());
   const memoryContext = args.prompt
     ? compileMemoryModelContext(memoryGraph, args.prompt)
     : [];
