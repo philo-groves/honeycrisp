@@ -1,4 +1,4 @@
-import { runAgentLoop } from "@earendil-works/pi-agent-core";
+import { estimateTokens, runAgentLoop } from "@earendil-works/pi-agent-core";
 import type {
   AgentEvent,
   AgentMessage,
@@ -51,11 +51,19 @@ export interface CreatePiAgentExecutorOptions {
   toolRegistry?: ResearchToolRegistry;
   toolExecution?: ToolExecutionMode;
   getSteeringMessages?: () => Promise<AgentMessage[]>;
+  modelFirstEventTimeoutMs?: number;
   subagents?: false | {
     maxThreads?: number;
     maxDepth?: number;
   };
 }
+
+const MODEL_CONTEXT_RESERVE_TOKENS = 32_768;
+const MIN_ACTIVE_CONTEXT_TOKENS = 32_000;
+const RECENT_TOOL_RESULTS_TO_KEEP = 8;
+const MODEL_TOOL_RESULT_MAX_CHARS = 48_000;
+const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
+const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
 
 export function createDeterministicAgentExecutor(): ResearchAgentExecutor {
   return {
@@ -111,6 +119,13 @@ export function createPiAgentExecutor(
                 payload: { type: "subagent.activity", action, ...details },
               });
             },
+            onToolEvent: (event) => {
+              emitResearchEvents(input.eventSink, [event], {
+                agentId: event.agentId ?? "root",
+                agentPath: event.agentPath ?? "/root",
+                parentAgentId: event.parentAgentId ?? "",
+              });
+            },
           });
       const researchToolNames = new Set(
         options.toolRegistry?.listTools().map((tool) => getToolTransportName(tool)) ?? [],
@@ -149,6 +164,7 @@ export function createPiAgentExecutor(
         const tools = [...researchTools, ...collaborationTools];
         const streamFn = createRetryingStreamFn(models.streamSimple.bind(models), {
           signal: request.signal,
+          firstEventTimeoutMs: options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
           onRetry: async ({ retry, maxRetries, errorMessage }) => {
             const retryEvent = {
               type: "model_retry",
@@ -175,7 +191,43 @@ export function createPiAgentExecutor(
               },
             });
           },
+          compactContext: (context) => ({
+            ...context,
+            messages: compactAgentContext(
+              context.messages as AgentMessage[],
+              sessionModel.contextWindow,
+              true,
+            ) as Message[],
+          }),
+          onContextRetry: async ({ tokensBefore, tokensAfter, errorMessage }) => {
+            const retryEvent = {
+              type: "context_compacted",
+              reason: "context_window_error",
+              retry: true,
+              tokensBefore,
+              tokensAfter,
+              errorMessage,
+            };
+            agentEvents.push({
+              ...retryEvent,
+              agentId: request.id,
+              agentPath: request.path,
+            });
+            if (!input.eventSink) return;
+            await emitLiveEvent(input.eventSink, {
+              schemaVersion: 1,
+              kind: "agent.event",
+              timestamp: nowIso(),
+              payload: {
+                ...retryEvent,
+                agentId: request.id,
+                agentPath: request.path,
+                parentAgentId: request.parentId,
+              },
+            });
+          },
         });
+        const initialMessages = compactAgentContext(request.inheritedMessages, sessionModel.contextWindow);
         const agentMessages = await runAgentLoop(
           [request.root ? createUserMessage(input.modelInput) : createTaskMessage(request.prompt)],
           {
@@ -183,9 +235,9 @@ export function createPiAgentExecutor(
               hasTools: tools.length > 0,
               hasMemoryTools,
               ...(request.root ? {} : { agentPath: request.path }),
-              hasCollaborationTools: collaborationTools.length > 0,
+              hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),
             }),
-            messages: request.inheritedMessages,
+            messages: initialMessages,
             ...(tools.length > 0 ? { tools } : {}),
           },
           {
@@ -249,16 +301,36 @@ export function createPiAgentExecutor(
                   }
                 : undefined;
             },
-            prepareNextTurn: ({ context }) => {
-              if (
-                typeof input.modelInput.toolBudget.maxToolCalls !== "number" ||
-                toolCallCount < input.modelInput.toolBudget.maxToolCalls ||
-                !context.tools?.some((tool) => researchToolNames.has(tool.name))
-              ) return undefined;
+            prepareNextTurn: async ({ context }) => {
+              const compactedMessages = compactAgentContext(context.messages, sessionModel.contextWindow);
+              const contextCompacted = compactedMessages !== context.messages;
+              const removeResearchTools =
+                typeof input.modelInput.toolBudget.maxToolCalls === "number"
+                && toolCallCount >= input.modelInput.toolBudget.maxToolCalls
+                && context.tools?.some((tool) => researchToolNames.has(tool.name));
+              if (!contextCompacted && !removeResearchTools) return undefined;
+              if (contextCompacted && input.eventSink) {
+                await emitLiveEvent(input.eventSink, {
+                  schemaVersion: 1,
+                  kind: "agent.event",
+                  timestamp: nowIso(),
+                  payload: {
+                    type: "context_compacted",
+                    agentId: request.id,
+                    agentPath: request.path,
+                    parentAgentId: request.parentId,
+                    tokensBefore: estimatedMessageTokens(context.messages),
+                    tokensAfter: estimatedMessageTokens(compactedMessages),
+                  },
+                });
+              }
               return {
                 context: {
                   ...context,
-                  tools: context.tools.filter((tool) => !researchToolNames.has(tool.name)),
+                  messages: compactedMessages,
+                  ...(removeResearchTools
+                    ? { tools: (context.tools ?? []).filter((tool) => !researchToolNames.has(tool.name)) }
+                    : {}),
                 },
               };
             },
@@ -342,18 +414,46 @@ function createRetryingStreamFn(
   options: {
     signal?: AbortSignal;
     onRetry?: (event: { retry: number; maxRetries: number; errorMessage: string }) => Promise<void> | void;
+    compactContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
+    onContextRetry?: (event: { tokensBefore: number; tokensAfter: number; errorMessage: string }) => Promise<void> | void;
+    firstEventTimeoutMs?: number;
   } = {},
 ): StreamFn {
   return (model, context, streamOptions) => {
     const output = createAssistantMessageEventStream();
     void (async () => {
-      for (let attempt = 0; ; attempt += 1) {
+      let activeContext = context;
+      let transientRetries = 0;
+      let contextRetryAttempted = false;
+      for (;;) {
         let pendingStart: Extract<AssistantMessageEvent, { type: "start" }> | null = null;
         let emittedContent = false;
         let retryError: AssistantMessage | null = null;
+        let firstEventTimedOut = false;
+        const attemptController = new AbortController();
+        const linkedSignals = [options.signal, streamOptions?.signal].filter(
+          (signal): signal is AbortSignal => Boolean(signal),
+        );
+        const abortAttempt = (): void => attemptController.abort();
+        for (const signal of linkedSignals) {
+          if (signal.aborted) abortAttempt();
+          else signal.addEventListener("abort", abortAttempt, { once: true });
+        }
         try {
-          const upstream = await streamFn(model, context, streamOptions);
-          for await (const event of upstream) {
+          const upstream = await streamFn(model, activeContext, {
+            ...streamOptions,
+            signal: attemptController.signal,
+          });
+          const iterator = upstream[Symbol.asyncIterator]();
+          for (;;) {
+            const next = emittedContent || !options.firstEventTimeoutMs
+              ? await iterator.next()
+              : await nextModelEvent(iterator, options.firstEventTimeoutMs, () => {
+                  firstEventTimedOut = true;
+                  attemptController.abort();
+                });
+            if (next.done) break;
+            const event = next.value;
             if (event.type === "start" && !emittedContent) {
               pendingStart = event;
               continue;
@@ -361,7 +461,26 @@ function createRetryingStreamFn(
             if (
               event.type === "error"
               && !emittedContent
-              && attempt < MODEL_RETRY_DELAYS_MS.length
+              && !contextRetryAttempted
+              && isContextWindowAssistantError(event.error)
+              && options.compactContext
+            ) {
+              const tokensBefore = estimatedMessageTokens(activeContext.messages as AgentMessage[]);
+              activeContext = options.compactContext(activeContext);
+              const tokensAfter = estimatedMessageTokens(activeContext.messages as AgentMessage[]);
+              contextRetryAttempted = true;
+              await options.onContextRetry?.({
+                tokensBefore,
+                tokensAfter,
+                errorMessage: event.error.errorMessage ?? "Model context window exceeded.",
+              });
+              retryError = event.error;
+              break;
+            }
+            if (
+              event.type === "error"
+              && !emittedContent
+              && transientRetries < MODEL_RETRY_DELAYS_MS.length
               && isRetryableAssistantError(event.error)
             ) {
               retryError = event.error;
@@ -376,13 +495,38 @@ function createRetryingStreamFn(
             emittedContent = true;
           }
         } catch (error) {
-          const message = assistantErrorMessage(model, error);
-          if (!emittedContent && attempt < MODEL_RETRY_DELAYS_MS.length && isRetryableAssistantError(message)) {
+          const message = assistantErrorMessage(
+            model,
+            firstEventTimedOut
+              ? `Model stream produced no content for ${options.firstEventTimeoutMs}ms.`
+              : error,
+          );
+          if (
+            !emittedContent
+            && !contextRetryAttempted
+            && isContextWindowAssistantError(message)
+            && options.compactContext
+          ) {
+            const tokensBefore = estimatedMessageTokens(activeContext.messages as AgentMessage[]);
+            activeContext = options.compactContext(activeContext);
+            const tokensAfter = estimatedMessageTokens(activeContext.messages as AgentMessage[]);
+            contextRetryAttempted = true;
+            await options.onContextRetry?.({ tokensBefore, tokensAfter, errorMessage: message.errorMessage ?? "Model context window exceeded." });
+            retryError = message;
+          } else if (
+            !emittedContent
+            && transientRetries < MODEL_RETRY_DELAYS_MS.length
+            && (firstEventTimedOut || isRetryableAssistantError(message))
+          ) {
             retryError = message;
           } else {
             if (pendingStart) output.push(pendingStart);
             output.push({ type: "error", reason: "error", error: message });
             return;
+          }
+        } finally {
+          for (const signal of linkedSignals) {
+            signal.removeEventListener("abort", abortAttempt);
           }
         }
 
@@ -393,13 +537,17 @@ function createRetryingStreamFn(
           return;
         }
 
-        const retry = attempt + 1;
+        if (contextRetryAttempted && isContextWindowAssistantError(retryError)) {
+          continue;
+        }
+
+        const retry = transientRetries + 1;
         await options.onRetry?.({
           retry,
           maxRetries: MODEL_RETRY_DELAYS_MS.length,
           errorMessage: retryError.errorMessage ?? "Transient model error.",
         });
-        if (!await retryDelay(MODEL_RETRY_DELAYS_MS[attempt]!, options.signal)) {
+        if (!await retryDelay(MODEL_RETRY_DELAYS_MS[transientRetries]!, options.signal)) {
           output.push({
             type: "error",
             reason: "aborted",
@@ -407,10 +555,41 @@ function createRetryingStreamFn(
           });
           return;
         }
+        transientRetries += 1;
       }
     })();
     return output;
   };
+}
+
+function nextModelEvent(
+  iterator: AsyncIterator<AssistantMessageEvent>,
+  timeoutMs: number,
+  onTimeout: () => void,
+): Promise<IteratorResult<AssistantMessageEvent>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout();
+      reject(new Error(`Model stream produced no content for ${timeoutMs}ms.`));
+    }, Math.max(1, timeoutMs));
+    iterator.next().then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function isContextWindowAssistantError(message: AssistantMessage): boolean {
+  const normalized = message.errorMessage?.toLowerCase() ?? "";
+  return normalized.includes("context window")
+    || normalized.includes("maximum context length")
+    || normalized.includes("input exceeds the context");
 }
 
 function retryDelay(delayMs: number, signal?: AbortSignal): Promise<boolean> {
@@ -562,22 +741,123 @@ function createToolCallFromHook(
 function toolResultContent(
   result: ResearchToolExecutionResult,
 ): [{ type: "text"; text: string }] {
+  const serialized = JSON.stringify(
+    {
+      status: result.status,
+      summary: result.summary,
+      output: result.output,
+      error: result.error,
+      followUpActions: result.followUpActions,
+    },
+    null,
+    2,
+  );
   return [
     {
       type: "text",
-      text: JSON.stringify(
-        {
-          status: result.status,
-          summary: result.summary,
-          output: result.output,
-          error: result.error,
-          followUpActions: result.followUpActions,
-        },
-        null,
-        2,
-      ),
+      text: truncateModelToolResult(serialized),
     },
   ];
+}
+
+export function compactAgentContext(
+  messages: AgentMessage[],
+  contextWindow = 128_000,
+  force = false,
+): AgentMessage[] {
+  const configuredTokens = Math.max(
+    MIN_ACTIVE_CONTEXT_TOKENS,
+    (Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : 128_000)
+      - MODEL_CONTEXT_RESERVE_TOKENS,
+  );
+  const usableTokens = force
+    ? Math.max(MIN_ACTIVE_CONTEXT_TOKENS, Math.floor(configuredTokens * 0.7))
+    : configuredTokens;
+  if (!force && estimatedMessageTokens(messages) <= usableTokens) return messages;
+
+  const compacted = structuredClone(messages) as AgentMessage[];
+  const toolResultIndexes = compacted.flatMap((message, index) =>
+    isRecord(message) && message.role === "toolResult" ? [index] : []
+  );
+  const replaceThrough = Math.max(0, toolResultIndexes.length - RECENT_TOOL_RESULTS_TO_KEEP);
+  for (const index of toolResultIndexes.slice(0, replaceThrough)) {
+    compacted[index] = compactToolResultMessage(compacted[index]!);
+    if (estimatedMessageTokens(compacted) <= usableTokens) return compacted;
+  }
+
+  for (const index of toolResultIndexes.slice(replaceThrough)) {
+    compacted[index] = compactToolResultMessage(compacted[index]!);
+    if (estimatedMessageTokens(compacted) <= usableTokens) return compacted;
+  }
+
+  const firstUserIndex = compacted.findIndex((message) => isRecord(message) && message.role === "user");
+  const firstMessage = firstUserIndex >= 0 ? compacted[firstUserIndex] : undefined;
+  const notice: Message = {
+    role: "user",
+    timestamp: Date.now(),
+    content: "Earlier turns were removed to keep this research session within the model context window. Durable memory remains available; search it before repeating prior work.",
+  };
+  const fixedTokens = estimatedMessageTokens([...(firstMessage ? [firstMessage] : []), notice]);
+  const recentBudget = Math.max(8_000, usableTokens - fixedTokens);
+  let recentTokens = 0;
+  let start = compacted.length;
+  for (let index = compacted.length - 1; index >= 0; index -= 1) {
+    if (index === firstUserIndex) continue;
+    const nextTokens = estimateTokens(compacted[index]!);
+    if (recentTokens + nextTokens > recentBudget && start < compacted.length) break;
+    recentTokens += nextTokens;
+    start = index;
+  }
+  while (start > 0 && isRecord(compacted[start]) && compacted[start]!.role === "toolResult") {
+    start -= 1;
+  }
+  return [
+    ...(firstMessage ? [firstMessage] : []),
+    notice,
+    ...compacted.slice(start).filter((_message, index) => start + index !== firstUserIndex),
+  ];
+}
+
+function compactToolResultMessage(message: AgentMessage): AgentMessage {
+  if (!isRecord(message) || message.role !== "toolResult") return message;
+  const details = isRecord(message.details) ? message.details : {};
+  const summary = typeof details.summary === "string" ? details.summary.trim() : "";
+  const originalText = Array.isArray(message.content)
+    ? message.content
+        .filter((item): item is { type: "text"; text: string } =>
+          isRecord(item) && item.type === "text" && typeof item.text === "string"
+        )
+        .map((item) => item.text)
+        .join("\n")
+    : "";
+  const preview = originalText.length > COMPACTED_TOOL_RESULT_MAX_CHARS
+    ? `${originalText.slice(0, COMPACTED_TOOL_RESULT_MAX_CHARS)}\n…`
+    : originalText;
+  return {
+    ...message,
+    content: [{
+      type: "text",
+      text: [
+        `[Earlier ${String(message.toolName ?? "tool")} output compacted for context.]`,
+        ...(summary ? [`Summary: ${summary}`] : []),
+        ...(preview ? [preview] : []),
+      ].join("\n"),
+    }],
+  } as AgentMessage;
+}
+
+function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
+  return messages.reduce((total, message) => total + estimateTokens(message), 0);
+}
+
+function truncateModelToolResult(text: string): string {
+  if (text.length <= MODEL_TOOL_RESULT_MAX_CHARS) return text;
+  const half = Math.floor(MODEL_TOOL_RESULT_MAX_CHARS / 2);
+  return [
+    text.slice(0, half),
+    `\n\n[Tool result truncated for model context: ${text.length - MODEL_TOOL_RESULT_MAX_CHARS} characters omitted. Re-run a narrower command if the omitted section is needed.]\n\n`,
+    text.slice(-half),
+  ].join("");
 }
 
 function assistantText(

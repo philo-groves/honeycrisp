@@ -3,10 +3,11 @@ import type { Readable } from "node:stream";
 export type HoneycrispControlMessage =
   | { schemaVersion: 1; type: "pause" }
   | { schemaVersion: 1; type: "resume" }
+  | { schemaVersion: 1; type: "stop" }
   | { schemaVersion: 1; type: "steer"; instruction: string };
 
 export type HoneycrispControlEvent =
-  | { type: "pause" | "resume" | "steer"; accepted: true }
+  | { type: "pause" | "resume" | "stop" | "steer"; accepted: true }
   | { type: "invalid"; accepted: false; error: string };
 
 export class HoneycrispControlStream {
@@ -14,6 +15,7 @@ export class HoneycrispControlStream {
   private paused = false;
   private readonly steeringInstructions: string[] = [];
   private readonly resumeWaiters = new Set<() => void>();
+  private readonly stopController = new AbortController();
   private started = false;
 
   public constructor(
@@ -28,6 +30,10 @@ export class HoneycrispControlStream {
     this.input.on("data", this.handleData);
     this.input.on("end", this.handleEnd);
     this.input.resume();
+  }
+
+  public get signal(): AbortSignal {
+    return this.stopController.signal;
   }
 
   public close(): void {
@@ -74,6 +80,10 @@ export class HoneycrispControlStream {
       } else if (message.type === "resume") {
         this.paused = false;
         this.resolveResumeWaiters();
+      } else if (message.type === "stop") {
+        this.paused = false;
+        this.resolveResumeWaiters();
+        this.stopController.abort(new Error("Honeycrisp run stopped by the host."));
       } else {
         this.steeringInstructions.push(message.instruction);
       }
@@ -103,7 +113,7 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
   if (!isRecord(parsed) || parsed.schemaVersion !== 1) {
     throw new Error("Control messages require schemaVersion 1.");
   }
-  if (parsed.type === "pause" || parsed.type === "resume") {
+  if (parsed.type === "pause" || parsed.type === "resume" || parsed.type === "stop") {
     return { schemaVersion: 1, type: parsed.type };
   }
   if (parsed.type === "steer") {

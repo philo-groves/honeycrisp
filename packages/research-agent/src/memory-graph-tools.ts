@@ -42,7 +42,7 @@ const SAVE_PARAMETERS = {
   type: "object",
   required: ["type", "title"],
   properties: {
-    id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string", enum: [...MEMORY_NODE_TYPES], description: "Use bug only for confirmed historical flaw precedent; use primitive for a flaw established during current research." }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
+    id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string", enum: [...MEMORY_NODE_TYPES], description: "Use hypothesis for a specific testable but unproven proposition, bug only for confirmed historical precedent, primitive for a flaw proven during current research, and chain for end-to-end reachability and impact. Evidence and finding are not memory node types." }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
     status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
     tags: { type: "array", items: { type: "string" } },
     attributes: {
@@ -88,6 +88,14 @@ const SAVE_PARAMETERS = {
         },
       },
     },
+    {
+      if: { properties: { type: { const: "hypothesis" } }, required: ["type"] },
+      then: {
+        properties: {
+          status: { type: "string", enum: ["draft", "suspected", "rejected", "stale"] },
+        },
+      },
+    },
   ],
 };
 const CORRECT_PARAMETERS = {
@@ -124,7 +132,7 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
       });
     }),
     tool("memory.get", "memory_get", "Read one durable memory node with evidence references.", "read", GET_PARAMETERS, (input) => store.get(requiredString(input.id, "id"))),
-    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge with asset links and evidence. Choose session for run-specific state, workspace for target-specific knowledge, or subject for knowledge useful across this owner's workspaces. Use bug only for a confirmed historical flaw precedent with an affected asset and precedent evidence. Use primitive for a flaw established during current research, trajectories for reusable research sequences, and chains for reviewed end-to-end reachability and impact. Do not store transcripts, routine narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
+    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge with asset links and evidence references. Choose session for run-specific state, workspace for target-specific knowledge, or subject for knowledge useful across this owner's workspaces. Use hypothesis for a testable unproven proposition, then reject it when disproven or reclassify it as a primitive or chain when proven. Use bug only for a confirmed historical flaw precedent with an affected asset and precedent evidence. Use primitive for a flaw established during current research, trajectories for reusable research sequences, and chains for reviewed end-to-end reachability and impact. Evidence and finding are not node types. Do not store transcripts, routine narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
       const id = string(input.id);
       const tier = string(input.tier);
       return store.save({

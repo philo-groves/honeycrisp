@@ -24,7 +24,7 @@ pnpm start -p "Investigate the parser behavior in this workspace"
 
 Honeycrisp passes the request, authorized workspace and source context, bounded tiered graph memory, and selected skills to Pi's native agent loop. Pi supplies the actual research and collaboration tool definitions separately. Internal database, artifact, and peer-storage paths are runtime details rather than prompt guidance. The model owns investigation planning, tool use, and completion; Honeycrisp does not create a parallel goal tree, subgoal controller, or outer loop.
 
-The Pi agent can delegate bounded independent work through Codex-style collaboration tools: `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, `list_agents`, and `wait_agent`. Children share the current workspace, tool policy, storage, and memory tier context. A child may inherit all, none, or the last N user turns. Full-history children inherit the parent model and effort; partial or fresh children may choose another model from the active provider and a supported effort. The initial runtime permits six concurrent children at one level of depth.
+The Pi agent can delegate bounded independent work through Codex-style collaboration tools: `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, `list_agents`, and `wait_agent`. Children share the current workspace, tool policy, storage, and memory tier context. A child may inherit all, none, or the last N user turns. Full-history children inherit the parent model and effort; partial or fresh children may choose another model from the active provider and a supported effort. The initial runtime permits six concurrent children at one level of depth. Collaboration waits are capped at one minute and return immediately when the caller has no running descendants. A model stream that produces no response content for three minutes is aborted and retried through the transient-error path.
 
 On a real run, Honeycrisp opens the workspace database at `.honeycrisp/memory/memory.sqlite`, exposes configured research tools plus a small durable knowledge graph, and runs the selected model through Pi. Run state, transcripts, and tool traces are operational data; they are not automatically promoted into durable knowledge. The model explicitly searches and updates concise reusable nodes when the research warrants it.
 
@@ -84,9 +84,11 @@ pnpm start --mock \
 The schema-v4 capture records the request, agent result, model/tool metadata,
 event timeline, bounded memory context, storage manifest, and workspace context.
 Private model thought traces are not persisted in graph memory.
-Subagent identity, lifecycle, model calls, result text, and errors are retained in `agent.raw.subagents` in the flow capture. Research tool events produced by children remain part of the same authorized session event stream.
+Subagent identity, lifecycle, model calls, result text, and errors are retained in `agent.raw.subagents` in the flow capture. Research tool events produced by children remain part of the same authorized session event stream. Every collaboration call also emits caller-attributed `tool.requested` and `tool.observed` events, including failed calls, so root and child coordination is visible live and remains replayable from the capture.
 
-Durable knowledge uses typed nodes (`asset`, `bug`, `invariant`, `mitigation`, `source`, `sink`, `hypothesis`, `primitive`, `chain`, `procedure`, and `trajectory`), directed relationships, tags, asset links, and lightweight evidence references. Saves are additive; exact corrections require the current node revision. Transcripts, task narration, and bulk tool output do not belong in the graph.
+Long-running root and child sessions keep their active model context bounded independently of the stored trace. Honeycrisp retains the task and recent turns, compacts older bulky tool results before the model limit, and retries once with forced compaction when the provider reports context-window pressure. Full tool observations remain available in the research event stream and durable memory remains the source for reusable research state.
+
+Durable knowledge uses typed nodes (`asset`, `bug`, `invariant`, `mitigation`, `source`, `sink`, `hypothesis`, `primitive`, `chain`, `procedure`, and `trajectory`), directed relationships, tags, asset links, and lightweight evidence references. A `hypothesis` is a specific, testable but unproven proposition: keep it suspected while active, reject it when disproven, and reclassify it as a primitive or chain when proven. `evidence` and `finding` are not node types; evidence remains attached references and proven flaws are primitives or chains. Saves are additive; exact corrections require the current node revision. Transcripts, task narration, and bulk tool output do not belong in the graph.
 
 Large raw outputs and generated artifacts remain files under `.honeycrisp/memory/artifacts/`; graph evidence stores relative pointers and locators rather than copying file contents into SQLite. Host interfaces such as Beale use the same SQLite file for compatible headless and desktop operation. Honeycrisp owns this database contract; interface-specific visualization and disclosure/export flows can add operational tables without creating a second workspace database.
 
@@ -119,11 +121,13 @@ stdin while a run is active:
 {"schemaVersion":1,"type":"pause"}
 {"schemaVersion":1,"type":"resume"}
 {"schemaVersion":1,"type":"steer","instruction":"Inspect the authorization boundary next."}
+{"schemaVersion":1,"type":"stop"}
 ```
 
 Pause holds the agent at its next safe turn boundary until resume arrives.
 Steering is injected as a user message into the active Pi agent loop before its
-next model turn. With `--event-stream`, accepted or rejected control messages
+next model turn. Stop aborts the root and every pending or running child. With
+`--event-stream`, accepted or rejected control messages
 are reported as `agent.event` records with `eventType: "control.received"`.
 
 ## Auth

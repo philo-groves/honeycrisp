@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { createResearchEventId, nowIso } from "./ids.js";
 import type { ResearchEvent } from "./types.js";
 
 export const SUBAGENT_COLLABORATION_TOOLS = [
@@ -48,6 +49,7 @@ export interface CreateSubagentManagerOptions {
   signal?: AbortSignal;
   run(request: SubagentRunRequest): Promise<SubagentRunResult>;
   onActivity?: (activity: SubagentActivity) => void | Promise<void>;
+  onToolEvent?: (event: ResearchEvent) => void | Promise<void>;
 }
 
 export interface SubagentActivity {
@@ -93,7 +95,7 @@ const DEFAULT_MAX_THREADS = 6;
 const DEFAULT_MAX_DEPTH = 1;
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const MIN_WAIT_TIMEOUT_MS = 1_000;
-const MAX_WAIT_TIMEOUT_MS = 3_600_000;
+const MAX_WAIT_TIMEOUT_MS = 60_000;
 const TASK_NAME_PATTERN = /^[a-z0-9_]+$/;
 const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -154,7 +156,7 @@ export class SubagentManager {
   }
 
   public allToolEvents(): ResearchEvent[] {
-    return [...this.sessions.values()].flatMap((session) => session.id === "root" ? [] : session.toolEvents);
+    return [...this.sessions.values()].flatMap((session) => session.toolEvents);
   }
 
   public snapshot(): Record<string, unknown> {
@@ -194,16 +196,25 @@ export class SubagentManager {
 
   public interruptAll(): void {
     for (const session of this.sessions.values()) {
-      if (session.id !== "root" && session.status === "running") {
+      if (session.id !== "root" && (session.status === "running" || session.status === "pending")) {
         session.status = "interrupted";
+        session.completedAt = new Date().toISOString();
         session.controller?.abort();
+        void this.emitActivity({
+          type: "interrupted",
+          agentId: session.id,
+          agentPath: session.path,
+          parentId: session.parentId,
+          status: session.status,
+        });
       }
     }
     this.notifyActivity();
   }
 
   private createSpawnTool(agentId: string): AgentTool {
-    return agentTool(
+    return this.collaborationTool(
+      agentId,
       "spawn_agent",
       "Spawn agent",
       "Spawn a bounded subagent for an independent task. The child shares this authorized workspace and tool policy. fork_turns accepts none, all, or a positive integer string. Full-history children inherit the parent model and reasoning effort; partial or fresh children may override them.",
@@ -224,7 +235,8 @@ export class SubagentManager {
   }
 
   private createSendMessageTool(agentId: string): AgentTool {
-    return agentTool(
+    return this.collaborationTool(
+      agentId,
       "send_message",
       "Send message",
       "Queue a message for an existing agent. It is delivered at the next message boundary and does not start an idle agent turn.",
@@ -234,7 +246,8 @@ export class SubagentManager {
   }
 
   private createFollowupTool(agentId: string): AgentTool {
-    return agentTool(
+    return this.collaborationTool(
+      agentId,
       "followup_task",
       "Follow-up task",
       "Send a follow-up task to a non-root agent. Running agents receive it at a message boundary; idle completed or interrupted agents start another turn with their existing session context.",
@@ -244,7 +257,8 @@ export class SubagentManager {
   }
 
   private createInterruptTool(agentId: string): AgentTool {
-    return agentTool(
+    return this.collaborationTool(
+      agentId,
       "interrupt_agent",
       "Interrupt agent",
       "Interrupt another agent's active turn without deleting its session, messages, or result history.",
@@ -254,7 +268,8 @@ export class SubagentManager {
   }
 
   private createListTool(agentId: string): AgentTool {
-    return agentTool(
+    return this.collaborationTool(
+      agentId,
       "list_agents",
       "List agents",
       "List agents in the current root tree, including their canonical paths, status, model, reasoning effort, and inheritance mode.",
@@ -268,7 +283,8 @@ export class SubagentManager {
   }
 
   private createWaitTool(agentId: string): AgentTool {
-    return agentTool(
+    return this.collaborationTool(
+      agentId,
       "wait_agent",
       "Wait for agent activity",
       "Wait for a mailbox message or final-status notification from any agent. Updates are delivered separately into the caller's conversation.",
@@ -281,6 +297,46 @@ export class SubagentManager {
       },
       async (_toolCallId, input) => this.wait(agentId, optionalNumber(input.timeout_ms)),
     );
+  }
+
+  private collaborationTool(
+    agentId: string,
+    name: string,
+    label: string,
+    description: string,
+    parameters: Record<string, unknown>,
+    execute: (toolCallId: string, input: Record<string, unknown>) => unknown | Promise<unknown>,
+  ): AgentTool {
+    return agentTool(name, label, description, parameters, async (toolCallId, input) => {
+      const session = this.ensureSession(agentId);
+      const normalizedInputs = structuredClone(input);
+      this.recordToolEvent(session, collaborationRequestedEvent(toolCallId, name, normalizedInputs));
+      const startedAt = nowIso();
+      try {
+        const output = await execute(toolCallId, input);
+        this.recordToolEvent(session, collaborationObservedEvent(toolCallId, name, normalizedInputs, startedAt, output));
+        return output;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.recordToolEvent(session, collaborationObservedEvent(toolCallId, name, normalizedInputs, startedAt, undefined, message));
+        throw error;
+      }
+    });
+  }
+
+  private recordToolEvent(session: SubagentSession, event: ResearchEvent): void {
+    const attributed = {
+      ...event,
+      agentId: session.id,
+      agentPath: session.path,
+      parentAgentId: session.parentId ?? "",
+    };
+    session.toolEvents = [...session.toolEvents, attributed];
+    try {
+      void Promise.resolve(this.options.onToolEvent?.(attributed)).catch(() => undefined);
+    } catch {
+      // Tool-event streaming is observational and must not alter orchestration.
+    }
   }
 
   private spawn(
@@ -419,6 +475,13 @@ export class SubagentManager {
     if (session.mailbox.length > 0) {
       return { message: "Mailbox updates are ready.", timed_out: false };
     }
+    if (!this.hasRunningDescendant(session)) {
+      return {
+        message: "No descendant agents are currently running.",
+        timed_out: false,
+        idle: true,
+      };
+    }
     const timeoutMs = requestedTimeout ?? DEFAULT_WAIT_TIMEOUT_MS;
     if (!Number.isFinite(timeoutMs) || timeoutMs < MIN_WAIT_TIMEOUT_MS || timeoutMs > MAX_WAIT_TIMEOUT_MS) {
       throw new Error(`timeout_ms must be between ${MIN_WAIT_TIMEOUT_MS} and ${MAX_WAIT_TIMEOUT_MS}.`);
@@ -441,6 +504,14 @@ export class SubagentManager {
       }
     });
     return { message: changed ? "Agent activity is ready." : "Wait timed out.", timed_out: !changed };
+  }
+
+  private hasRunningDescendant(session: SubagentSession): boolean {
+    const descendantPrefix = `${session.path}/`;
+    return [...this.sessions.values()].some((candidate) =>
+      candidate.path.startsWith(descendantPrefix)
+      && (candidate.status === "pending" || candidate.status === "running")
+    );
   }
 
   private launch(session: SubagentSession, prompt: string, inheritedMessages: AgentMessage[]): void {
@@ -527,6 +598,47 @@ export class SubagentManager {
       // Activity streaming is observational and must not alter orchestration.
     }
   }
+}
+
+function collaborationRequestedEvent(toolCallId: string, toolName: string, normalizedInputs: Record<string, unknown>): ResearchEvent {
+  return {
+    id: createResearchEventId(),
+    kind: "tool.requested",
+    timestamp: nowIso(),
+    payload: {
+      toolActionId: toolCallId,
+      toolName,
+      normalizedInputs,
+      expectedOutputs: [],
+      budgetLimits: {},
+      summary: `Requested ${toolName}.`,
+    },
+  };
+}
+
+function collaborationObservedEvent(
+  toolCallId: string,
+  toolName: string,
+  normalizedInputs: Record<string, unknown>,
+  startedAt: string,
+  result?: unknown,
+  errorMessage?: string,
+): ResearchEvent {
+  return {
+    id: createResearchEventId(),
+    kind: "tool.observed",
+    timestamp: nowIso(),
+    payload: {
+      toolActionId: toolCallId,
+      toolName,
+      normalizedInputs,
+      status: errorMessage ? "error" : "complete",
+      startedAt,
+      completedAt: nowIso(),
+      summary: errorMessage ? `Failed ${toolName}: ${errorMessage}` : `Completed ${toolName}.`,
+      ...(errorMessage ? { error: { message: errorMessage } } : { result }),
+    },
+  };
 }
 
 function agentTool(

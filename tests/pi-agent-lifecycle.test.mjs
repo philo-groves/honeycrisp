@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  compactAgentContext,
   createPiAgentExecutor,
   createResearchPiAgent,
   createResearchSystemPrompt,
@@ -48,6 +49,34 @@ const COLLABORATION_TOOL_NAMES = [
   "list_agents",
   "wait_agent",
 ];
+
+test("agent context compacts old bulky tool results while preserving the task and latest result", () => {
+  const messages = [{ role: "user", content: "Primary research objective", timestamp: Date.now() }];
+  for (let index = 0; index < 10; index += 1) {
+    messages.push(assistant(toolCall("fixture_inspect", { path: `${index}.c` }, `tool_${index}`), "toolUse"));
+    messages.push({
+      role: "toolResult",
+      toolCallId: `tool_${index}`,
+      toolName: "fixture_inspect",
+      content: [{ type: "text", text: `${index === 9 ? "LATEST_RESULT\n" : ""}${"x".repeat(30_000)}` }],
+      details: { summary: `Inspected ${index}.c.` },
+      isError: false,
+      timestamp: Date.now(),
+    });
+  }
+
+  const compacted = compactAgentContext(messages, 100_000);
+  const serialized = JSON.stringify(compacted);
+
+  assert.match(serialized, /Primary research objective/);
+  assert.match(serialized, /LATEST_RESULT/);
+  assert.match(serialized, /output compacted for context/);
+  assert.ok(serialized.length < JSON.stringify(messages).length);
+  assert.ok(compacted.some((message) =>
+    message.role === "toolResult"
+    && JSON.stringify(message.content).includes("output compacted for context")
+  ));
+});
 
 test("direct Pi Agent and executor use the shared research system prompt", async () => {
   const directAgent = createResearchPiAgent({
@@ -229,6 +258,9 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   const systemPrompt = contexts[0].systemPrompt;
   assert.match(systemPrompt, /Never use the \$HOME environment variable/);
   assert.match(systemPrompt, /Use durable memory as a concise research graph/);
+  assert.match(systemPrompt, /Save a hypothesis for a specific, testable but unproven security proposition/);
+  assert.match(systemPrompt, /Evidence is attached to graph nodes as supporting references/);
+  assert.match(systemPrompt, /Do not create finding memories/);
   assert.match(systemPrompt, /Save user-controlled ingress as sources/);
   assert.match(systemPrompt, /static analysis/);
   assert.match(systemPrompt, /realistic proof-of-vulnerability/);
@@ -288,6 +320,87 @@ test("Pi Agent retries a transient provider failure before emitting a terminal e
   assert.equal(contexts.length, 2);
   assert.ok(result.agentRun.output.raw.agentEvents.some((event) => event.type === "model_retry" && event.retry === 1));
   assert.ok(liveEvents.some((event) => event.kind === "agent.event" && event.payload.type === "model_retry"));
+});
+
+test("Pi Agent retries a model stream that produces no response events", async () => {
+  let calls = 0;
+  const liveEvents = [];
+  const models = {
+    getModel() {
+      return FAUX_MODEL;
+    },
+    streamSimple(_model, _context, options = {}) {
+      calls += 1;
+      if (calls > 1) return streamFrom(assistant("## Result\nRecovered from a silent model stream."));
+      return {
+        async *[Symbol.asyncIterator]() {
+          await new Promise((_resolve, reject) => {
+            options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        },
+      };
+    },
+  };
+  const result = await runResearchAgent({
+    prompt: "Recover if the model stream becomes silent.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models,
+      modelFirstEventTimeoutMs: 10,
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(calls, 2);
+  assert.match(result.agentRun.output.text, /Recovered from a silent model stream/);
+  assert.ok(liveEvents.some((event) =>
+    event.kind === "agent.event"
+    && event.payload.type === "model_retry"
+    && event.payload.errorMessage.includes("produced no content")
+  ));
+});
+
+test("Pi Agent compacts tool history and retries once after a context-window error", async () => {
+  const contexts = [];
+  const liveEvents = [];
+  const tool = createFixtureInspectTool([]);
+  const execute = tool.execute;
+  tool.execute = async (action) => {
+    const result = await execute(action);
+    return { ...result, output: { path: action.input.path, text: "x".repeat(100_000) } };
+  };
+
+  const result = await runResearchAgent({
+    prompt: "Inspect a large fixture without losing the session.",
+    tools: [tool.descriptor],
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistant(toolCall("fixture_inspect", { path: "large.c" }, "tool_large"), "toolUse"),
+        assistantError("Codex error: Your input exceeds the context window of this model."),
+        assistant("## Result\nRecovered after compacting old tool output."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry([tool]),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(contexts.length, 3);
+  assert.match(contexts[2].messageContents.join("\n"), /output compacted for context/);
+  assert.ok(contexts[2].messageContents.join("\n").length < contexts[1].messageContents.join("\n").length);
+  assert.ok(liveEvents.some((event) =>
+    event.kind === "agent.event"
+    && event.payload.type === "context_compacted"
+    && event.payload.reason === "context_window_error"
+  ));
 });
 
 test("Pi Agent beforeToolCall preflight preserves blocked tool events", async () => {
@@ -392,6 +505,17 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   const capturedChildTool = result.agentRun.output.toolEvents.find((event) => event.agentPath === "/root/parser_review");
   assert.equal(capturedChildTool.agentId, child.id);
   assert.equal(capturedChildTool.parentAgentId, "root");
+  const rootSpawnEvents = result.agentRun.output.toolEvents.filter(
+    (event) => event.agentPath === "/root" && event.payload.toolName === "spawn_agent",
+  );
+  assert.deepEqual(rootSpawnEvents.map((event) => event.kind), ["tool.requested", "tool.observed"]);
+  assert.equal(rootSpawnEvents[1].payload.result.task_name, "/root/parser_review");
+  assert.ok(liveEvents.some((event) =>
+    event.kind === "research.event"
+    && event.payload.agentPath === "/root"
+    && event.payload.event.kind === "tool.observed"
+    && event.payload.event.payload.toolName === "spawn_agent"
+  ));
 });
 
 test("Pi Agent executor streams live thought events", async () => {

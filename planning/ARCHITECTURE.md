@@ -52,7 +52,9 @@ Each child receives an opaque id and canonical path such as `/root/parser_review
 
 Messages use per-session mailboxes. `send_message` queues without starting an idle turn. `followup_task` starts another turn for an idle non-root child or reaches a running child at a message boundary. Interrupting a child aborts only its active turn and keeps its session available. Completion and failure notifications are delivered to the parent conversation.
 
-Children share the active workspace, research tool registry, governance, storage, memory tier context, and cancellation boundary. Delegation cannot broaden authorization or permissions.
+Children share the active workspace, research tool registry, governance, storage, memory tier context, and cancellation boundary. Delegation cannot broaden authorization or permissions. A host stop control aborts the root and every pending or running child; interrupted child states are emitted before the process exits. Model streams that produce no response content for three minutes are retried so one silent provider request cannot indefinitely hold the tree open.
+
+Collaboration calls use the same requested/observed research-event envelope as executable tools, but they remain coordination operations rather than research action classes. Events carry the calling agent identity and preserve normalized inputs, results, and failures for live host rendering and durable replay.
 
 ## Durable Knowledge
 
@@ -66,7 +68,7 @@ Knowledge is tiered by:
 
 Transcripts, narration, and bulk tool output are operational data, not durable knowledge. Large outputs remain artifact files referenced by concise graph nodes.
 
-The agent searches memory early and when research crosses system boundaries. `bug` is reserved for a confirmed historical flaw precedent that predates the current research, is linked to affected assets, and carries precedent evidence. A flaw established during current research is a `primitive`, or part of a `chain` when reachability and impact are established. The graph also records user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, exploitation blockers as mitigations, and reusable sequences of important research actions as trajectories. Routine action narration is not durable knowledge. Exact correction can reclassify a node without discarding its evidence or relationships.
+The agent searches memory early and when research crosses system boundaries. A `hypothesis` records a specific, testable but unproven security proposition: it remains suspected while active, becomes rejected when disproven, and is reclassified as a primitive or chain when proof establishes its role. `bug` is reserved for a confirmed historical flaw precedent that predates the current research, is linked to affected assets, and carries precedent evidence. A flaw established during current research is a `primitive`, or part of a `chain` when reachability and impact are established. The graph also records user-controlled ingress as sources, dangerous operations as sinks, always-true security rules as invariants, exploitation blockers as mitigations, and reusable sequences of important research actions as trajectories. Evidence is attached to nodes as supporting references rather than stored as an `evidence` node, and proven flaws use primitives or chains rather than a `finding` node. Routine action narration is not durable knowledge. Exact correction can reclassify a node without discarding its evidence or relationships.
 
 Memory queries are tokenized and relevance-ranked across ids, types, content, assets, tags, and evidence. An exact node id embedded in a broader natural-language query remains directly retrievable.
 

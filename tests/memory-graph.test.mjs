@@ -56,6 +56,10 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
       () => store.save({ type: "bug", title: "Current parser flaw", status: "confirmed" }),
       /historicalPrecedent/,
     );
+    assert.throws(
+      () => store.save({ type: "hypothesis", title: "Proven parser flaw", status: "confirmed" }),
+      /must be reclassified as a primitive or chain/,
+    );
 
     const candidate = store.save({
       type: "primitive",
@@ -94,12 +98,15 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     assert.deepEqual(descriptors.map((tool) => tool.name), ["memory.search", "memory.get", "memory.save", "memory.correct", "memory.link"]);
     const saveSchema = descriptors.find((tool) => tool.name === "memory.save").inputSchema;
     assert.deepEqual(saveSchema.properties.type.enum, ["asset", "bug", "invariant", "mitigation", "source", "sink", "hypothesis", "primitive", "chain", "procedure", "trajectory"]);
+    assert.equal(saveSchema.properties.type.enum.includes("evidence"), false);
+    assert.equal(saveSchema.properties.type.enum.includes("finding"), false);
     assert.deepEqual(saveSchema.properties.status.enum, ["draft", "suspected", "confirmed", "rejected", "stale"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.kind.enum, ["code", "artifact", "command", "url", "human_note"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.pathBase.enum, ["workspace", "repository", "asset_root", "external"]);
     assert.deepEqual(saveSchema.allOf[0].then.properties.attributes.required, ["impact", "reachability"]);
     assert.deepEqual(saveSchema.allOf[1].then.required, ["status", "assetIds", "attributes", "evidence"]);
     assert.deepEqual(saveSchema.allOf[1].then.properties.attributes.required, ["historicalPrecedent"]);
+    assert.deepEqual(saveSchema.allOf[2].then.properties.status.enum, ["draft", "suspected", "rejected", "stale"]);
     const correctSchema = descriptors.find((tool) => tool.name === "memory.correct").inputSchema;
     assert.deepEqual(correctSchema.properties.type.enum, saveSchema.properties.type.enum);
     const source = await registry.execute({ id: "save_source", actionClass: "synthesize", toolName: "memory.save", input: { type: "source", title: "Request body" } });

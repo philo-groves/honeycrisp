@@ -1097,6 +1097,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
         executor: agentExecutor,
         ...(liveEventSink ? { eventSink: liveEventSink } : {}),
+        ...(controlStream ? { signal: controlStream.signal } : {}),
       });
 
       if (args.capturePath) {

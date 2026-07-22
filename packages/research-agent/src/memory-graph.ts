@@ -655,6 +655,9 @@ function validateNodeInput(input: { type: unknown; title: unknown; tier?: unknow
 }
 
 function validateCompleteNode(node: Pick<MemoryNode, "type" | "status" | "attributes" | "assetIds" | "evidence">): void {
+  if (node.type === "hypothesis" && node.status === "confirmed") {
+    throw new Error("A proven hypothesis must be reclassified as a primitive or chain instead of confirmed in place.");
+  }
   if (node.type !== "bug") return;
   if (node.status !== "confirmed") throw new Error("Bug memories are reserved for confirmed historical flaw precedents.");
   if (node.attributes.historicalPrecedent !== true) throw new Error("Bug memories require attributes.historicalPrecedent=true.");

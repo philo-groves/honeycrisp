@@ -47,3 +47,19 @@ test("control stream rejects malformed messages without closing", async () => {
   assert.equal(input.isPaused(), true);
   input.destroy();
 });
+
+test("control stream exposes a stop signal for the complete agent tree", async () => {
+  const input = new PassThrough();
+  const events = [];
+  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  controls.start();
+
+  assert.equal(controls.signal.aborted, false);
+  input.write(`${JSON.stringify({ schemaVersion: 1, type: "stop" })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(controls.signal.aborted, true);
+  assert.deepEqual(events, [{ type: "stop", accepted: true }]);
+  controls.close();
+  input.destroy();
+});
