@@ -1164,6 +1164,7 @@ function createRealAgentExecutor(
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
     ...(controlStream
       ? {
+          getModelSelection: () => controlStream.getModelSelection(),
           getSteeringMessages: async () =>
             (await controlStream.takeSteeringInstructions()).map((instruction) => ({
               role: "user" as const,

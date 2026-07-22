@@ -4,16 +4,24 @@ export type HoneycrispControlMessage =
   | { schemaVersion: 1; type: "pause" }
   | { schemaVersion: 1; type: "resume" }
   | { schemaVersion: 1; type: "stop" }
-  | { schemaVersion: 1; type: "steer"; instruction: string };
+  | { schemaVersion: 1; type: "configure"; modelSelection: HoneycrispModelSelection }
+  | { schemaVersion: 1; type: "steer"; instruction: string; modelSelection?: HoneycrispModelSelection };
+
+export interface HoneycrispModelSelection {
+  provider: string;
+  model: string;
+  reasoningEffort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+}
 
 export type HoneycrispControlEvent =
-  | { type: "pause" | "resume" | "stop" | "steer"; accepted: true }
+  | { type: "pause" | "resume" | "stop" | "configure" | "steer"; accepted: true }
   | { type: "invalid"; accepted: false; error: string };
 
 export class HoneycrispControlStream {
   private buffer = "";
   private paused = false;
   private readonly steeringInstructions: string[] = [];
+  private modelSelection: HoneycrispModelSelection | undefined;
   private readonly resumeWaiters = new Set<() => void>();
   private readonly stopController = new AbortController();
   private started = false;
@@ -52,6 +60,10 @@ export class HoneycrispControlStream {
     return this.steeringInstructions.splice(0);
   }
 
+  public getModelSelection(): HoneycrispModelSelection | undefined {
+    return this.modelSelection ? { ...this.modelSelection } : undefined;
+  }
+
   private readonly handleData = (chunk: string | Buffer): void => {
     this.buffer += chunk.toString();
     let newlineIndex = this.buffer.indexOf("\n");
@@ -84,7 +96,10 @@ export class HoneycrispControlStream {
         this.paused = false;
         this.resolveResumeWaiters();
         this.stopController.abort(new Error("Honeycrisp run stopped by the host."));
+      } else if (message.type === "configure") {
+        this.modelSelection = message.modelSelection;
       } else {
+        if (message.modelSelection) this.modelSelection = message.modelSelection;
         this.steeringInstructions.push(message.instruction);
       }
       this.onEvent({ type: message.type, accepted: true });
@@ -119,9 +134,27 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
   if (parsed.type === "steer") {
     const instruction = typeof parsed.instruction === "string" ? parsed.instruction.trim() : "";
     if (!instruction) throw new Error("Steering instructions cannot be empty.");
-    return { schemaVersion: 1, type: "steer", instruction };
+    const modelSelection = parsed.modelSelection === undefined ? undefined : parseModelSelection(parsed.modelSelection);
+    return { schemaVersion: 1, type: "steer", instruction, ...(modelSelection ? { modelSelection } : {}) };
+  }
+  if (parsed.type === "configure") {
+    return { schemaVersion: 1, type: "configure", modelSelection: parseModelSelection(parsed.modelSelection) };
   }
   throw new Error("Unknown Honeycrisp control message type.");
+}
+
+function parseModelSelection(value: unknown): HoneycrispModelSelection {
+  if (!isRecord(value)) throw new Error("Model selection must be an object.");
+  const provider = typeof value.provider === "string" ? value.provider.trim() : "";
+  const model = typeof value.model === "string" ? value.model.trim() : "";
+  const reasoningEffort = value.reasoningEffort;
+  if (!provider || !model) throw new Error("Model selection requires provider and model.");
+  if (
+    reasoningEffort !== "off" && reasoningEffort !== "minimal" && reasoningEffort !== "low"
+    && reasoningEffort !== "medium" && reasoningEffort !== "high" && reasoningEffort !== "xhigh"
+    && reasoningEffort !== "max"
+  ) throw new Error("Model selection has an unsupported reasoning effort.");
+  return { provider, model, reasoningEffort };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

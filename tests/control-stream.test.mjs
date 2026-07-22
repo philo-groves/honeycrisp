@@ -48,6 +48,29 @@ test("control stream rejects malformed messages without closing", async () => {
   input.destroy();
 });
 
+test("control stream retains the latest model selection from steering", async () => {
+  const input = new PassThrough();
+  const controls = new HoneycrispControlStream(input);
+  controls.start();
+
+  input.write(`${JSON.stringify({
+    schemaVersion: 1,
+    type: "steer",
+    instruction: "Continue with the selected model.",
+    modelSelection: { provider: "xai", model: "grok-4.5", reasoningEffort: "high" },
+  })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(controls.getModelSelection(), {
+    provider: "xai",
+    model: "grok-4.5",
+    reasoningEffort: "high",
+  });
+  assert.deepEqual(await controls.takeSteeringInstructions(), ["Continue with the selected model."]);
+  controls.close();
+  input.destroy();
+});
+
 test("control stream exposes a stop signal for the complete agent tree", async () => {
   const input = new PassThrough();
   const events = [];

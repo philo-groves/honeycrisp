@@ -130,6 +130,7 @@ stdin while a run is active:
 {"schemaVersion":1,"type":"pause"}
 {"schemaVersion":1,"type":"resume"}
 {"schemaVersion":1,"type":"steer","instruction":"Inspect the authorization boundary next."}
+{"schemaVersion":1,"type":"configure","modelSelection":{"provider":"openai-codex","model":"gpt-5.6-sol","reasoningEffort":"high"}}
 {"schemaVersion":1,"type":"stop"}
 ```
 
@@ -138,6 +139,8 @@ Steering is injected as a user message into the active Pi agent loop before its
 next model turn. Stop aborts the root and every pending or running child. With
 `--event-stream`, accepted or rejected control messages
 are reported as `agent.event` records with `eventType: "control.received"`.
+Model selections received through `configure` or `steer` apply to the root
+agent's next provider call; they do not interrupt an in-flight call.
 
 ## Auth
 

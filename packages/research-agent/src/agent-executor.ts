@@ -10,11 +10,13 @@ import type {
 } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
+  getSupportedThinkingLevels,
   isRetryableAssistantError,
   type AssistantMessage,
   type AssistantMessageEvent,
   type Message,
   type Models,
+  type ModelThinkingLevel,
   type SimpleStreamOptions,
   type ToolCall,
   type Usage,
@@ -54,6 +56,7 @@ export interface CreatePiAgentExecutorOptions {
   toolRegistry?: ResearchToolRegistry;
   toolExecution?: ToolExecutionMode;
   getSteeringMessages?: () => Promise<AgentMessage[]>;
+  getModelSelection?: () => { provider: string; model: string; reasoningEffort: ModelThinkingLevel } | undefined;
   modelFirstEventTimeoutMs?: number;
   subagents?: false | {
     maxThreads?: number;
@@ -184,7 +187,31 @@ export function createPiAgentExecutor(
         });
         const collaborationTools = subagents?.createTools(request.id) ?? [];
         const tools = [...researchTools, ...collaborationTools];
-        const streamFn = createRetryingStreamFn(models.streamSimple.bind(models), {
+        const activeModelSelection = (): { model: NonNullable<ReturnType<Models["getModel"]>>; reasoningEffort?: ModelThinkingLevel } => {
+          const selection = request.root ? options.getModelSelection?.() : undefined;
+          if (!selection) return {
+            model: sessionModel,
+            ...(request.reasoning ? { reasoningEffort: request.reasoning } : options.reasoning ? { reasoningEffort: options.reasoning } : {}),
+          };
+          const selectedModel = models.getModel(selection.provider, selection.model);
+          if (!selectedModel) throw new Error(`Unknown model ${selection.provider}/${selection.model}`);
+          if (!getSupportedThinkingLevels(selectedModel).includes(selection.reasoningEffort)) {
+            throw new Error(`${selectedModel.name} does not support ${selection.reasoningEffort} reasoning.`);
+          }
+          return { model: selectedModel, reasoningEffort: selection.reasoningEffort };
+        };
+        const dynamicStreamFn: StreamFn = (_model, context, streamOptions) => {
+          const active = activeModelSelection();
+          if (!options.getModelSelection || !request.root) {
+            return models.streamSimple(active.model, context, streamOptions);
+          }
+          const { reasoning: _previousReasoning, ...remainingOptions } = streamOptions ?? {};
+          return models.streamSimple(active.model, context, {
+            ...remainingOptions,
+            ...(active.reasoningEffort && active.reasoningEffort !== "off" ? { reasoning: active.reasoningEffort } : {}),
+          });
+        };
+        const streamFn = createRetryingStreamFn(dynamicStreamFn, {
           signal: request.signal,
           firstEventTimeoutMs: options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
           onRetry: async ({ retry, maxRetries, errorMessage }) => {
@@ -217,7 +244,7 @@ export function createPiAgentExecutor(
             ...context,
             messages: compactAgentContext(
               context.messages as AgentMessage[],
-              sessionModel.contextWindow,
+              activeModelSelection().model.contextWindow,
               true,
             ) as Message[],
           }),

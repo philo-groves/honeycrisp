@@ -678,6 +678,44 @@ test("Pi Agent executor injects live steering into the next model turn", async (
   );
 });
 
+test("Pi Agent executor applies a steered model and effort to the next root turn", async () => {
+  const calls = [];
+  let steeringPoll = 0;
+  let selection;
+  const selectedModel = { ...FAUX_MODEL, id: "selected-model", name: "Selected Model", reasoning: true };
+  const scripted = [assistant("Initial orientation."), assistant("Selected-model continuation.")];
+  let responseIndex = 0;
+  const result = await runResearchAgent({
+    prompt: "Inspect the parser boundary.",
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: {
+        getModel(_provider, id) {
+          return id === selectedModel.id ? selectedModel : FAUX_MODEL;
+        },
+        streamSimple(model, _context, options = {}) {
+          calls.push({ model: model.id, reasoning: options.reasoning });
+          return streamFrom(scripted[responseIndex++] ?? assistant("Done."));
+        },
+      },
+      getModelSelection: () => selection,
+      async getSteeringMessages() {
+        steeringPoll += 1;
+        if (steeringPoll !== 2) return [];
+        selection = { provider: "faux", model: "selected-model", reasoningEffort: "high" };
+        return [{ role: "user", content: "Continue with the selected model.", timestamp: Date.now() }];
+      },
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.deepEqual(calls, [
+    { model: "faux-model", reasoning: undefined },
+    { model: "selected-model", reasoning: "high" },
+  ]);
+});
+
 test("Pi Agent executor supports parallel same-turn tool execution", async () => {
   const calls = [];
   const tool = createFixtureInspectTool(calls);
