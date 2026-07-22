@@ -144,24 +144,12 @@ function normalizeMemoryTierContext(value: unknown): ResearchMemoryTierContext |
   if (!workspaceId || !workspaceName) return undefined;
   const subjectId = typeof value.subjectId === "string" ? value.subjectId.trim() : "";
   const subjectName = typeof value.subjectName === "string" ? value.subjectName.trim() : "";
-  const peers = readArray(value.peers).flatMap((peer) => {
-    if (!isRecord(peer)) return [];
-    const databasePath = typeof peer.databasePath === "string" ? resolve(peer.databasePath) : "";
-    const peerWorkspaceId = typeof peer.workspaceId === "string" ? peer.workspaceId.trim() : "";
-    const peerWorkspaceName = typeof peer.workspaceName === "string" ? peer.workspaceName.trim() : "";
-    const peerSubjectId = typeof peer.subjectId === "string" ? peer.subjectId.trim() : "";
-    const peerSubjectName = typeof peer.subjectName === "string" ? peer.subjectName.trim() : "";
-    return databasePath && peerWorkspaceId && peerWorkspaceName && peerSubjectId && peerSubjectName
-      ? [{ databasePath, workspaceId: peerWorkspaceId, workspaceName: peerWorkspaceName, subjectId: peerSubjectId, subjectName: peerSubjectName }]
-      : [];
-  });
   return {
     ...(typeof value.sessionId === "string" && value.sessionId.trim() ? { sessionId: value.sessionId.trim() } : {}),
     workspaceId,
     workspaceName,
     ...(subjectId ? { subjectId } : {}),
     ...(subjectName ? { subjectName } : {}),
-    peers,
   };
 }
 

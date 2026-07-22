@@ -81,21 +81,12 @@ export interface ResearchWorkspaceAuthorizationContext {
   expiresAt?: string;
 }
 
-export interface ResearchMemoryPeerContext {
-  databasePath: string;
-  workspaceId: string;
-  workspaceName: string;
-  subjectId: string;
-  subjectName: string;
-}
-
 export interface ResearchMemoryTierContext {
   sessionId?: string;
   workspaceId: string;
   workspaceName: string;
   subjectId?: string;
   subjectName?: string;
-  peers: readonly ResearchMemoryPeerContext[];
 }
 
 export interface ResearchWorkspaceContext {

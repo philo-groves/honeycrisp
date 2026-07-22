@@ -212,6 +212,8 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
       );
       assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
       assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 3").get().name, "rename_legacy_finding_memory_ids");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 4").get().name, "remove_peer_database_federation");
+      assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_federated_edges'").get(), undefined);
       assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
     } finally {
       database.close();
@@ -222,7 +224,7 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
   }
 });
 
-test("memory graph tiers session, workspace, and subject knowledge across peer workspaces", async () => {
+test("memory graph tiers session, workspace, and subject knowledge across workspaces in one database", async () => {
   const zshRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tier-zsh-"));
   const mdnsRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tier-mdns-"));
   const apple = { subjectId: "subject_apple", subjectName: "Apple" };
@@ -244,8 +246,8 @@ test("memory graph tiers session, workspace, and subject knowledge across peer w
 
   const mdns = new MemoryGraphStore({
     workspaceRoot: mdnsRoot,
+    databasePath: getDefaultMemoryDatabasePath(zshRoot),
     context: { sessionId: "run_mdns", workspaceId: "workspace_mdns", workspaceName: "mDNSResponder", ...apple },
-    peers: [{ databasePath: getDefaultMemoryDatabasePath(zshRoot), workspaceId: "workspace_zsh", workspaceName: "Zsh", ...apple }],
   });
   try {
     assert.deepEqual(mdns.search({ query: "boundary" }).map((node) => node.id), [subjectNode.id]);
@@ -275,10 +277,10 @@ test("memory graph derives shared Beale workspace identity for headless access",
   await mkdir(dirname(databasePath), { recursive: true });
   const host = new DatabaseSync(databasePath);
   host.exec(`
-    CREATE TABLE workspace_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
-    INSERT INTO workspace_meta VALUES ('workspace_id', 'workspace_shared', '2026-01-01T00:00:00Z');
-    CREATE TABLE scope_versions (id TEXT PRIMARY KEY, status TEXT NOT NULL, workspace_name TEXT NOT NULL, scope_owner TEXT NOT NULL, created_at TEXT NOT NULL);
-    INSERT INTO scope_versions VALUES ('scope_one', 'active', 'Zsh', 'Apple', '2026-01-01T00:00:00Z');
+    CREATE TABLE workspaces (id TEXT PRIMARY KEY, workspace_path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    INSERT INTO workspaces VALUES ('workspace_shared', '${workspaceRoot.replaceAll("'", "''")}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+    CREATE TABLE scope_versions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, status TEXT NOT NULL, workspace_name TEXT NOT NULL, scope_owner TEXT NOT NULL, created_at TEXT NOT NULL);
+    INSERT INTO scope_versions VALUES ('scope_one', 'workspace_shared', 'active', 'Zsh', 'Apple', '2026-01-01T00:00:00Z');
   `);
   host.close();
 

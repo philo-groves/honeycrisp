@@ -60,11 +60,11 @@ Collaboration calls use the same requested/observed research-event envelope as e
 
 Honeycrisp uses the host-compatible SQLite database as the source of truth. The small model-facing memory tool set searches, reads, saves, corrects, and links concise typed knowledge.
 
-Knowledge is tiered by:
+Knowledge records share the user-global SQLite database and are tiered by:
 
 - session id for work useful only to the current session;
 - workspace for knowledge reusable across sessions on one research target; and
-- subject for knowledge reusable across explicitly related workspaces owned by the same subject.
+- subject for knowledge reusable across workspaces owned by the same subject.
 
 Transcripts, narration, and bulk tool output are operational data, not durable knowledge. Large outputs remain artifact files referenced by concise graph nodes.
 
@@ -86,8 +86,8 @@ Tool-backed observations may support confirmed primitives or chains. Model or ch
 
 The default durable surfaces are:
 
-- `.honeycrisp/memory/memory.sqlite` for operational state and tiered knowledge; and
-- `.honeycrisp/memory/artifacts/` for files, raw outputs, logs, generated material, and reproducible scripts.
+- `~/.honeycrisp/memory.sqlite` for cross-workspace operational state and tiered knowledge; and
+- `~/.honeycrisp/artifacts/` for files, raw outputs, logs, generated material, and reproducible scripts.
 
 The shared SQLite database uses an append-only, component-scoped migration ledger. Honeycrisp owns the `honeycrisp_core` sequence and adopts the idempotent graph baseline for databases created before the ledger existed.
 

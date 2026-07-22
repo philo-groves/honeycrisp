@@ -6,6 +6,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   dirname,
@@ -19,8 +20,10 @@ import type {
   ResearchStorageLayout,
 } from "./types.js";
 
-export const DEFAULT_MEMORY_DATABASE_RELATIVE_PATH = ".honeycrisp/memory/memory.sqlite";
-export const DEFAULT_ARTIFACT_RELATIVE_PATH = ".honeycrisp/memory/artifacts";
+export const DEFAULT_MEMORY_DATABASE_RELATIVE_PATH = ".honeycrisp/memory.sqlite";
+export const DEFAULT_ARTIFACT_RELATIVE_PATH = ".honeycrisp/artifacts";
+const TEST_MEMORY_DATABASE_RELATIVE_PATH = ".honeycrisp/memory/memory.sqlite";
+const TEST_ARTIFACT_RELATIVE_PATH = ".honeycrisp/memory/artifacts";
 export const RESEARCH_STORAGE_MANIFEST_FILENAME = "manifest.json";
 
 const DEFAULT_STORAGE_DIRECTORIES: readonly {
@@ -69,14 +72,22 @@ export interface RegisterResearchStorageArtifactInput {
   createdAt?: string;
 }
 
-export function getDefaultMemoryDatabasePath(workspaceRoot: string): string {
-  return resolve(workspaceRoot, DEFAULT_MEMORY_DATABASE_RELATIVE_PATH);
+export function getDefaultMemoryDatabasePath(workspaceRoot?: string): string {
+  if (process.env.HONEYCRISP_TEST_WORKSPACE_STORAGE === "1") {
+    return resolve(workspaceRoot ?? process.cwd(), TEST_MEMORY_DATABASE_RELATIVE_PATH);
+  }
+  const configured = process.env.HONEYCRISP_DATABASE_PATH?.trim();
+  return configured ? resolve(configured) : resolve(homedir(), DEFAULT_MEMORY_DATABASE_RELATIVE_PATH);
 }
 
 export function getDefaultMemoryArtifactDirectoryPath(
-  workspaceRoot: string,
+  workspaceRoot?: string,
 ): string {
-  return resolve(workspaceRoot, DEFAULT_ARTIFACT_RELATIVE_PATH);
+  if (process.env.HONEYCRISP_TEST_WORKSPACE_STORAGE === "1") {
+    return resolve(workspaceRoot ?? process.cwd(), TEST_ARTIFACT_RELATIVE_PATH);
+  }
+  const configured = process.env.HONEYCRISP_ARTIFACT_DIRECTORY?.trim();
+  return configured ? resolve(configured) : resolve(homedir(), DEFAULT_ARTIFACT_RELATIVE_PATH);
 }
 
 export function createResearchStorageLayout(
@@ -104,7 +115,7 @@ export function createResearchStorageLayout(
       purpose: directory.purpose,
     })),
     rules: [
-      "Durable memory is stored as typed nodes and relationships in the workspace SQLite database.",
+      "Durable memory is stored as typed nodes and relationships in the user-global SQLite database.",
       "Large raw outputs and generated files are stored as artifacts; memory nodes keep concise references to them.",
     ],
   };

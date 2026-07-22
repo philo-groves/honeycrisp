@@ -2053,7 +2053,6 @@ async function createRuntimeConfig(args: {
     ...(workspaceContext.memoryTierContext
       ? {
           context: workspaceContext.memoryTierContext,
-          peers: workspaceContext.memoryTierContext.peers,
         }
       : {}),
   });

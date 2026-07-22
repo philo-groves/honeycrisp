@@ -12,7 +12,7 @@
     "check": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
     "start": "node packages/cli/dist/cli.js",
-    "test": "tsc -b && node --test tests/*.test.mjs"
+    "test": "tsc -b && HONEYCRISP_TEST_WORKSPACE_STORAGE=1 node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "24.12.4",

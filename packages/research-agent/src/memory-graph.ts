@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -36,10 +36,6 @@ export interface MemoryTierContext {
   workspaceName: string;
   subjectId?: string;
   subjectName?: string;
-}
-
-export interface MemoryPeerDatabase extends Omit<MemoryTierContext, "sessionId"> {
-  databasePath: string;
 }
 
 export interface MemoryEvidenceRef {
@@ -113,7 +109,6 @@ interface MemoryDatabaseBinding {
   database: DatabaseSync;
   databasePath: string;
   context: MemoryTierContext;
-  local: boolean;
 }
 
 interface LocatedMemoryNode {
@@ -123,33 +118,23 @@ interface LocatedMemoryNode {
 
 export class MemoryGraphStore {
   public readonly databasePath: string;
-  private readonly bindings: MemoryDatabaseBinding[];
   private readonly local: MemoryDatabaseBinding;
 
   public constructor(options: {
     workspaceRoot?: string;
     databasePath?: string;
     context?: MemoryTierContext;
-    peers?: readonly MemoryPeerDatabase[];
   } = {}) {
     const workspaceRoot = options.workspaceRoot ?? process.cwd();
     this.databasePath = options.databasePath ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     mkdirSync(dirname(this.databasePath), { recursive: true });
     const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSync };
-    const context = normalizeTierContext(options.context ?? readStoredTierContext(DatabaseSync, this.databasePath), workspaceRoot);
-    this.local = this.openBinding(DatabaseSync, this.databasePath, context, true);
-    const seenPaths = new Set([resolveDatabasePath(this.databasePath)]);
-    const peers = (options.peers ?? []).flatMap((peer) => {
-      const databasePath = resolveDatabasePath(peer.databasePath);
-      if (seenPaths.has(databasePath)) return [];
-      seenPaths.add(databasePath);
-      return [this.openBinding(DatabaseSync, databasePath, normalizeTierContext(peer, dirname(databasePath)), false)];
-    });
-    this.bindings = [this.local, ...peers];
+    const context = normalizeTierContext(options.context ?? readStoredTierContext(DatabaseSync, this.databasePath, workspaceRoot), workspaceRoot);
+    this.local = this.openBinding(DatabaseSync, this.databasePath, context);
   }
 
   public close(): void {
-    for (const binding of this.bindings) binding.database.close();
+    this.local.database.close();
   }
 
   public save(input: SaveMemoryNodeInput): MemoryNode {
@@ -281,7 +266,7 @@ export class MemoryGraphStore {
 
   public search(input: SearchMemoryNodesInput = {}): MemoryNode[] {
     const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
-    const nodes = this.bindings.flatMap((binding) => this.searchBinding(binding, input));
+    const nodes = this.searchBinding(this.local, input);
     const query = input.query?.trim() ?? "";
     return nodes
       .sort((left, right) =>
@@ -356,38 +341,32 @@ export class MemoryGraphStore {
     const from = this.locate(fromId);
     const to = this.locate(toId);
     if (!from || !to) throw new Error("Both memory edge nodes must exist in the visible memory tiers.");
-    const federated = from.binding.databasePath !== to.binding.databasePath;
-    const database = federated ? this.local.database : from.binding.database;
-    const table = federated ? "memory_federated_edges" : "memory_edges";
+    const database = this.local.database;
     const cleanRelation = normalizeTag(relation);
     const now = new Date().toISOString();
     database
       .prepare(
-        `INSERT INTO ${table}(from_id, to_id, relation, note, created_at, updated_at)
+        `INSERT INTO memory_edges(from_id, to_id, relation, note, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(from_id, to_id, relation) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at`,
       )
       .run(fromId, toId, cleanRelation, note.trim(), now, now);
-    const row = database.prepare(`SELECT * FROM ${table} WHERE from_id = ? AND to_id = ? AND relation = ?`).get(fromId, toId, cleanRelation) as Record<string, unknown>;
+    const row = database.prepare("SELECT * FROM memory_edges WHERE from_id = ? AND to_id = ? AND relation = ?").get(fromId, toId, cleanRelation) as Record<string, unknown>;
     return edgeFromRow(row);
   }
 
   public listEdges(nodeId?: string): MemoryEdge[] {
-    const visibleIds = new Set(this.bindings.flatMap((binding) => [...this.visibleNodeIds(binding)]));
+    const visibleIds = this.visibleNodeIds(this.local);
     if (nodeId) {
       const located = this.locate(nodeId);
       if (!located) return [];
-      const ordinary = this.bindings.flatMap((binding) =>
-        (binding.database.prepare("SELECT * FROM memory_edges WHERE from_id = ? OR to_id = ? ORDER BY updated_at DESC").all(nodeId, nodeId) as Record<string, unknown>[]).map(edgeFromRow),
-      );
-      const federated = (this.local.database.prepare("SELECT * FROM memory_federated_edges WHERE from_id = ? OR to_id = ? ORDER BY updated_at DESC").all(nodeId, nodeId) as Record<string, unknown>[]).map(edgeFromRow);
-      return [...ordinary, ...federated].filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
+      return (this.local.database.prepare("SELECT * FROM memory_edges WHERE from_id = ? OR to_id = ? ORDER BY updated_at DESC").all(nodeId, nodeId) as Record<string, unknown>[])
+        .map(edgeFromRow)
+        .filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
     }
-    const ordinary = this.bindings.flatMap((binding) =>
-      (binding.database.prepare("SELECT * FROM memory_edges ORDER BY updated_at DESC").all() as Record<string, unknown>[]).map(edgeFromRow),
-    );
-    const federated = (this.local.database.prepare("SELECT * FROM memory_federated_edges ORDER BY updated_at DESC").all() as Record<string, unknown>[]).map(edgeFromRow);
-    return [...ordinary, ...federated].filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
+    return (this.local.database.prepare("SELECT * FROM memory_edges ORDER BY updated_at DESC").all() as Record<string, unknown>[])
+      .map(edgeFromRow)
+      .filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
   }
 
   private visibleNodeIds(binding: MemoryDatabaseBinding): Set<string> {
@@ -398,37 +377,31 @@ export class MemoryGraphStore {
   }
 
   private locate(id: string): LocatedMemoryNode | null {
-    for (const binding of this.bindings) {
-      const node = this.getFromDatabase(binding.database, id);
-      if (node && nodeIsVisible(node, binding, this.local.context)) return { binding, node };
-    }
+    const node = this.getFromDatabase(this.local.database, id);
+    if (node && nodeIsVisible(node, this.local.context)) return { binding: this.local, node };
     return null;
   }
 
   private findByIdentity(tier: MemoryTier, scopeKey: string, type: MemoryNodeType, titleNorm: string): LocatedMemoryNode | null {
-    const bindings = tier === "subject" ? this.bindings : [this.local];
-    for (const binding of bindings) {
-      const row = binding.database
-        .prepare("SELECT id FROM memory_nodes WHERE tier = ? AND scope_key = ? AND type = ? AND title_norm = ?")
-        .get(tier, scopeKey, type, titleNorm) as { id?: unknown } | undefined;
-      if (typeof row?.id !== "string") continue;
-      const node = this.getFromDatabase(binding.database, row.id);
-      if (node) return { binding, node };
-    }
-    return null;
+    const row = this.local.database
+      .prepare("SELECT id FROM memory_nodes WHERE tier = ? AND scope_key = ? AND type = ? AND title_norm = ?")
+      .get(tier, scopeKey, type, titleNorm) as { id?: unknown } | undefined;
+    if (typeof row?.id !== "string") return null;
+    const node = this.getFromDatabase(this.local.database, row.id);
+    return node ? { binding: this.local, node } : null;
   }
 
   private openBinding(
     Database: new (path: string) => DatabaseSync,
     databasePath: string,
     context: MemoryTierContext,
-    local: boolean,
   ): MemoryDatabaseBinding {
     mkdirSync(dirname(databasePath), { recursive: true });
     const database = new Database(databasePath);
+    if (databasePath !== ":memory:") chmodSync(databasePath, 0o600);
     database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.initializeSchema(database);
-    return { database, databasePath: resolveDatabasePath(databasePath), context, local };
+    return { database, databasePath: resolveDatabasePath(databasePath), context };
   }
 
   private initializeSchema(database: DatabaseSync): void {
@@ -478,15 +451,6 @@ export class MemoryGraphStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(from_id, to_id, relation)
       );
-      CREATE TABLE IF NOT EXISTS memory_federated_edges (
-        from_id TEXT NOT NULL,
-        to_id TEXT NOT NULL,
-        relation TEXT NOT NULL,
-        note TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY(from_id, to_id, relation)
-      );
       CREATE TABLE IF NOT EXISTS memory_evidence_refs (
         id TEXT PRIMARY KEY,
         node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
@@ -506,7 +470,6 @@ export class MemoryGraphStore {
       CREATE INDEX IF NOT EXISTS memory_node_assets_asset_idx ON memory_node_assets(asset_id, node_id);
       CREATE INDEX IF NOT EXISTS memory_node_tags_tag_idx ON memory_node_tags(tag, node_id);
       CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges(to_id, relation);
-      CREATE INDEX IF NOT EXISTS memory_federated_edges_to_idx ON memory_federated_edges(to_id, relation);
       CREATE INDEX IF NOT EXISTS memory_evidence_node_idx ON memory_evidence_refs(node_id);
       DROP TABLE IF EXISTS honeycrisp_meta;
           `);
@@ -524,6 +487,30 @@ export class MemoryGraphStore {
         name: "rename_legacy_finding_memory_ids",
         up(database) {
           renameLegacyFindingMemoryIds(database);
+        },
+      },
+      {
+        version: 4,
+        name: "remove_peer_database_federation",
+        up(database) {
+          if (!tableExists(database, "memory_federated_edges")) return;
+          const rows = database.prepare("SELECT * FROM memory_federated_edges").all() as Array<{
+            from_id: string;
+            to_id: string;
+            relation: string;
+            note: string;
+            created_at: string;
+            updated_at: string;
+          }>;
+          const insert = database.prepare(
+            `INSERT INTO memory_edges(from_id, to_id, relation, note, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(from_id, to_id, relation) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at`,
+          );
+          for (const row of rows) {
+            insert.run(row.from_id, row.to_id, row.relation, row.note, row.created_at, row.updated_at);
+          }
+          database.exec("DROP TABLE memory_federated_edges");
         },
       },
     ]);
@@ -593,7 +580,6 @@ export class MemoryGraphStore {
       database.prepare("UPDATE memory_node_tags SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
       database.prepare("UPDATE memory_evidence_refs SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
       replaceMemoryEdgeNodeId(database, "memory_edges", previousId, node.id);
-      replaceMemoryEdgeNodeId(database, "memory_federated_edges", previousId, node.id);
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");
@@ -665,20 +651,24 @@ function validateCompleteNode(node: Pick<MemoryNode, "type" | "status" | "attrib
   if (node.evidence.length === 0) throw new Error("Historical bug memories require precedent evidence.");
 }
 
-function readStoredTierContext(Database: new (path: string) => DatabaseSync, databasePath: string): MemoryTierContext | undefined {
+function readStoredTierContext(
+  Database: new (path: string) => DatabaseSync,
+  databasePath: string,
+  workspaceRoot: string,
+): MemoryTierContext | undefined {
   const database = new Database(databasePath);
   try {
     const tables = new Set(
       (database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name?: unknown }>)
         .flatMap((row) => typeof row.name === "string" ? [row.name] : []),
     );
-    if (!tables.has("workspace_meta")) return undefined;
-    const workspaceRow = database.prepare("SELECT value FROM workspace_meta WHERE key = 'workspace_id'").get() as { value?: unknown } | undefined;
-    const workspaceId = typeof workspaceRow?.value === "string" ? workspaceRow.value.trim() : "";
+    if (!tables.has("workspaces") || !tables.has("scope_versions")) return undefined;
+    const workspaceRow = database.prepare("SELECT id FROM workspaces WHERE workspace_path = ?").get(resolve(workspaceRoot)) as { id?: unknown } | undefined;
+    const workspaceId = typeof workspaceRow?.id === "string" ? workspaceRow.id.trim() : "";
     if (!workspaceId) return undefined;
-    const scopeRow = tables.has("scope_versions")
-      ? database.prepare("SELECT workspace_name, scope_owner FROM scope_versions WHERE status = 'active' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined
-      : undefined;
+    const scopeRow = database
+      .prepare("SELECT workspace_name, scope_owner FROM scope_versions WHERE workspace_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1")
+      .get(workspaceId) as Record<string, unknown> | undefined;
     const workspaceName = typeof scopeRow?.workspace_name === "string" && scopeRow.workspace_name.trim() ? scopeRow.workspace_name.trim() : "Workspace";
     const subjectName = typeof scopeRow?.scope_owner === "string" && scopeRow.scope_owner.trim() ? scopeRow.scope_owner.trim() : undefined;
     return {
@@ -736,13 +726,9 @@ function scopeKeyForNode(node: MemoryNode): string {
 }
 
 function visibilityClause(
-  binding: MemoryDatabaseBinding,
+  _binding: MemoryDatabaseBinding,
   current: MemoryTierContext,
-): { sql: string; params: string[] } | null {
-  if (!binding.local) {
-    if (!current.subjectId) return null;
-    return { sql: "n.tier = 'subject' AND n.scope_key = ?", params: [current.subjectId] };
-  }
+): { sql: string; params: string[] } {
   const clauses = ["(n.tier = 'workspace' AND n.scope_key = ?)"];
   const params = [current.workspaceId];
   if (current.sessionId) {
@@ -756,8 +742,7 @@ function visibilityClause(
   return { sql: `(${clauses.join(" OR ")})`, params };
 }
 
-function nodeIsVisible(node: MemoryNode, binding: MemoryDatabaseBinding, current: MemoryTierContext): boolean {
-  if (!binding.local) return node.tier === "subject" && Boolean(current.subjectId) && node.subjectId === current.subjectId;
+function nodeIsVisible(node: MemoryNode, current: MemoryTierContext): boolean {
   if (node.tier === "session") return Boolean(current.sessionId) && node.sessionId === current.sessionId;
   if (node.tier === "subject") return Boolean(current.subjectId) && node.subjectId === current.subjectId;
   return node.workspaceId === current.workspaceId;
@@ -800,7 +785,9 @@ function renameLegacyFindingMemoryIds(database: DatabaseSync): void {
     database.prepare("UPDATE memory_node_tags SET node_id = ? WHERE node_id = ?").run(nextId, row.id);
     database.prepare("UPDATE memory_evidence_refs SET node_id = ? WHERE node_id = ?").run(nextId, row.id);
     replaceMemoryEdgeNodeId(database, "memory_edges", row.id, nextId);
-    replaceMemoryEdgeNodeId(database, "memory_federated_edges", row.id, nextId);
+    if (tableExists(database, "memory_federated_edges")) {
+      replaceMemoryEdgeNodeId(database, "memory_federated_edges", row.id, nextId);
+    }
   }
 }
 function replaceMemoryEdgeNodeId(database: DatabaseSync, table: "memory_edges" | "memory_federated_edges", previousId: string, nextId: string): void {
@@ -812,6 +799,9 @@ function replaceMemoryEdgeNodeId(database: DatabaseSync, table: "memory_edges" |
   for (const edge of edges) {
     insert.run(edge.from_id === previousId ? nextId : edge.from_id, edge.to_id === previousId ? nextId : edge.to_id, edge.relation, edge.note, edge.created_at, edge.updated_at);
   }
+}
+function tableExists(database: DatabaseSync, table: string): boolean {
+  return Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
 }
 function unique(values: readonly string[]): string[] { return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort(); }
 function mergeObjects(base: Record<string, unknown>, update: Record<string, unknown>): Record<string, unknown> { return { ...base, ...update }; }
