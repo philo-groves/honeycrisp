@@ -33,6 +33,7 @@ import {
   createSynthesisTool,
   getAuthStatus,
   getProviderModelCatalog,
+  generateResearchSessionTitle,
   listAuthProviders,
   loadResearchSkillsFromDirectory,
   loadResearchStorageManifest,
@@ -149,6 +150,8 @@ interface ParsedArgs {
   configPath: string | undefined;
   provider: string | undefined;
   model: string | undefined;
+  titleModel: string | undefined;
+  titleEffort: ResearchModelEffort | undefined;
   maxTokens: number | undefined;
   reasoning: ResearchModelEffort | undefined;
   executor: CliExecutorKind;
@@ -215,6 +218,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let configPath: string | undefined;
   let provider: string | undefined;
   let model: string | undefined;
+  let titleModel: string | undefined;
+  let titleEffort: ResearchModelEffort | undefined;
   let executor: CliExecutorKind = "agent";
   let toolExecution: CliToolExecutionMode | undefined;
   let maxTokens: number | undefined;
@@ -300,6 +305,12 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
     } else if (arg === "--model") {
       model = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--title-model") {
+      titleModel = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--title-effort") {
+      titleEffort = parseReasoning(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "--executor") {
       executor = parseExecutor(readOptionValue(argv, index, arg));
@@ -435,6 +446,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     configPath,
     provider,
     model,
+    titleModel,
+    titleEffort,
     maxTokens,
     reasoning,
     executor,
@@ -943,6 +956,8 @@ function usage(): string {
     "                         Defaults to .honeycrisp/config.json under --workspace-root when present",
     "  --provider <provider>  Override configured/default provider for real mode",
     "  --model <model>        Override configured/default model for real mode",
+    "  --title-model <model>  Generate a session title with this model from the selected provider",
+    "  --title-effort <level> Reasoning effort for session title generation (default: medium)",
     "  --executor <kind>      agent (default: agent)",
     "  --max-tokens <n>       Max output tokens for real mode",
     "  --effort <level>       Model effort for real mode: minimal, low, medium, high, xhigh, max",
@@ -1089,6 +1104,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
             })),
             controlStream,
           );
+      const sessionTitle = startSessionTitleGeneration(
+        args,
+        modelConfig,
+        liveEventSink,
+        controlStream?.signal,
+      );
 
       const inspectionState =
         runtimeConfig.events.length > 0
@@ -1111,6 +1132,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         ...(liveEventSink ? { eventSink: liveEventSink } : {}),
         ...(controlStream ? { signal: controlStream.signal } : {}),
       });
+      await sessionTitle;
 
       if (args.capturePath) {
         const capturePath = await writeFlowCapture(
@@ -1143,6 +1165,54 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     console.error(`honeycrisp: ${message}`);
     process.exitCode = 1;
   }
+}
+
+function startSessionTitleGeneration(
+  args: ParsedArgs,
+  modelConfig: ResolvedResearchModelConfig | undefined,
+  liveEventSink: ResearchLiveEventSink | undefined,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (args.mock || !args.titleModel || !modelConfig || !liveEventSink || !args.prompt) {
+    return Promise.resolve();
+  }
+  return generateResearchSessionTitle({
+    provider: modelConfig.provider,
+    model: args.titleModel,
+    prompt: args.prompt,
+    effort: args.titleEffort ?? "medium",
+    ...(signal ? { signal } : {}),
+  })
+    .then((title) =>
+      liveEventSink({
+        schemaVersion: 1,
+        kind: "session.title",
+        timestamp: new Date().toISOString(),
+        payload: {
+          status: "generated",
+          title,
+          provider: modelConfig.provider,
+          model: args.titleModel,
+          effort: args.titleEffort ?? "medium",
+        },
+      }),
+    )
+    .catch((error) =>
+      liveEventSink({
+        schemaVersion: 1,
+        kind: "session.title",
+        timestamp: new Date().toISOString(),
+        payload: {
+          status: "error",
+          provider: modelConfig.provider,
+          model: args.titleModel,
+          effort: args.titleEffort ?? "medium",
+          errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+        },
+      }),
+    )
+    .then(() => undefined)
+    .catch(() => undefined);
 }
 
 function createRealAgentExecutor(

@@ -65,6 +65,8 @@ pnpm start config show
 
 CLI flags such as `--provider`, `--model`, and `--effort` override the config file for a run. The selected provider/model must already be authorized through the auth CLI.
 
+Hosts may pass `--title-model <model>` with `--title-effort <level>` to generate a short prompt-derived session title concurrently with the research run. Successful titles are emitted as `session.title` live events when `--event-stream` is active; title failures do not interrupt research.
+
 Inspect the provider models and model-specific reasoning levels supplied by the installed Pi runtime with:
 
 ```sh

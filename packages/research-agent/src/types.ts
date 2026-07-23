@@ -297,6 +297,7 @@ export type ResearchLiveEventKind =
   | "model.output"
   | "model.thought"
   | "research.event"
+  | "session.title"
   | "tool.progress";
 
 export interface ResearchLiveEvent {
