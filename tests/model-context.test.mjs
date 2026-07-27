@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
@@ -72,9 +72,9 @@ test("repository content roots become bounded file-read hints", () => {
   });
 
   assert.deepEqual(workspaceContextFileReadHints(context), [
-    "/workspaces/zsh",
-    "/sources/zsh/default",
-    "/sources/zsh/default/zsh",
+    resolve("/workspaces/zsh"),
+    resolve("/sources/zsh/default"),
+    resolve("/sources/zsh/default/zsh"),
   ]);
 });
 

@@ -8,6 +8,7 @@ import {
   basename,
   relative,
   resolve,
+  sep,
 } from "node:path";
 import { nowIso } from "./ids.js";
 import {
@@ -593,7 +594,7 @@ async function searchRepository(
           const line = lines[index] ?? "";
           if (line.toLowerCase().includes(needle)) {
             matches.push({
-              path: relative(root, path) || basename(path),
+              path: portableRelativePath(root, path),
               line: index + 1,
               preview: line.trim().slice(0, 240),
             });
@@ -608,6 +609,11 @@ async function searchRepository(
 
   await visit(root);
   return matches;
+}
+
+function portableRelativePath(root: string, path: string): string {
+  const relativePath = relative(root, path) || basename(path);
+  return relativePath.split(sep).join("/");
 }
 
 function uniqueResolvedPaths(paths: readonly string[]): string[] {

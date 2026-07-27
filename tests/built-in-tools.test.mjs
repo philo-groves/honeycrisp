@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -67,7 +67,13 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
       id: "shell_environment",
       actionClass: "inspect",
       toolName: "shell.run",
-      input: { utility: "env" },
+      input: {
+        utility: "node",
+        args: [
+          "-e",
+          "process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([name]) => ['HOME', 'CODEX_HOME', 'HOMEDRIVE', 'HOMEPATH'].includes(name.toUpperCase())))))",
+        ],
+      },
     });
     const protectedDelete = await registry.execute({
       id: "shell_protected_delete",
@@ -116,7 +122,17 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
     assert.equal(homeAssignment.result.status, "error");
     assert.match(homeAssignment.result.error.message, /cannot reference or assign \$HOME/);
     assert.equal(environment.result.status, "complete");
-    assert.doesNotMatch(environment.result.output.stdout, /^(?:HOME|CODEX_HOME|HOMEDRIVE|HOMEPATH)=/m);
+    const homeEnvironment = JSON.parse(environment.result.output.stdout);
+    if (process.platform === "win32") {
+      assert.equal(
+        resolve(`${homeEnvironment.HOMEDRIVE}${homeEnvironment.HOMEPATH}`),
+        resolve(root),
+      );
+      assert.equal("HOME" in homeEnvironment, false);
+      assert.equal("CODEX_HOME" in homeEnvironment, false);
+    } else {
+      assert.deepEqual(homeEnvironment, {});
+    }
     assert.equal(protectedDelete.result.status, "error");
     assert.match(protectedDelete.result.error.message, /Folder delete guard blocked rm/);
     assert.equal(workspaceDelete.result.status, "error");
@@ -135,13 +151,13 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
   }
 });
 
-test("shell tool serializes the same utility across tool instances", { skip: process.platform === "win32" }, async () => {
+test("shell tool serializes the same utility across tool instances", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-concurrency-"));
   const optionsPath = join(root, "shell-options.json");
   await writeFile(optionsPath, JSON.stringify({
     schemaVersion: 1,
     defaultConcurrency: 4,
-    utilities: { sleep: 1 },
+    utilities: { node: 1 },
     leaseDirectory: join(root, "leases"),
   }));
 
@@ -150,8 +166,18 @@ test("shell tool serializes the same utility across tool instances", { skip: pro
     const second = createResearchToolRegistry([createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath })]);
     const startedAt = Date.now();
     const results = await Promise.all([
-      first.execute({ id: "sleep_1", actionClass: "experiment", toolName: "shell.run", input: { utility: "sleep", args: ["0.15"] } }),
-      second.execute({ id: "sleep_2", actionClass: "experiment", toolName: "shell.run", input: { utility: "sleep", args: ["0.15"] } }),
+      first.execute({
+        id: "node_1",
+        actionClass: "experiment",
+        toolName: "shell.run",
+        input: { utility: "node", args: ["-e", "setTimeout(() => {}, 150)"] },
+      }),
+      second.execute({
+        id: "node_2",
+        actionClass: "experiment",
+        toolName: "shell.run",
+        input: { utility: "node", args: ["-e", "setTimeout(() => {}, 150)"] },
+      }),
     ]);
 
     assert.ok(results.every((result) => result.result.status === "complete"));
@@ -161,16 +187,22 @@ test("shell tool serializes the same utility across tool instances", { skip: pro
   }
 });
 
-test("shell tool terminates descendant processes when a command times out", { skip: process.platform === "win32" }, async () => {
+test("shell tool terminates descendant processes when a command times out", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-timeout-"));
   try {
     const registry = createResearchToolRegistry([createShellTool({ workspaceRoot: root })]);
     const startedAt = Date.now();
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      "process.stdout.write(`${child.pid}\\n`);",
+      "setInterval(() => {}, 1000);",
+    ].join("");
     const timedOut = await registry.execute({
       id: "shell_timeout_tree",
       actionClass: "experiment",
       toolName: "shell.run",
-      input: { utility: "sh", args: ["-c", "sleep 30 & echo $!; wait"], timeoutMs: 50 },
+      input: { utility: "node", args: ["-e", parentScript], timeoutMs: 250 },
     });
 
     assert.equal(timedOut.result.status, "error");

@@ -12,6 +12,7 @@ import {
   dirname,
   relative,
   resolve,
+  sep,
 } from "node:path";
 import type {
   ResearchArtifactRef,
@@ -254,7 +255,7 @@ export function registerResearchStorageArtifact(
     kind: input.kind,
     purpose: input.purpose ?? existing?.purpose ?? "Persisted research artifact.",
     path: absolutePath,
-    relativePath: relative(layout.rootPath, absolutePath),
+    relativePath: portableRelativePath(layout.rootPath, absolutePath),
     uri: pathToFileURL(absolutePath).href,
     sizeBytes: fileStat.size,
     contentHash,
@@ -384,7 +385,9 @@ function normalizeManifestEntry(
     kind: readManifestString(value, "kind", manifestPath, index),
     purpose: readManifestString(value, "purpose", manifestPath, index),
     path: readManifestString(value, "path", manifestPath, index),
-    relativePath: readManifestString(value, "relativePath", manifestPath, index),
+    relativePath: normalizeStoredRelativePath(
+      readManifestString(value, "relativePath", manifestPath, index),
+    ),
     uri: readManifestString(value, "uri", manifestPath, index),
     sizeBytes: readManifestNumber(value, "sizeBytes", manifestPath, index),
     contentHash: readManifestString(value, "contentHash", manifestPath, index),
@@ -439,6 +442,14 @@ function readManifestStringArray(
   }
 
   return item;
+}
+
+function portableRelativePath(root: string, path: string): string {
+  return relative(root, path).split(sep).join("/");
+}
+
+function normalizeStoredRelativePath(path: string): string {
+  return path.replaceAll("\\", "/");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

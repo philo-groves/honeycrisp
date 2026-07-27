@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, open, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, join, parse, relative, resolve } from "node:path";
 import { nowIso } from "./ids.js";
 import type {
   ResearchExecutableTool,
@@ -455,7 +455,7 @@ async function runUtility(input: {
     const output = createOutputCollector(input.maxOutputBytes);
     const child = spawn(input.utility, input.args, {
       cwd: input.cwd,
-      env: shellEnvironment(),
+      env: shellEnvironment(input.cwd),
       detached: process.platform !== "win32",
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
@@ -464,6 +464,19 @@ async function runUtility(input: {
     child.stderr.on("data", (chunk: Buffer) => output.appendStderr(chunk));
 
     const killProcessTree = (signal: NodeJS.Signals): void => {
+      if (process.platform === "win32" && child.pid !== undefined) {
+        const result = spawnSync(
+          join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+          ["/PID", String(child.pid), "/T", "/F"],
+          {
+            windowsHide: true,
+            stdio: "ignore",
+          },
+        );
+        if (result.status === 0 || child.exitCode !== null || child.signalCode !== null) {
+          return;
+        }
+      }
       if (process.platform !== "win32" && child.pid !== undefined) {
         try {
           process.kill(-child.pid, signal);
@@ -571,11 +584,17 @@ function createOutputCollector(maxBytes: number): {
   };
 }
 
-function shellEnvironment(): NodeJS.ProcessEnv {
+function shellEnvironment(cwd: string): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined || isSensitiveEnvironmentName(name) || isHomeEnvironmentName(name)) continue;
     environment[name] = value;
+  }
+  if (process.platform === "win32") {
+    const resolvedCwd = resolve(cwd);
+    const root = parse(resolvedCwd).root;
+    environment.HOMEDRIVE = root.endsWith("\\") ? root.slice(0, -1) : root;
+    environment.HOMEPATH = resolvedCwd.slice(Math.max(0, root.length - 1)) || "\\";
   }
   environment.HONEYCRISP_SHELL = "1";
   return environment;
@@ -590,7 +609,16 @@ function assertNoHomeVariableUsage(values: readonly string[]): void {
 }
 
 function isHomeEnvironmentName(name: string): boolean {
-  return name === "HOME" || name === "CODEX_HOME" || name === "HOMEDRIVE" || name === "HOMEPATH";
+  const normalizedName = name.toUpperCase();
+  return (
+    normalizedName === "HOME" ||
+    normalizedName === "CODEX_HOME" ||
+    normalizedName === "HOMEDRIVE" ||
+    normalizedName === "HOMEPATH" ||
+    normalizedName === "USERPROFILE" ||
+    normalizedName === "APPDATA" ||
+    normalizedName === "LOCALAPPDATA"
+  );
 }
 
 function isSensitiveEnvironmentName(name: string): boolean {
