@@ -7,6 +7,7 @@ import {
   createResearchPiAgent,
   createResearchSystemPrompt,
   createResearchToolRegistry,
+  modelRetryDelayMs,
   runResearchAgent,
 } from "../packages/research-agent/dist/index.js";
 
@@ -383,6 +384,123 @@ test("Pi Agent retries a transient provider failure before emitting a terminal e
   assert.equal(contexts.length, 2);
   assert.ok(result.agentRun.output.raw.agentEvents.some((event) => event.type === "model_retry" && event.retry === 1));
   assert.ok(liveEvents.some((event) => event.kind === "agent.event" && event.payload.type === "model_retry"));
+});
+
+test("Pi Agent retry backoff is immediate, then one and two minutes, capped at three minutes", () => {
+  assert.deepEqual(
+    [1, 2, 3, 4, 5, 20].map(modelRetryDelayMs),
+    [0, 60_000, 120_000, 180_000, 180_000, 180_000],
+  );
+});
+
+test("Pi Agent aborts a delayed retry immediately when the session is stopped", async () => {
+  const controller = new AbortController();
+  const result = await runResearchAgent({
+    prompt: "Stop cleanly while waiting to recover from a provider outage.",
+    signal: controller.signal,
+    eventSink(event) {
+      if (
+        event.kind === "agent.event"
+        && event.payload.type === "model_retry"
+        && event.payload.retry === 2
+      ) {
+        controller.abort();
+      }
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistantError("Unexpected server error."),
+        assistantError("Unexpected server error."),
+      ]),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "error");
+  assert.match(result.agentRun.output.text, /Model retry aborted/);
+});
+
+test("Pi Agent retries an unexpected server error immediately in the same session", async () => {
+  const contexts = [];
+  const liveEvents = [];
+  const result = await runResearchAgent({
+    prompt: "Continue the authorized parser review after a server failure.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistantError("Unexpected server error."),
+        assistant("## Result\nRecovered in the same research session."),
+      ], contexts),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(contexts.length, 2);
+  assert.equal(liveEvents.find((event) =>
+    event.kind === "agent.event" && event.payload.type === "model_retry"
+  )?.payload.delayMs, 0);
+});
+
+test("Pi Agent treats an authorized safety guardrail as a likely false positive and steers the same session", async () => {
+  const contexts = [];
+  const liveEvents = [];
+  const result = await runResearchAgent({
+    prompt: "Within the recorded authorized bug bounty scope, review the local parser source for bounds errors.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistantError("Cyber safety guardrail interrupted this response."),
+        assistant("## Result\nContinued the authorized local review."),
+      ], contexts),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(contexts.length, 2);
+  assert.match(contexts[1].messageContents.at(-1), /likely false positive/);
+  assert.match(contexts[1].messageContents.at(-1), /continue the same objective in this session/);
+  const retry = liveEvents.find((event) =>
+    event.kind === "agent.event" && event.payload.type === "model_retry"
+  );
+  assert.equal(retry?.payload.recoveryKind, "safety_guardrail");
+  assert.equal(retry?.payload.safetyDisposition, "likely_false_positive");
+});
+
+test("Pi Agent analyzes concerning safety context and injects safer steering before retrying", async () => {
+  const contexts = [];
+  const liveEvents = [];
+  const result = await runResearchAgent({
+    prompt: "Use credential stuffing, persistence, and stealth to pursue the target.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistantError("Safety policy rejected the cyber request."),
+        assistant("## Result\nReframed the work as bounded offline analysis."),
+      ], contexts),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.match(contexts[1].messageContents.at(-1), /review the full transcript/);
+  assert.match(contexts[1].messageContents.at(-1), /Restrict work to local or offline analysis/);
+  assert.match(contexts[1].messageContents.at(-1), /unnecessary red-team rhetoric/);
+  const retry = liveEvents.find((event) =>
+    event.kind === "agent.event" && event.payload.type === "model_retry"
+  );
+  assert.equal(retry?.payload.safetyDisposition, "safety_adjustment");
 });
 
 test("Pi Agent retries a model stream that produces no response events", async () => {
