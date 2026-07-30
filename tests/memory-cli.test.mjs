@@ -53,6 +53,36 @@ test("main CLI supports deterministic mock mode without auth", async () => {
   assert.match(result.stdout, /Exercise deterministic mock mode/);
 });
 
+test("main CLI uses reconstructed context when a resume capture is unavailable", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-resume-fallback-"));
+  const capturePath = join(workspaceRoot, "continued.json");
+  try {
+    const result = runTopCli(
+      [
+        "--mock",
+        "--workspace-root",
+        workspaceRoot,
+        "--capture",
+        capturePath,
+        "--resume-capture",
+        join(workspaceRoot, "missing.json"),
+        "--resume-fallback-prompt",
+        "Reconstructed prior context plus the new instruction.",
+        "-p",
+        "New instruction only.",
+      ],
+      { HONEYCRISP_AUTH_FILE: authFile },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const capture = JSON.parse(await readFile(capturePath, "utf8"));
+    assert.equal(capture.request.prompt, "Reconstructed prior context plus the new instruction.");
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("event stream mode writes only structured lifecycle events to stdout", async () => {
   const authFile = await createEmptyAuthFilePath();
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-event-stream-"));

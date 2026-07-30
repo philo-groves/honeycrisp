@@ -2,14 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyNativeOpenAiCompaction,
   compactAgentContext,
   createPiAgentExecutor,
   createResearchPiAgent,
   createResearchSystemPrompt,
   createResearchToolRegistry,
+  extractCompatiblePiAgentResumableState,
   modelRetryDelayMs,
   runResearchAgent,
 } from "../packages/research-agent/dist/index.js";
+import {
+  convertResponsesMessages,
+  processResponsesStream,
+} from "../packages/research-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js";
 
 const ZERO_USAGE = {
   input: 0,
@@ -77,6 +83,104 @@ test("agent context compacts old bulky tool results while preserving the task an
     message.role === "toolResult"
     && JSON.stringify(message.content).includes("output compacted for context")
   ));
+});
+
+test("OpenAI Responses requests enable native compaction before local context fallback", () => {
+  const compacted = applyNativeOpenAiCompaction(
+    { model: "gpt-5.4", input: [] },
+    { api: "openai-responses", contextWindow: 400_000 },
+  );
+  assert.deepEqual(compacted.context_management, [
+    { type: "compaction", compact_threshold: 200_000 },
+  ]);
+
+  const unsupported = { model: "faux-model", input: [] };
+  assert.equal(
+    applyNativeOpenAiCompaction(unsupported, { api: "faux", contextWindow: 400_000 }),
+    unsupported,
+  );
+});
+
+test("patched Responses stream preserves and replays opaque compaction items", async () => {
+  const compaction = {
+    type: "compaction",
+    id: "cmp_1",
+    encrypted_content: "opaque-provider-state",
+  };
+  const output = assistant("", "stop");
+  output.content = [];
+  output.api = "openai-responses";
+  output.provider = "openai";
+  output.model = "gpt-5.4";
+  const events = async function* () {
+    yield { type: "response.output_item.added", output_index: 0, item: compaction };
+    yield { type: "response.output_item.done", output_index: 0, item: compaction };
+    yield {
+      type: "response.completed",
+      response: {
+        id: "resp_1",
+        status: "completed",
+        output: [compaction],
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          total_tokens: 2,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens_details: { reasoning_tokens: 0 },
+        },
+      },
+    };
+  };
+  await processResponsesStream(events(), output, { push() {} }, {
+    ...FAUX_MODEL,
+    id: "gpt-5.4",
+    name: "GPT-5.4",
+    api: "openai-responses",
+    provider: "openai",
+    contextWindow: 400_000,
+  });
+
+  assert.equal(output.content.length, 1);
+  assert.equal(output.content[0].type, "thinking");
+  assert.equal(output.content[0].redacted, true);
+  assert.deepEqual(JSON.parse(output.content[0].thinkingSignature), compaction);
+  assert.deepEqual(
+    convertResponsesMessages(
+      { ...FAUX_MODEL, id: "gpt-5.4", api: "openai-responses", provider: "openai" },
+      { messages: [output] },
+      new Set(["openai"]),
+    ),
+    [compaction],
+  );
+});
+
+test("Pi executor restores compatible captured messages and persists the next resume state", async () => {
+  const priorMessage = {
+    role: "user",
+    content: "Prior research context",
+    timestamp: Date.now() - 1_000,
+  };
+  const contexts = [];
+  const result = await runResearchAgent({
+    prompt: "Continue with this instruction only.",
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      initialMessages: [priorMessage],
+      models: createScriptedModels([
+        assistant("## Result\nContinuation complete."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry(),
+    }),
+  });
+
+  assert.match(contexts[0].messageContents[0], /Prior research context/);
+  const raw = result.agentRun.output.raw;
+  const resumed = extractCompatiblePiAgentResumableState(raw, "faux", "faux-model");
+  assert.ok(resumed);
+  assert.equal(resumed.messages[0].content, "Prior research context");
+  assert.match(JSON.stringify(resumed.messages), /Continue with this instruction only/);
+  assert.equal(extractCompatiblePiAgentResumableState(raw, "faux", "other-model"), undefined);
 });
 
 test("direct Pi Agent and executor use the shared research system prompt", async () => {

@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@earendil-works/pi-ai@0.80.10': 00a66a73b1d4874ce0795c8517c2e2f40ebe1ec54b28555c0b4894f59edc85f3
+
 importers:
 
   .:
@@ -28,7 +31,7 @@ importers:
         version: 0.80.10(ws@8.21.0)(zod@4.4.3)
       '@earendil-works/pi-ai':
         specifier: 0.80.10
-        version: 0.80.10(ws@8.21.0)(zod@4.4.3)
+        version: 0.80.10(patch_hash=00a66a73b1d4874ce0795c8517c2e2f40ebe1ec54b28555c0b4894f59edc85f3)(ws@8.21.0)(zod@4.4.3)
       tree-sitter-wasm:
         specifier: 1.1.1
         version: 1.1.1
@@ -674,7 +677,7 @@ snapshots:
 
   '@earendil-works/pi-agent-core@0.80.10(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@earendil-works/pi-ai': 0.80.10(ws@8.21.0)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.80.10(patch_hash=00a66a73b1d4874ce0795c8517c2e2f40ebe1ec54b28555c0b4894f59edc85f3)(ws@8.21.0)(zod@4.4.3)
       ignore: 7.0.5
       typebox: 1.1.38
       yaml: 2.9.0
@@ -686,7 +689,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.80.10(ws@8.21.0)(zod@4.4.3)':
+  '@earendil-works/pi-ai@0.80.10(patch_hash=00a66a73b1d4874ce0795c8517c2e2f40ebe1ec54b28555c0b4894f59edc85f3)(ws@8.21.0)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

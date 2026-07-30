@@ -17,6 +17,7 @@ import {
   createRunbookTools,
   compileMemoryModelContext,
   createPiAgentExecutor,
+  extractCompatiblePiAgentResumableState,
   createRepositorySearchTool,
   createResearchAgentFlowCapture,
   createResearchStorageLayout,
@@ -63,6 +64,7 @@ import type {
   ResearchLiveEventSink,
   ResearchAgentExecutor,
   ResearchModelConfigPreference,
+  PiAgentResumableState,
   MemoryNodeStatus,
   MemoryNodeType,
   ResearchModelMemoryContextNode,
@@ -162,6 +164,8 @@ interface ParsedArgs {
   inspectBytes: number | undefined;
   runtimeTools: RuntimeToolConfig;
   capturePath: string | undefined;
+  resumeCapturePath: string | undefined;
+  resumeFallbackPrompt: string | undefined;
   eventStream: boolean;
   controlStream: boolean;
   workspaceRoot: string;
@@ -227,6 +231,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let inspectAction: LocalInspectionAction = "read_text";
   let inspectBytes: number | undefined;
   let capturePath: string | undefined;
+  let resumeCapturePath: string | undefined;
+  let resumeFallbackPrompt: string | undefined;
   let eventStream = false;
   let controlStream = false;
   let workspaceRoot = process.cwd();
@@ -410,6 +416,12 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--capture") {
       capturePath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--resume-capture") {
+      resumeCapturePath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--resume-fallback-prompt") {
+      resumeFallbackPrompt = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--event-stream") {
       eventStream = true;
     } else if (arg === "--control-stream") {
@@ -481,6 +493,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       disableDefaultToolConfig,
     },
     capturePath,
+    resumeCapturePath,
+    resumeFallbackPrompt,
     eventStream,
     controlStream,
     workspaceRoot,
@@ -990,6 +1004,8 @@ function usage(): string {
     "  --skill-dir <path>     Load local skills from child directories containing SKILL.md",
     "  --skill <id>           Request a loaded skill by id",
     "  --capture <path>       Write a local flow-capture JSON artifact",
+    "  --resume-capture <p>  Resume compatible model context from a prior capture",
+    "  --resume-fallback-prompt <text>  Prompt used when prior state is unavailable",
     "  --event-stream         Write prefixed live JSON events to stdout",
     "  --control-stream       Read host control JSONL from stdin",
     "  --workspace-root <p>   Workspace root for durable runtime memory",
@@ -1090,6 +1106,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     controlStream?.start();
     try {
       let modelConfig: ResolvedResearchModelConfig | undefined;
+      let resumableState: PiAgentResumableState | undefined;
+      let effectivePrompt = args.resumeFallbackPrompt ?? args.prompt;
       const agentExecutor = args.mock
         ? createDeterministicAgentExecutor()
         : createRealAgentExecutor(
@@ -1103,9 +1121,13 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
               ...(args.reasoning ? { effort: args.reasoning } : {}),
             })),
             controlStream,
+            (resumableState = args.resumeCapturePath
+              ? await loadCompatibleResumeState(args.resumeCapturePath, modelConfig)
+              : undefined),
           );
+      if (resumableState) effectivePrompt = args.prompt;
       const sessionTitle = startSessionTitleGeneration(
-        args,
+        { ...args, prompt: effectivePrompt },
         modelConfig,
         liveEventSink,
         controlStream?.signal,
@@ -1117,7 +1139,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           : {};
 
       const result = await runResearchAgent({
-        prompt: args.prompt,
+        prompt: effectivePrompt,
         workspaceRoot: args.workspaceRoot,
         workspaceContext: runtimeConfig.workspaceContext,
         memoryContext: runtimeConfig.memoryContext,
@@ -1215,11 +1237,29 @@ function startSessionTitleGeneration(
     .catch(() => undefined);
 }
 
+async function loadCompatibleResumeState(
+  capturePath: string,
+  modelConfig: ResolvedResearchModelConfig,
+): Promise<PiAgentResumableState | undefined> {
+  try {
+    const capture = JSON.parse(await readFile(resolve(capturePath), "utf8")) as unknown;
+    if (!isRecord(capture) || !isRecord(capture.agent)) return undefined;
+    return extractCompatiblePiAgentResumableState(
+      capture.agent.raw,
+      modelConfig.provider,
+      modelConfig.model,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 function createRealAgentExecutor(
   args: ParsedArgs,
   toolRegistry: ResearchToolRegistry | undefined,
   modelConfig: ResolvedResearchModelConfig,
   controlStream: HoneycrispControlStream | undefined,
+  resumableState?: PiAgentResumableState,
 ): ResearchAgentExecutor {
   const executorInput = {
     provider: modelConfig.provider,
@@ -1232,6 +1272,7 @@ function createRealAgentExecutor(
   return createPiAgentExecutor({
     ...executorInput,
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
+    ...(resumableState ? { initialMessages: resumableState.messages } : {}),
     ...(controlStream
       ? {
           getModelSelection: () => controlStream.getModelSelection(),

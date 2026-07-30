@@ -1,0 +1,49 @@
+diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+index 0216ce205ce7abf800b190bc7e63d526191dc8e7..520b1e7cb90a46e0a7e1b8550279fb484a660d58 100644
+--- a/dist/api/openai-responses-shared.js
++++ b/dist/api/openai-responses-shared.js
+@@ -246,6 +246,18 @@ export async function processResponsesStream(openaiStream, output, stream, model
+     let sawTerminalResponseEvent = false;
+     const outputSlots = new Map();
+     const reasoningBlocksById = new Map();
++    const compactionItemsById = new Set();
++    const captureCompactionItem = (item) => {
++        if (item.type !== "compaction" || !item.encrypted_content || compactionItemsById.has(item.id))
++            return;
++        compactionItemsById.add(item.id);
++        output.content.push({
++            type: "thinking",
++            thinking: "",
++            thinkingSignature: JSON.stringify(item),
++            redacted: true,
++        });
++    };
+     const getSlot = (outputIndex, type) => {
+         const slot = outputSlots.get(outputIndex);
+         return slot?.type === type ? slot : undefined;
+@@ -316,6 +328,9 @@ export async function processResponsesStream(openaiStream, output, stream, model
+     };
+     const finalizeResponse = (response) => {
+         sawTerminalResponseEvent = true;
++        for (const item of response.output ?? []) {
++            captureCompactionItem(item);
++        }
+         backfillReasoningSignatures(response.output ?? []);
+         if (response?.id) {
+             output.responseId = response.id;
+@@ -353,6 +368,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
+             output.responseId = event.response.id;
+         }
+         else if (event.type === "response.output_item.added") {
++            captureCompactionItem(event.item);
+             createSlot(event.output_index, event.item);
+         }
+         else if (event.type === "response.reasoning_summary_text.delta") {
+@@ -449,6 +465,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
+         }
+         else if (event.type === "response.output_item.done") {
+             const item = event.item;
++            captureCompactionItem(item);
+             const slot = getOrCreateSlot(event.output_index, item);
+             if (item.type === "reasoning" && slot?.type === "thinking") {
+                 const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";

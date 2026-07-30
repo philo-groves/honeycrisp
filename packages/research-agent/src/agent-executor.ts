@@ -52,6 +52,7 @@ export interface CreatePiAgentExecutorOptions {
   authFile?: string;
   maxTokens?: number;
   reasoning?: SimpleStreamOptions["reasoning"];
+  initialMessages?: readonly AgentMessage[];
   models?: Pick<Models, "getModel" | "streamSimple">;
   toolRegistry?: ResearchToolRegistry;
   toolExecution?: ToolExecutionMode;
@@ -65,11 +66,69 @@ export interface CreatePiAgentExecutorOptions {
 }
 
 const MODEL_CONTEXT_RESERVE_TOKENS = 32_768;
+const NATIVE_COMPACTION_RESERVE_TOKENS = 64_000;
+const DEFAULT_NATIVE_COMPACTION_THRESHOLD = 200_000;
 const MIN_ACTIVE_CONTEXT_TOKENS = 32_000;
 const RECENT_TOOL_RESULTS_TO_KEEP = 8;
 const MODEL_TOOL_RESULT_MAX_CHARS = 48_000;
 const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
 const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
+
+export interface PiAgentResumableState {
+  schemaVersion: 1;
+  provider: string;
+  model: string;
+  api: string;
+  messages: readonly AgentMessage[];
+}
+
+export function applyNativeOpenAiCompaction(
+  payload: unknown,
+  model: { api: string; contextWindow: number },
+): unknown {
+  if (!isNativeOpenAiResponsesApi(model.api) || !isRecord(payload)) return payload;
+  const configured = payload.context_management;
+  if (configured !== undefined && !Array.isArray(configured)) return payload;
+  const contextManagement = Array.isArray(configured) ? configured : [];
+  if (contextManagement.some((item) => isRecord(item) && item.type === "compaction")) return payload;
+  const compactThreshold = Math.max(
+    MIN_ACTIVE_CONTEXT_TOKENS,
+    Math.min(DEFAULT_NATIVE_COMPACTION_THRESHOLD, model.contextWindow - NATIVE_COMPACTION_RESERVE_TOKENS),
+  );
+  return {
+    ...payload,
+    context_management: [
+      ...contextManagement,
+      { type: "compaction", compact_threshold: compactThreshold },
+    ],
+  };
+}
+
+export function extractCompatiblePiAgentResumableState(
+  raw: unknown,
+  provider: string,
+  model: string,
+): PiAgentResumableState | undefined {
+  if (!isRecord(raw) || !isRecord(raw.resumableState)) return undefined;
+  const state = raw.resumableState;
+  if (
+    state.schemaVersion !== 1
+    || state.provider !== provider
+    || state.model !== model
+    || typeof state.api !== "string"
+    || !Array.isArray(state.messages)
+    || !state.messages.every(isAgentMessage)
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    provider,
+    model,
+    api: state.api,
+    messages: state.messages,
+  };
+}
 
 export function createDeterministicAgentExecutor(): ResearchAgentExecutor {
   return {
@@ -203,13 +262,21 @@ export function createPiAgentExecutor(
         const dynamicStreamFn: StreamFn = (_model, context, streamOptions) => {
           const active = activeModelSelection();
           if (!options.getModelSelection || !request.root) {
-            return models.streamSimple(active.model, context, streamOptions);
+            return models.streamSimple(
+              active.model,
+              context,
+              withNativeOpenAiCompaction(active.model, streamOptions),
+            );
           }
           const { reasoning: _previousReasoning, ...remainingOptions } = streamOptions ?? {};
-          return models.streamSimple(active.model, context, {
-            ...remainingOptions,
-            ...(active.reasoningEffort && active.reasoningEffort !== "off" ? { reasoning: active.reasoningEffort } : {}),
-          });
+          return models.streamSimple(
+            active.model,
+            context,
+            withNativeOpenAiCompaction(active.model, {
+              ...remainingOptions,
+              ...(active.reasoningEffort && active.reasoningEffort !== "off" ? { reasoning: active.reasoningEffort } : {}),
+            }),
+          );
         };
         const streamFn = createRetryingStreamFn(dynamicStreamFn, {
           signal: request.signal,
@@ -435,7 +502,7 @@ export function createPiAgentExecutor(
         model: model.id,
         ...(options.reasoning ? { reasoning: options.reasoning } : {}),
         prompt: input.modelInput.prompt,
-        inheritedMessages: [],
+        inheritedMessages: [...(options.initialMessages ?? [])],
         signal: input.signal ?? new AbortController().signal,
         root: true,
       });
@@ -455,6 +522,16 @@ export function createPiAgentExecutor(
           toolCallCount: rootResult.toolCallCount,
           modelCalls: rootResult.modelCalls,
           agentEvents: rootResult.agentEvents,
+          resumableState: {
+            schemaVersion: 1,
+            provider: model.provider,
+            model: model.id,
+            api: model.api,
+            messages: createResumableMessages(
+              [...(options.initialMessages ?? []), ...rootResult.messages],
+              model.contextWindow,
+            ),
+          } satisfies PiAgentResumableState,
           ...(subagents ? { subagents: subagents.snapshot() } : {}),
         },
       };
@@ -1269,6 +1346,79 @@ function hasContent(value: unknown): boolean {
 
 function formatContent(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function withNativeOpenAiCompaction(
+  model: { api: string; contextWindow: number },
+  options: SimpleStreamOptions | undefined,
+): SimpleStreamOptions | undefined {
+  if (!isNativeOpenAiResponsesApi(model.api)) return options;
+  const previousOnPayload = options?.onPayload;
+  return {
+    ...options,
+    onPayload: async (payload, payloadModel) => {
+      const transformed = previousOnPayload
+        ? await previousOnPayload(payload, payloadModel)
+        : payload;
+      return applyNativeOpenAiCompaction(transformed ?? payload, model);
+    },
+  };
+}
+
+function isNativeOpenAiResponsesApi(api: string): boolean {
+  return api === "openai-responses" || api === "openai-codex-responses";
+}
+
+function createResumableMessages(
+  messages: readonly AgentMessage[],
+  contextWindow: number,
+): AgentMessage[] {
+  let latestCompactionMessage = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message && containsNativeCompaction(message)) latestCompactionMessage = index;
+  }
+  const retained = latestCompactionMessage >= 0
+    ? messages.slice(latestCompactionMessage)
+    : messages;
+  return compactAgentContext([...retained], contextWindow);
+}
+
+function containsNativeCompaction(message: AgentMessage): boolean {
+  if (!isAssistantMessage(message)) return false;
+  return message.content.some((item) => {
+    if (item.type !== "thinking" || !item.thinkingSignature) return false;
+    try {
+      const signature = JSON.parse(item.thinkingSignature) as unknown;
+      return isRecord(signature)
+        && signature.type === "compaction"
+        && typeof signature.encrypted_content === "string";
+    } catch {
+      return false;
+    }
+  });
+}
+
+function isAgentMessage(value: unknown): value is AgentMessage {
+  if (!isRecord(value) || typeof value.timestamp !== "number") return false;
+  if (value.role === "user") {
+    return typeof value.content === "string" || Array.isArray(value.content);
+  }
+  if (value.role === "assistant") {
+    return Array.isArray(value.content)
+      && typeof value.api === "string"
+      && typeof value.provider === "string"
+      && typeof value.model === "string"
+      && typeof value.stopReason === "string"
+      && isRecord(value.usage);
+  }
+  if (value.role === "toolResult") {
+    return Array.isArray(value.content)
+      && typeof value.toolCallId === "string"
+      && typeof value.toolName === "string"
+      && typeof value.isError === "boolean";
+  }
+  return false;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
