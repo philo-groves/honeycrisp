@@ -164,6 +164,7 @@ interface ParsedArgs {
   inspectBytes: number | undefined;
   runtimeTools: RuntimeToolConfig;
   capturePath: string | undefined;
+  sessionId: string | undefined;
   resumeCapturePath: string | undefined;
   resumeFallbackPrompt: string | undefined;
   eventStream: boolean;
@@ -231,6 +232,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let inspectAction: LocalInspectionAction = "read_text";
   let inspectBytes: number | undefined;
   let capturePath: string | undefined;
+  let sessionId: string | undefined;
   let resumeCapturePath: string | undefined;
   let resumeFallbackPrompt: string | undefined;
   let eventStream = false;
@@ -416,6 +418,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--capture") {
       capturePath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--session-id") {
+      sessionId = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--resume-capture") {
       resumeCapturePath = readOptionValue(argv, index, arg);
       index += 1;
@@ -493,6 +498,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       disableDefaultToolConfig,
     },
     capturePath,
+    sessionId,
     resumeCapturePath,
     resumeFallbackPrompt,
     eventStream,
@@ -1004,6 +1010,7 @@ function usage(): string {
     "  --skill-dir <path>     Load local skills from child directories containing SKILL.md",
     "  --skill <id>           Request a loaded skill by id",
     "  --capture <path>       Write a local flow-capture JSON artifact",
+    "  --session-id <id>     Stable provider affinity ID for this research session",
     "  --resume-capture <p>  Resume compatible model context from a prior capture",
     "  --resume-fallback-prompt <text>  Prompt used when prior state is unavailable",
     "  --event-stream         Write prefixed live JSON events to stdout",
@@ -1261,9 +1268,11 @@ function createRealAgentExecutor(
   controlStream: HoneycrispControlStream | undefined,
   resumableState?: PiAgentResumableState,
 ): ResearchAgentExecutor {
+  const providerSessionId = args.sessionId?.trim() || resumableState?.providerSessionId;
   const executorInput = {
     provider: modelConfig.provider,
     model: modelConfig.model,
+    ...(providerSessionId ? { sessionId: providerSessionId } : {}),
     ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
     ...(modelConfig.effort ? { reasoning: modelConfig.effort } : {}),
     ...(toolRegistry ? { toolRegistry } : {}),

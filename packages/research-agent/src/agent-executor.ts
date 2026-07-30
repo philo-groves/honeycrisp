@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { estimateTokens, runAgentLoop } from "@earendil-works/pi-agent-core";
 import type {
   AgentEvent,
@@ -22,7 +23,7 @@ import {
   type Usage,
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
-import { nowIso } from "./ids.js";
+import { createId, nowIso } from "./ids.js";
 import {
   createToolRequestedEvent,
   getToolTransportName,
@@ -52,6 +53,7 @@ export interface CreatePiAgentExecutorOptions {
   authFile?: string;
   maxTokens?: number;
   reasoning?: SimpleStreamOptions["reasoning"];
+  sessionId?: string;
   initialMessages?: readonly AgentMessage[];
   models?: Pick<Models, "getModel" | "streamSimple">;
   toolRegistry?: ResearchToolRegistry;
@@ -79,6 +81,7 @@ export interface PiAgentResumableState {
   provider: string;
   model: string;
   api: string;
+  providerSessionId?: string;
   messages: readonly AgentMessage[];
 }
 
@@ -121,11 +124,15 @@ export function extractCompatiblePiAgentResumableState(
   ) {
     return undefined;
   }
+  const providerSessionId = typeof state.providerSessionId === "string"
+    ? normalizeProviderSessionId(state.providerSessionId)
+    : undefined;
   return {
     schemaVersion: 1,
     provider,
     model,
     api: state.api,
+    ...(providerSessionId ? { providerSessionId } : {}),
     messages: state.messages,
   };
 }
@@ -164,6 +171,7 @@ export function createPiAgentExecutor(
       }
 
       const toolExecution = options.toolExecution ?? "sequential";
+      const rootProviderSessionId = normalizeProviderSessionId(options.sessionId) ?? createId("session");
       let runSession!: (request: SubagentRunRequest & { root?: boolean }) => Promise<SubagentRunResult & { agentEvents: Record<string, unknown>[] }>;
       const subagents = options.subagents === false
         ? null
@@ -246,6 +254,7 @@ export function createPiAgentExecutor(
         });
         const collaborationTools = subagents?.createTools(request.id) ?? [];
         const tools = [...researchTools, ...collaborationTools];
+        const providerSessionId = providerSessionIdForAgent(rootProviderSessionId, request.id, request.root === true);
         const activeModelSelection = (): { model: NonNullable<ReturnType<Models["getModel"]>>; reasoningEffort?: ModelThinkingLevel } => {
           const selection = request.root ? options.getModelSelection?.() : undefined;
           if (!selection) return {
@@ -265,17 +274,21 @@ export function createPiAgentExecutor(
             return models.streamSimple(
               active.model,
               context,
-              withNativeOpenAiCompaction(active.model, streamOptions),
+              withProviderSession(active.model, streamOptions, providerSessionId),
             );
           }
           const { reasoning: _previousReasoning, ...remainingOptions } = streamOptions ?? {};
           return models.streamSimple(
             active.model,
             context,
-            withNativeOpenAiCompaction(active.model, {
-              ...remainingOptions,
-              ...(active.reasoningEffort && active.reasoningEffort !== "off" ? { reasoning: active.reasoningEffort } : {}),
-            }),
+            withProviderSession(
+              active.model,
+              {
+                ...remainingOptions,
+                ...(active.reasoningEffort && active.reasoningEffort !== "off" ? { reasoning: active.reasoningEffort } : {}),
+              },
+              providerSessionId,
+            ),
           );
         };
         const streamFn = createRetryingStreamFn(dynamicStreamFn, {
@@ -527,6 +540,7 @@ export function createPiAgentExecutor(
             provider: model.provider,
             model: model.id,
             api: model.api,
+            providerSessionId: rootProviderSessionId,
             messages: createResumableMessages(
               [...(options.initialMessages ?? []), ...rootResult.messages],
               model.contextWindow,
@@ -1346,6 +1360,33 @@ function hasContent(value: unknown): boolean {
 
 function formatContent(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function withProviderSession(
+  model: { api: string; contextWindow: number },
+  options: SimpleStreamOptions | undefined,
+  sessionId: string,
+): SimpleStreamOptions {
+  return withNativeOpenAiCompaction(model, { ...options, sessionId }) ?? { ...options, sessionId };
+}
+
+function providerSessionIdForAgent(rootSessionId: string, agentId: string, root: boolean): string {
+  if (root) return rootSessionId;
+  const suffix = createHash("sha256")
+    .update(`${rootSessionId}:${agentId}`)
+    .digest("hex")
+    .slice(0, 16);
+  const prefix = Array.from(rootSessionId).slice(0, 47).join("");
+  return `${prefix}:${suffix}`;
+}
+
+function normalizeProviderSessionId(sessionId: string | undefined): string | undefined {
+  const normalized = sessionId?.trim();
+  if (!normalized) return undefined;
+  const chars = Array.from(normalized);
+  if (chars.length <= 64) return normalized;
+  const suffix = createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+  return `${chars.slice(0, 51).join("")}:${suffix}`;
 }
 
 function withNativeOpenAiCompaction(

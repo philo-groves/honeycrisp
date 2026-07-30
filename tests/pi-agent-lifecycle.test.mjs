@@ -166,6 +166,7 @@ test("Pi executor restores compatible captured messages and persists the next re
     executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
+      sessionId: "run_resume_fixture",
       initialMessages: [priorMessage],
       models: createScriptedModels([
         assistant("## Result\nContinuation complete."),
@@ -178,6 +179,7 @@ test("Pi executor restores compatible captured messages and persists the next re
   const raw = result.agentRun.output.raw;
   const resumed = extractCompatiblePiAgentResumableState(raw, "faux", "faux-model");
   assert.ok(resumed);
+  assert.equal(resumed.providerSessionId, "run_resume_fixture");
   assert.equal(resumed.messages[0].content, "Prior research context");
   assert.match(JSON.stringify(resumed.messages), /Continue with this instruction only/);
   assert.equal(extractCompatiblePiAgentResumableState(raw, "faux", "other-model"), undefined);
@@ -303,6 +305,7 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
     executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
+      sessionId: "run_fixture_affinity",
       models,
       toolRegistry: createResearchToolRegistry([tool]),
       toolExecution: "sequential",
@@ -326,6 +329,10 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   assert.ok(raw.agentEvents.some((event) => event.type === "tool_execution_update"));
   assert.deepEqual(contexts[0].toolNames, ["fixture_inspect", ...COLLABORATION_TOOL_NAMES]);
   assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
+  assert.deepEqual(contexts.map((context) => context.sessionId), [
+    "run_fixture_affinity",
+    "run_fixture_affinity",
+  ]);
   assert.doesNotMatch(contexts[0].systemPrompt, /Use durable memory as a concise research graph/);
   assert.match(contexts[0].systemPrompt, /Never use the \$HOME environment variable/);
   const initialMessage = contexts[0].messageContents.join("\n");
@@ -752,6 +759,7 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
       provider: "faux",
       model: "faux-model",
       reasoning: "high",
+      sessionId: "run_subagent_affinity",
       models: createSubagentModels(contexts),
       toolRegistry: createResearchToolRegistry([tool]),
     }),
@@ -775,6 +783,9 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   assert.deepEqual(calls, [{ path: "parse.c" }]);
   assert.ok(childContext);
   assert.equal(childContext.reasoning, "low");
+  assert.notEqual(childContext.sessionId, "run_subagent_affinity");
+  assert.equal(childContext.sessionId, contexts.findLast((context) => context.model === "child-model").sessionId);
+  assert.ok(rootContexts.every((context) => context.sessionId === "run_subagent_affinity"));
   assert.ok(childContext.messageContents.some((content) => content.includes("Delegate a bounded parser review")));
   assert.ok(childContext.messageContents.some((content) => content.includes("Inspect the parser boundary independently")));
   assert.ok(rootContexts.at(-1).messageContents.some((content) => content.includes("CHILD_RESULT")));
@@ -1090,9 +1101,10 @@ function createScriptedModels(messages, contexts = []) {
     getModel() {
       return FAUX_MODEL;
     },
-    streamSimple(_model, context) {
+    streamSimple(_model, context, options = {}) {
       contexts.push({
         systemPrompt: context.systemPrompt,
+        sessionId: options.sessionId,
         toolNames: context.tools?.map((tool) => tool.name) ?? [],
         messageRoles: context.messages.map((message) => message.role),
         messageContents: context.messages.map((message) => JSON.stringify(message.content)),
@@ -1113,6 +1125,7 @@ function createSubagentModels(contexts) {
       const captured = {
         model: model.id,
         reasoning: options.reasoning,
+        sessionId: options.sessionId,
         toolNames: context.tools?.map((tool) => tool.name) ?? [],
         messageContents: context.messages.map((message) => JSON.stringify(message.content)),
       };
