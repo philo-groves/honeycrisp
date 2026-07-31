@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  ResearchDispositionRecorder,
+  createSessionDispositionTool,
+  fallbackResearchFinalDisposition,
+} from "../packages/research-agent/dist/index.js";
+
+test("session disposition records one validated structured terminal state", async () => {
+  const recorder = new ResearchDispositionRecorder();
+  const tool = createSessionDispositionTool(recorder);
+  const action = {
+    id: "disposition_one",
+    actionClass: "respond",
+    toolName: "session.disposition",
+    input: {
+      outcome: "blocked",
+      summary: "Live validation requires an authorized second account.",
+      blockerDependencies: [{
+        kind: "credentials",
+        description: "No second test account is available.",
+        requiredState: "Provide an authorized credential reference.",
+        external: true,
+      }],
+      externalStateRequired: true,
+    },
+  };
+
+  assert.equal(tool.descriptor.metadata.requiredBeforeFinalResponse, true);
+  const result = await tool.execute(action);
+  assert.equal(result.status, "complete");
+  assert.deepEqual(recorder.get(), {
+    ...action.input,
+    recordedAt: recorder.get().recordedAt,
+  });
+
+  const duplicate = await tool.execute({ ...action, id: "disposition_two" });
+  assert.equal(duplicate.status, "error");
+  assert.match(duplicate.error.message, /already been recorded/);
+});
+
+test("session disposition rejects inconsistent external blockers and provides terminal fallbacks", async () => {
+  const recorder = new ResearchDispositionRecorder();
+  const tool = createSessionDispositionTool(recorder);
+  const result = await tool.execute({
+    id: "invalid_disposition",
+    actionClass: "respond",
+    toolName: "session.disposition",
+    input: {
+      outcome: "blocked",
+      summary: "Blocked.",
+      blockerDependencies: [{ kind: "environment", description: "Missing target.", requiredState: "Provide target.", external: true }],
+      externalStateRequired: false,
+    },
+  });
+
+  assert.equal(result.status, "error");
+  assert.equal(recorder.get(), null);
+  const fallback = fallbackResearchFinalDisposition("error", "Provider failed.");
+  assert.deepEqual(fallback, {
+    outcome: "failed",
+    summary: "Provider failed.",
+    blockerDependencies: [],
+    externalStateRequired: false,
+    recordedAt: fallback.recordedAt,
+  });
+});

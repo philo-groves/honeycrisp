@@ -42,6 +42,7 @@ export interface ResearchAgentFlowCapture {
     startedAt: string;
     completedAt: string;
     outputText: string;
+    finalDisposition: RunResearchAgentResult["finalDisposition"];
     nextPromptSuggestions?: readonly ResearchNextPromptSuggestion[];
     researchTrace?: ResearchTrace;
     raw?: unknown;
@@ -87,6 +88,7 @@ export function createResearchAgentFlowCapture(
       startedAt: result.agentRun.startedAt,
       completedAt: result.agentRun.completedAt,
       outputText: result.agentRun.output.text,
+      finalDisposition: result.finalDisposition,
       ...(result.agentRun.output.nextPromptSuggestions
         ? { nextPromptSuggestions: result.agentRun.output.nextPromptSuggestions }
         : {}),

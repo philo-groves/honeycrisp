@@ -16,6 +16,7 @@ import {
   type ResearchModelWorkspaceContext,
 } from "./model-context.js";
 import { createId, createResearchEventId, nowIso } from "./ids.js";
+import { fallbackResearchFinalDisposition, type ResearchFinalDisposition } from "./session-disposition-tool.js";
 import type {
   ResearchAgentExecutor,
   ResearchAgentRunResult,
@@ -44,6 +45,7 @@ export interface RunResearchAgentInput {
   executor: ResearchAgentExecutor;
   eventSink?: ResearchLiveEventSink;
   signal?: AbortSignal;
+  finalDispositionProvider?: () => ResearchFinalDisposition | null;
 }
 
 export interface RunResearchAgentResult {
@@ -63,6 +65,7 @@ export interface RunResearchAgentResult {
     aiPackage: "@earendil-works/pi-ai";
   };
   response: string;
+  finalDisposition: ResearchFinalDisposition;
 }
 
 export async function runResearchAgent(
@@ -174,6 +177,8 @@ export async function runResearchAgent(
       },
     },
   ];
+  const finalDisposition = input.finalDispositionProvider?.()
+    ?? fallbackResearchFinalDisposition(agentRun.status, agentRun.output.text);
   emitLiveResearchEvents(input.eventSink, terminalEvents);
   events.push(...(agentRun.output.toolEvents ?? []), ...terminalEvents);
 
@@ -194,6 +199,7 @@ export async function runResearchAgent(
       aiPackage: "@earendil-works/pi-ai",
     },
     response: agentRun.output.text,
+    finalDisposition,
   };
 }
 

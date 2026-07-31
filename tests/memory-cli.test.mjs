@@ -78,6 +78,13 @@ test("main CLI uses reconstructed context when a resume capture is unavailable",
     assert.equal(result.status, 0, result.stderr);
     const capture = JSON.parse(await readFile(capturePath, "utf8"));
     assert.equal(capture.request.prompt, "Reconstructed prior context plus the new instruction.");
+    assert.deepEqual(capture.agent.finalDisposition, {
+      outcome: "inconclusive",
+      summary: capture.agent.outputText,
+      blockerDependencies: [],
+      externalStateRequired: false,
+      recordedAt: capture.agent.finalDisposition.recordedAt,
+    });
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
@@ -378,6 +385,7 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
       "runbook.create",
       "runbook.get",
       "runbook.list",
+      "session.disposition",
       "storage.list",
     ],
   );
@@ -534,6 +542,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
 
   assert.equal(disabled.status, 0, disabled.stderr);
   assert.deepEqual(disabledPayload.tools.map((tool) => tool.name), [
+    "session.disposition",
     "memory.search",
     "memory.get",
     "memory.save",
@@ -552,7 +561,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
   assert.equal(workspaceDefault.status, 0, workspaceDefault.stderr);
   assert.deepEqual(
     workspaceDefaultPayload.tools.map((tool) => tool.name),
-    ["memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "repository.search"],
+    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "repository.search"],
   );
   assert.equal(
     workspaceDefaultPayload.workspaceContext.workspaceRoot,
@@ -669,6 +678,7 @@ test("main CLI capture includes runtime tool and skill configuration", async () 
       (tool) => tool.name === "analysis.transform",
     ),
   );
+  assert.ok(capture.runtimeConfig.tools.some((tool) => tool.name === "session.disposition"));
   assert.deepEqual(capture.runtimeConfig.skills.selectedIds, ["parser-cli"]);
   assert.equal(capture.runtimeConfig.governance.maxToolCalls, 2);
   assert.equal(capture.schemaVersion, 4);

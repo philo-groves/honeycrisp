@@ -32,6 +32,7 @@ import {
   getDefaultResearchModelConfigPath,
   getDefaultResearchToolConfigPath,
   createSynthesisTool,
+  createSessionDispositionTool,
   getAuthStatus,
   getProviderModelCatalog,
   generateResearchSessionTitle,
@@ -51,6 +52,7 @@ import {
   workspaceContextFileReadHints,
   writeResearchModelConfig,
   writeResearchToolConfig,
+  ResearchDispositionRecorder,
 } from "@honeycrisp/research-agent";
 import type {
   AuthEvent,
@@ -1158,6 +1160,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           : {}),
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
         executor: agentExecutor,
+        finalDispositionProvider: () => runtimeConfig.dispositionRecorder.get(),
         ...(liveEventSink ? { eventSink: liveEventSink } : {}),
         ...(controlStream ? { signal: controlStream.signal } : {}),
       });
@@ -2143,6 +2146,7 @@ async function createRuntimeConfig(args: {
   memoryContext: readonly ResearchModelMemoryContextNode[];
   runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
+  dispositionRecorder: ResearchDispositionRecorder;
   cleanup?: () => Promise<void>;
 }> {
   const workspaceRoot = args.workspaceRoot ?? process.cwd();
@@ -2159,6 +2163,10 @@ async function createRuntimeConfig(args: {
   const skills = loadCliSkills(runtimeTools.skillDirs);
   const governance = createCliGovernance(runtimeTools);
   const cleanupCallbacks: (() => Promise<void>)[] = [];
+  const dispositionRecorder = new ResearchDispositionRecorder();
+  const dispositionTool = createSessionDispositionTool(dispositionRecorder);
+  executableTools.push(dispositionTool);
+  toolDescriptors.push(dispositionTool.descriptor);
   const storageLayout = createResearchStorageLayout({
     workspaceRoot,
   });
@@ -2330,6 +2338,7 @@ async function createRuntimeConfig(args: {
     workspaceContext,
     memoryContext,
     runtimeTools,
+    dispositionRecorder,
     capture: createRuntimeCapture({
       families,
       args: runtimeArgs,

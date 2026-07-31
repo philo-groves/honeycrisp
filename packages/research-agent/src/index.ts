@@ -28,5 +28,6 @@ export * from "./subagent-runtime.js";
 export * from "./research-trace.js";
 export * from "./pi-runtime.js";
 export * from "./session-title.js";
+export * from "./session-disposition-tool.js";
 export * from "./types.js";
 export type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";

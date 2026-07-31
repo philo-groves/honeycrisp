@@ -209,6 +209,7 @@ export function createPiAgentExecutor(
       const hasRunbookTools = researchToolNames.has("runbook_list")
         && researchToolNames.has("runbook_create")
         && researchToolNames.has("runbook_append");
+      const hasSessionDispositionTool = researchToolNames.has("session_disposition");
 
       runSession = async (request) => {
         const sessionModel = request.root ? model : models.getModel(options.provider, request.model);
@@ -253,7 +254,10 @@ export function createPiAgentExecutor(
           },
         });
         const collaborationTools = subagents?.createTools(request.id) ?? [];
-        const tools = [...researchTools, ...collaborationTools];
+        const tools = [
+          ...researchTools.filter((tool) => request.root || tool.name !== "session_disposition"),
+          ...collaborationTools,
+        ];
         const providerSessionId = providerSessionIdForAgent(rootProviderSessionId, request.id, request.root === true);
         const activeModelSelection = (): { model: NonNullable<ReturnType<Models["getModel"]>>; reasoningEffort?: ModelThinkingLevel } => {
           const selection = request.root ? options.getModelSelection?.() : undefined;
@@ -366,6 +370,7 @@ export function createPiAgentExecutor(
               hasTools: tools.length > 0,
               hasMemoryTools,
               hasRunbookTools,
+              hasSessionDispositionTool: request.root === true && hasSessionDispositionTool,
               ...(request.root ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),
             }),
