@@ -144,6 +144,7 @@ interface ParsedToolsConfigArgs {
 
 interface ParsedArgs {
   prompt: string | undefined;
+  goal: boolean;
   successGates: string[];
   failureOrStopGates: string[];
   scopeConstraints: string[];
@@ -218,6 +219,7 @@ interface ParsedConfigArgs {
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
   let prompt: string | undefined;
+  let goal = false;
   let json = false;
   let help = false;
   let version = false;
@@ -278,6 +280,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     if (arg === "-p" || arg === "--prompt") {
       prompt = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--goal") {
+      goal = true;
     } else if (arg === "--success") {
       successGates.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -455,6 +459,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 
   return {
     prompt,
+    goal,
     successGates,
     failureOrStopGates,
     scopeConstraints,
@@ -967,6 +972,7 @@ function usage(): string {
     "",
     "Options:",
     "  -p, --prompt <prompt>  Research request for the agent",
+    "  --goal                 Continue the same Pi session until the objective is complete or strictly blocked",
     "  --success <gate>       Add a success/completion gate",
     "  --stop <gate>          Add a failure or stop gate",
     "  --scope <constraint>   Add a scope constraint",
@@ -1099,6 +1105,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       process.exitCode = 1;
       return;
     }
+    if (args.goal && args.mock) {
+      throw new Error("--goal requires the Pi agent executor and cannot be combined with --mock.");
+    }
 
     const runtimeConfig = await createRuntimeConfig(args);
     const liveEventSink = args.eventStream ? createCliLiveEventSink() : undefined;
@@ -1129,6 +1138,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
               ...(args.model ? { model: args.model } : {}),
               ...(args.reasoning ? { effort: args.reasoning } : {}),
             })),
+            runtimeConfig.dispositionRecorder,
             controlStream,
             (resumableState = args.resumeCapturePath
               ? await loadCompatibleResumeState(args.resumeCapturePath, modelConfig)
@@ -1268,6 +1278,7 @@ function createRealAgentExecutor(
   args: ParsedArgs,
   toolRegistry: ResearchToolRegistry | undefined,
   modelConfig: ResolvedResearchModelConfig,
+  dispositionRecorder: ResearchDispositionRecorder,
   controlStream: HoneycrispControlStream | undefined,
   resumableState?: PiAgentResumableState,
 ): ResearchAgentExecutor {
@@ -1283,6 +1294,15 @@ function createRealAgentExecutor(
 
   return createPiAgentExecutor({
     ...executorInput,
+    ...(args.goal
+      ? {
+          goal: {
+            objective: args.prompt!,
+            getDisposition: () => dispositionRecorder.get(),
+            resetDisposition: () => dispositionRecorder.resetForGoalContinuation(),
+          },
+        }
+      : {}),
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
     ...(resumableState ? { initialMessages: resumableState.messages } : {}),
     ...(controlStream

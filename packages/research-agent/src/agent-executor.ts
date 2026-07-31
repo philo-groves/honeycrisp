@@ -37,6 +37,11 @@ import {
   type SubagentRunRequest,
   type SubagentRunResult,
 } from "./subagent-runtime.js";
+import {
+  RESEARCH_GOAL_TOOL_DESCRIPTORS,
+  ResearchGoalRuntime,
+  type CreateResearchGoalRuntimeOptions,
+} from "./goal-runtime.js";
 import { createResearchSystemPrompt } from "./system-prompt.js";
 import type {
   ResearchAgentExecutionInput,
@@ -65,6 +70,7 @@ export interface CreatePiAgentExecutorOptions {
     maxThreads?: number;
     maxDepth?: number;
   };
+  goal?: CreateResearchGoalRuntimeOptions;
 }
 
 const MODEL_CONTEXT_RESERVE_TOKENS = 32_768;
@@ -75,6 +81,11 @@ const RECENT_TOOL_RESULTS_TO_KEEP = 8;
 const MODEL_TOOL_RESULT_MAX_CHARS = 48_000;
 const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
 const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
+const RUNTIME_CONTROL_TOOL_NAMES = new Set([
+  "get_goal",
+  "update_goal",
+  "session_disposition",
+]);
 
 export interface PiAgentResumableState {
   schemaVersion: 1;
@@ -156,9 +167,13 @@ export function createDeterministicAgentExecutor(): ResearchAgentExecutor {
 export function createPiAgentExecutor(
   options: CreatePiAgentExecutorOptions,
 ): ResearchAgentExecutor {
+  const controlToolDescriptors = [
+    ...(options.subagents === false ? [] : SUBAGENT_COLLABORATION_TOOLS),
+    ...(options.goal ? RESEARCH_GOAL_TOOL_DESCRIPTORS : []),
+  ];
   return {
     name: `pi:${options.provider}/${options.model}:agent`,
-    ...(options.subagents === false ? {} : { collaborationTools: SUBAGENT_COLLABORATION_TOOLS }),
+    ...(controlToolDescriptors.length > 0 ? { collaborationTools: controlToolDescriptors } : {}),
     async execute(input) {
       const models =
         options.models ??
@@ -172,6 +187,7 @@ export function createPiAgentExecutor(
 
       const toolExecution = options.toolExecution ?? "sequential";
       const rootProviderSessionId = normalizeProviderSessionId(options.sessionId) ?? createId("session");
+      const goalRuntime = options.goal ? new ResearchGoalRuntime(options.goal) : null;
       let runSession!: (request: SubagentRunRequest & { root?: boolean }) => Promise<SubagentRunResult & { agentEvents: Record<string, unknown>[] }>;
       const subagents = options.subagents === false
         ? null
@@ -254,9 +270,11 @@ export function createPiAgentExecutor(
           },
         });
         const collaborationTools = subagents?.createTools(request.id) ?? [];
+        const goalTools = request.root ? goalRuntime?.createTools() ?? [] : [];
         const tools = [
           ...researchTools.filter((tool) => request.root || tool.name !== "session_disposition"),
           ...collaborationTools,
+          ...goalTools,
         ];
         const providerSessionId = providerSessionIdForAgent(rootProviderSessionId, request.id, request.root === true);
         const activeModelSelection = (): { model: NonNullable<ReturnType<Models["getModel"]>>; reasoningEffort?: ModelThinkingLevel } => {
@@ -373,6 +391,7 @@ export function createPiAgentExecutor(
               hasSessionDispositionTool: request.root === true && hasSessionDispositionTool,
               ...(request.root ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),
+              goalEnabled: request.root === true && goalRuntime !== null,
             }),
             messages: initialMessages,
             ...(tools.length > 0 ? { tools } : {}),
@@ -387,18 +406,19 @@ export function createPiAgentExecutor(
               const toolCall = createToolCallFromHook(hookContext);
               subagents?.captureContext(request.id, toolCall.id, hookContext.context.messages);
               const researchTool = options.toolRegistry?.find(toolCall.name);
+              const runtimeControlTool = RUNTIME_CONTROL_TOOL_NAMES.has(toolCall.name);
               const preflight = researchTool
                 ? options.toolRegistry?.preflightToolCall(toolCall, {
-                    ...(input.governance ? { governance: input.governance } : {}),
-                    toolCallCount,
+                    ...(!runtimeControlTool && input.governance ? { governance: input.governance } : {}),
+                    toolCallCount: runtimeControlTool ? 0 : toolCallCount,
                     ...(signal ? { signal } : {}),
                   })
                 : undefined;
               if (!preflight) {
-                reserveToolCall(toolCall.id);
+                if (!runtimeControlTool) reserveToolCall(toolCall.id);
                 return undefined;
               }
-              reserveToolCall(toolCall.id);
+              if (!runtimeControlTool) reserveToolCall(toolCall.id);
               executionRecords.set(toolCall.id, preflight);
               capturedToolCalls.add(toolCall.id);
               const attributedEvents = attributeResearchEvents(preflight.events, {
@@ -447,7 +467,9 @@ export function createPiAgentExecutor(
               const removeResearchTools =
                 typeof input.modelInput.toolBudget.maxToolCalls === "number"
                 && toolCallCount >= input.modelInput.toolBudget.maxToolCalls
-                && context.tools?.some((tool) => researchToolNames.has(tool.name));
+                && context.tools?.some((tool) =>
+                  researchToolNames.has(tool.name) && !RUNTIME_CONTROL_TOOL_NAMES.has(tool.name)
+                );
               if (!contextCompacted && !removeResearchTools) return undefined;
               if (contextCompacted && input.eventSink) {
                 await emitLiveEvent(input.eventSink, {
@@ -469,7 +491,11 @@ export function createPiAgentExecutor(
                   ...context,
                   messages: compactedMessages,
                   ...(removeResearchTools
-                    ? { tools: (context.tools ?? []).filter((tool) => !researchToolNames.has(tool.name)) }
+                    ? {
+                        tools: (context.tools ?? []).filter((tool) =>
+                          !researchToolNames.has(tool.name) || RUNTIME_CONTROL_TOOL_NAMES.has(tool.name)
+                        ),
+                      }
                     : {}),
                 },
               };
@@ -478,7 +504,10 @@ export function createPiAgentExecutor(
               ...(request.root && options.getSteeringMessages ? await options.getSteeringMessages() : []),
               ...(subagents?.takeMailbox(request.id) ?? []),
             ],
-            getFollowUpMessages: async () => subagents?.takeMailbox(request.id) ?? [],
+            getFollowUpMessages: async () => [
+              ...(subagents?.takeMailbox(request.id) ?? []),
+              ...(request.root ? goalRuntime?.continueAfterRootResponse() ?? [] : []),
+            ],
           },
           async (event) => {
             if (event.type === "turn_start") currentTurn += 1;
@@ -531,6 +560,7 @@ export function createPiAgentExecutor(
       return {
         text: rootResult.text,
         ...(allToolEvents.length > 0 ? { toolEvents: allToolEvents } : {}),
+        ...(goalRuntime ? { goal: goalRuntime.snapshot() } : {}),
         raw: {
           provider: model.provider,
           model: model.id,
@@ -953,9 +983,10 @@ function createAgentTools(input: {
             name: getToolTransportName(tool),
             arguments: params,
           };
+          const runtimeControlTool = RUNTIME_CONTROL_TOOL_NAMES.has(toolCall.name);
           const executionOptions = {
-            ...(input.governance ? { governance: input.governance } : {}),
-            toolCallCount: input.reserveToolCall(toolCallId),
+            ...(!runtimeControlTool && input.governance ? { governance: input.governance } : {}),
+            toolCallCount: runtimeControlTool ? 0 : input.reserveToolCall(toolCallId),
             ...(signal ? { signal } : {}),
           };
           input.recordExecutionStart(input.toolRegistry!.createActionFromToolCall(toolCall, executionOptions));

@@ -22,7 +22,13 @@ pnpm build
 pnpm start -p "Investigate the parser behavior in this workspace"
 ```
 
-Honeycrisp passes the request, authorized workspace and source context, bounded tiered graph memory, and selected skills to Pi's native agent loop. Pi supplies the actual research and collaboration tool definitions separately. Internal database, artifact, and peer-storage paths are runtime details rather than prompt guidance. The model owns investigation planning, tool use, and completion; Honeycrisp does not create a parallel goal tree, subgoal controller, or outer loop.
+Honeycrisp passes the request, authorized workspace and source context, bounded tiered graph memory, and selected skills to Pi's native agent loop. Pi supplies the actual research and collaboration tool definitions separately. Internal database, artifact, and peer-storage paths are runtime details rather than prompt guidance. The model owns investigation planning and tool use; Honeycrisp does not create a parallel goal tree, subgoal controller, or structured scan workflow.
+
+Pass `--goal` to keep one flat objective active across root responses in the same Pi session. Honeycrisp exposes root-only `get_goal` and `update_goal` controls and injects a follow-up message while the goal remains active. Completion requires both an `objective_achieved` session disposition and an explicit `update_goal` request. A goal becomes blocked only when the same concrete external dependency is recorded for three consecutive goal turns. Partial results, uncertainty, and ordinary response boundaries continue the objective without creating generated subgoals or a host-side scheduler.
+
+```sh
+pnpm start --goal -p "Find and verify a high-impact vulnerability in the authorized target"
+```
 
 The Pi agent can delegate bounded independent work through Codex-style collaboration tools: `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, `list_agents`, and `wait_agent`. Children share the current workspace, tool policy, storage, and memory tier context. A child may inherit all, none, or the last N user turns. Full-history children inherit the parent model and effort; partial or fresh children may choose another model from the active provider and a supported effort. The initial runtime permits six concurrent children at one level of depth. Collaboration waits are capped at one minute and return immediately when the caller has no running descendants. A model stream that produces no response content for three minutes is aborted and retried through the transient-error path. Retryable provider failures recover in the same session immediately, then after one and two minutes, with later attempts capped at three-minute intervals. Safety or cyber guardrail errors inject transcript-aware steering that either continues an obvious authorized false positive or narrows the work to safer authorized methods before retrying.
 
@@ -94,7 +100,7 @@ pnpm start --mock \
   -p "Review the local source evidence"
 ```
 
-The schema-v4 capture records the request, agent result, model/tool metadata,
+The schema-v5 capture records the request, agent result, optional goal state, model/tool metadata,
 event timeline, bounded memory context, storage manifest, and workspace context.
 Real Pi-agent captures also retain compatible resumable messages and their provider session-affinity identifier in `agent.raw.resumableState`, including provider-encrypted reasoning and compaction items but never host credentials. A host can pass a stable run identifier with `--session-id` and the prior artifact with `--resume-capture`; `--resume-fallback-prompt` supplies bounded reconstructed context when the capture is missing, legacy, malformed, or uses a different provider/model.
 Private model thought traces are not persisted in graph memory.

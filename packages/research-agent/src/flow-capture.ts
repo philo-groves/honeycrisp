@@ -32,7 +32,7 @@ export interface ResearchFlowEventCapture {
 }
 
 export interface ResearchAgentFlowCapture {
-  schemaVersion: 4;
+  schemaVersion: 5;
   capturedAt: string;
   request: { prompt: string };
   agent: {
@@ -43,6 +43,7 @@ export interface ResearchAgentFlowCapture {
     completedAt: string;
     outputText: string;
     finalDisposition: RunResearchAgentResult["finalDisposition"];
+    goal?: RunResearchAgentResult["agentRun"]["output"]["goal"];
     nextPromptSuggestions?: readonly ResearchNextPromptSuggestion[];
     researchTrace?: ResearchTrace;
     raw?: unknown;
@@ -78,7 +79,7 @@ export function createResearchAgentFlowCapture(
   options: { capturedAt?: string } = {},
 ): ResearchAgentFlowCapture {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     capturedAt: options.capturedAt ?? nowIso(),
     request: { prompt: result.prompt },
     agent: {
@@ -89,6 +90,7 @@ export function createResearchAgentFlowCapture(
       completedAt: result.agentRun.completedAt,
       outputText: result.agentRun.output.text,
       finalDisposition: result.finalDisposition,
+      ...(result.agentRun.output.goal ? { goal: result.agentRun.output.goal } : {}),
       ...(result.agentRun.output.nextPromptSuggestions
         ? { nextPromptSuggestions: result.agentRun.output.nextPromptSuggestions }
         : {}),

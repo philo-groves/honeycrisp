@@ -28,6 +28,7 @@ test("session disposition records one validated structured terminal state", asyn
   };
 
   assert.equal(tool.descriptor.metadata.requiredBeforeFinalResponse, true);
+  assert.equal(tool.descriptor.sideEffects, "none");
   const result = await tool.execute(action);
   assert.equal(result.status, "complete");
   assert.deepEqual(recorder.get(), {
@@ -38,6 +39,38 @@ test("session disposition records one validated structured terminal state", asyn
   const duplicate = await tool.execute({ ...action, id: "disposition_two" });
   assert.equal(duplicate.status, "error");
   assert.match(duplicate.error.message, /already been recorded/);
+});
+
+test("session disposition can be reset between nonterminal goal turns", async () => {
+  const recorder = new ResearchDispositionRecorder();
+  const tool = createSessionDispositionTool(recorder);
+  const first = await tool.execute({
+    id: "disposition_partial",
+    actionClass: "respond",
+    toolName: "session.disposition",
+    input: {
+      outcome: "objective_partially_achieved",
+      summary: "The source is verified but the sink is not.",
+      blockerDependencies: [],
+      externalStateRequired: false,
+    },
+  });
+  assert.equal(first.status, "complete");
+
+  recorder.resetForGoalContinuation();
+  const second = await tool.execute({
+    id: "disposition_complete",
+    actionClass: "respond",
+    toolName: "session.disposition",
+    input: {
+      outcome: "objective_achieved",
+      summary: "The complete source-to-sink path is verified.",
+      blockerDependencies: [],
+      externalStateRequired: false,
+    },
+  });
+  assert.equal(second.status, "complete");
+  assert.equal(recorder.get().outcome, "objective_achieved");
 });
 
 test("session disposition rejects inconsistent external blockers and provides terminal fallbacks", async () => {

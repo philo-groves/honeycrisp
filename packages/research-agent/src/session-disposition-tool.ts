@@ -85,6 +85,10 @@ export class ResearchDispositionRecorder {
   public get(): ResearchFinalDisposition | null {
     return this.disposition ? cloneDisposition(this.disposition) : null;
   }
+
+  public resetForGoalContinuation(): void {
+    this.disposition = null;
+  }
 }
 
 export function createSessionDispositionTool(recorder: ResearchDispositionRecorder): ResearchExecutableTool {
@@ -94,7 +98,7 @@ export function createSessionDispositionTool(recorder: ResearchDispositionRecord
       transportName: "session_disposition",
       description: "Record the root session's structured final disposition exactly once before the final response. List concrete unresolved dependencies and mark externalStateRequired only when more in-session work cannot resolve them.",
       actionClasses: ["synthesize", "respond"],
-      sideEffects: "write",
+      sideEffects: "none",
       requiredPermissions: [],
       inputSchema: PARAMETERS,
       metadata: { provider: "honeycrisp.session", requiredBeforeFinalResponse: true },

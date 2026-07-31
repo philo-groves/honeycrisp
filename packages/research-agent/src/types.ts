@@ -1,3 +1,5 @@
+import type { ResearchGoalSnapshot } from "./goal-runtime.js";
+
 export type ResearchActionClass =
   | "recall"
   | "search"
@@ -265,6 +267,7 @@ export interface ResearchAgentExecutionInput {
 
 export interface ResearchAgentExecutionOutput {
   text: string;
+  goal?: ResearchGoalSnapshot;
   nextPromptSuggestions?: readonly ResearchNextPromptSuggestion[];
   toolEvents?: readonly ResearchEvent[];
   researchTrace?: ResearchTrace;

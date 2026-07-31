@@ -53,6 +53,19 @@ test("main CLI supports deterministic mock mode without auth", async () => {
   assert.match(result.stdout, /Exercise deterministic mock mode/);
 });
 
+test("main CLI documents goal mode and rejects it with the deterministic executor", async () => {
+  const help = runTopCli(["--help"]);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /--goal\s+Continue the same Pi session/);
+
+  const authFile = await createEmptyAuthFilePath();
+  const result = runTopCli(["--goal", "--mock", "-p", "Keep working."], {
+    HONEYCRISP_AUTH_FILE: authFile,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /--goal requires the Pi agent executor/);
+});
+
 test("main CLI uses reconstructed context when a resume capture is unavailable", async () => {
   const authFile = await createEmptyAuthFilePath();
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-resume-fallback-"));
@@ -681,7 +694,7 @@ test("main CLI capture includes runtime tool and skill configuration", async () 
   assert.ok(capture.runtimeConfig.tools.some((tool) => tool.name === "session.disposition"));
   assert.deepEqual(capture.runtimeConfig.skills.selectedIds, ["parser-cli"]);
   assert.equal(capture.runtimeConfig.governance.maxToolCalls, 2);
-  assert.equal(capture.schemaVersion, 4);
+  assert.equal(capture.schemaVersion, 5);
   assert.ok(capture.context.availableTools.some((tool) => tool.name === "repository.search"));
   assert.equal("toolPermissions" in capture.context, false);
   assert.equal("workspaceRoot" in capture.context.workspaceContext, false);
