@@ -96,7 +96,12 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
   try {
     const descriptors = registry.listDescriptors();
     assert.deepEqual(descriptors.map((tool) => tool.name), ["memory.search", "memory.get", "memory.save", "memory.correct", "memory.link"]);
-    const saveSchema = descriptors.find((tool) => tool.name === "memory.save").inputSchema;
+    const searchDescriptor = descriptors.find((tool) => tool.name === "memory.search");
+    const saveDescriptor = descriptors.find((tool) => tool.name === "memory.save");
+    assert.match(searchDescriptor.description, /workspace knowledge by default/);
+    assert.match(searchDescriptor.inputSchema.properties.tiers.description, /Defaults to workspace/);
+    assert.match(saveDescriptor.description, /refined in place/);
+    const saveSchema = saveDescriptor.inputSchema;
     assert.deepEqual(saveSchema.properties.type.enum, ["asset", "bug", "invariant", "mitigation", "source", "sink", "hypothesis", "primitive", "chain", "procedure", "trajectory"]);
     assert.equal(saveSchema.properties.type.enum.includes("evidence"), false);
     assert.equal(saveSchema.properties.type.enum.includes("finding"), false);
@@ -236,11 +241,18 @@ test("memory graph tiers session, workspace, and subject knowledge across worksp
   let workspaceNode;
   let sessionNode;
   try {
-    subjectNode = zsh.save({ tier: "subject", type: "invariant", title: "Shared IPC boundary", summary: "Apple components exchange bounded messages." });
-    workspaceNode = zsh.save({ tier: "workspace", type: "invariant", title: "Shared IPC boundary", summary: "Zsh-specific boundary." });
-    sessionNode = zsh.save({ tier: "session", type: "invariant", title: "Shared IPC boundary", summary: "Current run lead." });
+    subjectNode = zsh.save({ tier: "subject", type: "invariant", title: "Apple IPC convention", summary: "Apple components exchange bounded messages." });
+    workspaceNode = zsh.save({ tier: "workspace", type: "invariant", title: "Zsh IPC boundary", summary: "Zsh-specific boundary." });
+    sessionNode = zsh.save({ tier: "session", type: "invariant", title: "Current parser lead", summary: "Current run lead." });
     zsh.link(subjectNode.id, workspaceNode.id, "observed_in", "Origin workspace relationship");
-    assert.equal(zsh.search({ query: "boundary" }).length, 3);
+    assert.deepEqual(zsh.search().map((node) => node.id), [workspaceNode.id]);
+    assert.deepEqual(zsh.search({ tiers: ["session"] }).map((node) => node.id), [sessionNode.id]);
+    assert.deepEqual(zsh.search({ tiers: ["subject"] }).map((node) => node.id), [subjectNode.id]);
+
+    const crossTierRefinement = zsh.save({ tier: "session", type: "invariant", title: " Zsh IPC boundary ", body: "Refined without a second tier copy." });
+    assert.equal(crossTierRefinement.id, workspaceNode.id);
+    assert.equal(crossTierRefinement.tier, "workspace");
+    assert.equal(crossTierRefinement.revision, 2);
     assert.deepEqual(zsh.search({ tiers: ["session"] }).map((node) => node.id), [sessionNode.id]);
   } finally {
     zsh.close();
@@ -252,19 +264,22 @@ test("memory graph tiers session, workspace, and subject knowledge across worksp
     context: { sessionId: "run_mdns", workspaceId: "workspace_mdns", workspaceName: "mDNSResponder", ...apple },
   });
   try {
-    assert.deepEqual(mdns.search({ query: "boundary" }).map((node) => node.id), [subjectNode.id]);
+    assert.deepEqual(mdns.search(), []);
+    assert.deepEqual(mdns.search({ tiers: ["subject"] }).map((node) => node.id), [subjectNode.id]);
     assert.equal(mdns.get(workspaceNode.id), null);
     assert.equal(mdns.get(sessionNode.id), null);
     assert.equal(mdns.get(subjectNode.id)?.subjectName, "Apple");
     assert.deepEqual(mdns.listEdges(subjectNode.id), []);
 
-    const refined = mdns.save({ tier: "subject", type: "invariant", title: "Shared IPC boundary", body: "Check interactions between separately scoped components." });
+    const refined = mdns.save({ tier: "subject", type: "invariant", title: "Apple IPC convention", body: "Check interactions between separately scoped components." });
     assert.equal(refined.id, subjectNode.id);
     assert.equal(refined.revision, 2);
-    const localSameTitle = mdns.save({ tier: "workspace", type: "invariant", title: "Shared IPC boundary", summary: "mDNSResponder-specific boundary." });
-    assert.notEqual(localSameTitle.id, subjectNode.id);
-    assert.deepEqual(mdns.search({ query: "boundary", tiers: ["workspace"] }).map((node) => node.id), [localSameTitle.id]);
-    const crossTierEdge = mdns.link(subjectNode.id, localSameTitle.id, "applies_to", "Shared owner invariant applies at this boundary");
+    const crossTierRefinement = mdns.save({ tier: "workspace", type: "invariant", title: "Apple IPC convention", summary: "Refined from mDNSResponder without copying it." });
+    assert.equal(crossTierRefinement.id, subjectNode.id);
+    assert.equal(crossTierRefinement.tier, "subject");
+    const localNode = mdns.save({ tier: "workspace", type: "invariant", title: "mDNSResponder IPC boundary", summary: "mDNSResponder-specific boundary." });
+    assert.deepEqual(mdns.search({ query: "boundary" }).map((node) => node.id), [localNode.id]);
+    const crossTierEdge = mdns.link(subjectNode.id, localNode.id, "applies_to", "Shared owner invariant applies at this boundary");
     assert.deepEqual(mdns.listEdges(subjectNode.id), [crossTierEdge]);
   } finally {
     mdns.close();

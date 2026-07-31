@@ -18,7 +18,7 @@ const SEARCH_PARAMETERS = {
   type: "object",
   properties: {
     query: { type: "string" },
-    tiers: { type: "array", items: { type: "string", enum: ["session", "workspace", "subject"] } },
+    tiers: { type: "array", description: "Defaults to workspace. Supply session or subject explicitly only when that narrower or broader ownership scope is needed.", items: { type: "string", enum: ["session", "workspace", "subject"] } },
     types: { type: "array", items: { type: "string", enum: [...MEMORY_NODE_TYPES] } },
     statuses: { type: "array", items: { type: "string", enum: [...MEMORY_NODE_STATUSES] } },
     assetIds: { type: "array", items: { type: "string" } },
@@ -42,7 +42,7 @@ const SAVE_PARAMETERS = {
   type: "object",
   required: ["type", "title"],
   properties: {
-    id: { type: "string" }, tier: { type: "string", enum: ["session", "workspace", "subject"] }, type: { type: "string", enum: [...MEMORY_NODE_TYPES], description: "Use hypothesis for a specific testable but unproven proposition, bug only for confirmed historical precedent, primitive for a flaw proven during current research, and chain for end-to-end reachability and impact. Evidence and finding are not memory node types." }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
+    id: { type: "string" }, tier: { type: "string", description: "Defaults to workspace. An exact visible identity is refined in place and retains its existing tier instead of being copied.", enum: ["session", "workspace", "subject"] }, type: { type: "string", enum: [...MEMORY_NODE_TYPES], description: "Use hypothesis for a specific testable but unproven proposition, bug only for confirmed historical precedent, primitive for a flaw proven during current research, and chain for end-to-end reachability and impact. Evidence and finding are not memory node types." }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
     status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
     tags: { type: "array", items: { type: "string" } },
     attributes: {
@@ -114,7 +114,7 @@ const LINK_PARAMETERS = {
 
 export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecutableTool[] {
   return [
-    tool("memory.search", "memory_search", "Search visible session, workspace, and subject knowledge. Use before repeating prior research.", "read", SEARCH_PARAMETERS, (input) => {
+    tool("memory.search", "memory_search", "Search workspace knowledge by default. Supply session or subject tiers explicitly when that scope is needed. Use before repeating prior research.", "read", SEARCH_PARAMETERS, (input) => {
       const query = string(input.query);
       const tiers = strings(input.tiers) as MemoryTier[];
       const types = strings(input.types) as MemoryNodeType[];
@@ -132,7 +132,7 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
       });
     }),
     tool("memory.get", "memory_get", "Read one durable memory node with evidence references.", "read", GET_PARAMETERS, (input) => store.get(requiredString(input.id, "id"))),
-    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge with asset links and evidence references. Choose session for run-specific state, workspace for target-specific knowledge, or subject for knowledge useful across this owner's workspaces. Use hypothesis for a testable unproven proposition, then reject it when disproven or reclassify it as a primitive or chain when proven. Use bug only for a confirmed historical flaw precedent with an affected asset and precedent evidence. Use primitive for a flaw established during current research, trajectories for reusable research sequences, and chains for reviewed end-to-end reachability and impact. Evidence and finding are not node types. Do not store transcripts, routine narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
+    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge with asset links and evidence references. Workspace is the default tier; choose session only for run-specific state or subject for knowledge useful across this owner's workspaces. Exact visible type-and-title identities are refined in place and retain their existing tier instead of being copied. Use hypothesis for a testable unproven proposition, then reject it when disproven or reclassify it as a primitive or chain when proven. Use bug only for a confirmed historical flaw precedent with an affected asset and precedent evidence. Use primitive for a flaw established during current research, trajectories for reusable research sequences, and chains for reviewed end-to-end reachability and impact. Evidence and finding are not node types. Do not store transcripts, routine narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
       const id = string(input.id);
       const tier = string(input.tier);
       return store.save({

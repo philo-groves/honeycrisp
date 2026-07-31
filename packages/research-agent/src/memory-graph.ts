@@ -147,7 +147,8 @@ export class MemoryGraphStore {
     const scopeKey = scopeKeyForTier(tier, this.local.context);
     const title = input.title.trim();
     const titleNorm = normalizeTitle(title);
-    const existingLocation = this.findByIdentity(tier, scopeKey, input.type, titleNorm);
+    const existingLocation = this.findByIdentity(tier, scopeKey, input.type, titleNorm)
+      ?? this.findVisibleByIdentity(input.type, titleNorm);
     const existing = existingLocation?.node ?? null;
     const target = existingLocation?.binding ?? this.local;
     const now = new Date().toISOString();
@@ -193,7 +194,7 @@ export class MemoryGraphStore {
           revision: 1,
         };
     validateCompleteNode(next);
-    this.writeNode(target.database, next, titleNorm, scopeKey);
+    this.writeNode(target.database, next, titleNorm, existing ? scopeKeyForNode(existing) : scopeKey);
     return this.getFromDatabase(target.database, id)!;
   }
 
@@ -322,10 +323,9 @@ export class MemoryGraphStore {
       clauses.push(`n.status IN (${input.statuses.map(() => "?").join(",")})`);
       params.push(...input.statuses);
     }
-    if (input.tiers?.length) {
-      clauses.push(`n.tier IN (${input.tiers.map(() => "?").join(",")})`);
-      params.push(...input.tiers);
-    }
+    const tiers = input.tiers?.length ? input.tiers : ["workspace"];
+    clauses.push(`n.tier IN (${tiers.map(() => "?").join(",")})`);
+    params.push(...tiers);
     for (const assetId of input.assetIds ?? []) {
       clauses.push("EXISTS (SELECT 1 FROM memory_node_assets a WHERE a.node_id = n.id AND a.asset_id = ?)");
       params.push(assetId);
@@ -390,6 +390,22 @@ export class MemoryGraphStore {
     const row = this.local.database
       .prepare("SELECT id FROM memory_nodes WHERE tier = ? AND scope_key = ? AND type = ? AND title_norm = ?")
       .get(tier, scopeKey, type, titleNorm) as { id?: unknown } | undefined;
+    if (typeof row?.id !== "string") return null;
+    const node = this.getFromDatabase(this.local.database, row.id);
+    return node ? { binding: this.local, node } : null;
+  }
+
+  private findVisibleByIdentity(type: MemoryNodeType, titleNorm: string): LocatedMemoryNode | null {
+    const visibility = visibilityClause(this.local, this.local.context);
+    const row = this.local.database
+      .prepare(
+        `SELECT n.id FROM memory_nodes n
+         WHERE n.type = ? AND n.title_norm = ? AND ${visibility.sql}
+         ORDER BY CASE n.tier WHEN 'workspace' THEN 0 WHEN 'subject' THEN 1 ELSE 2 END,
+                  n.updated_at DESC, n.id
+         LIMIT 1`,
+      )
+      .get(type, titleNorm, ...visibility.params) as { id?: unknown } | undefined;
     if (typeof row?.id !== "string") return null;
     const node = this.getFromDatabase(this.local.database, row.id);
     return node ? { binding: this.local, node } : null;
