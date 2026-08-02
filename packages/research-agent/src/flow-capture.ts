@@ -22,7 +22,7 @@ import type {
 
 export interface ResearchFlowEventCapture {
   id: string;
-  kind: ResearchEvent["kind"];
+  kind: ResearchEvent["kind"] | "agent.control";
   timestamp: string;
   agentId?: string;
   agentPath?: string;
@@ -78,9 +78,10 @@ export function createResearchAgentFlowCapture(
   result: RunResearchAgentResult,
   options: { capturedAt?: string } = {},
 ): ResearchAgentFlowCapture {
+  const capturedAt = options.capturedAt ?? nowIso();
   return {
     schemaVersion: 5,
-    capturedAt: options.capturedAt ?? nowIso(),
+    capturedAt,
     request: { prompt: result.prompt },
     agent: {
       id: result.agentRun.id,
@@ -111,7 +112,10 @@ export function createResearchAgentFlowCapture(
     workspaceContext: result.workspaceContext,
     storage: result.storageLayout,
     storageManifest: captureStorage(result.storageLayout),
-    eventTimeline: result.events.map(captureEvent),
+    eventTimeline: [
+      ...result.events.map(captureEvent),
+      ...captureAgentControlEvents(result.agentRun.output.raw, result.agentRun.id, capturedAt),
+    ],
   };
 }
 
@@ -148,4 +152,44 @@ function captureEvent(event: ResearchEvent): ResearchFlowEventCapture {
       typeof payload.summary === "string" ? payload.summary : event.kind,
     payload: event.payload,
   };
+}
+
+const CAPTURED_AGENT_CONTROL_TYPES = new Set([
+  "goal_lifecycle",
+  "research_checkpoint",
+  "research_loop_guard",
+]);
+
+function captureAgentControlEvents(
+  raw: unknown,
+  agentRunId: string,
+  fallbackTimestamp: string,
+): ResearchFlowEventCapture[] {
+  if (!isRecord(raw) || !Array.isArray(raw.agentEvents)) return [];
+  return raw.agentEvents.flatMap((candidate, index) => {
+    if (!isRecord(candidate)) return [];
+    const type = nonEmptyString(candidate.type);
+    if (!type || !CAPTURED_AGENT_CONTROL_TYPES.has(type)) return [];
+    const eventId = nonEmptyString(candidate.eventId) ?? `agent_control_${agentRunId}_${index}`;
+    return [{
+      id: eventId,
+      kind: "agent.control" as const,
+      timestamp: nonEmptyString(candidate.timestamp) ?? fallbackTimestamp,
+      ...(nonEmptyString(candidate.agentId) ? { agentId: nonEmptyString(candidate.agentId)! } : {}),
+      ...(nonEmptyString(candidate.agentPath) ? { agentPath: nonEmptyString(candidate.agentPath)! } : {}),
+      ...(nonEmptyString(candidate.parentAgentId)
+        ? { parentAgentId: nonEmptyString(candidate.parentAgentId)! }
+        : {}),
+      summary: `Honeycrisp host control: ${type}`,
+      payload: candidate,
+    }];
+  });
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

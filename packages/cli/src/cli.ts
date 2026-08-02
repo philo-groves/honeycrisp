@@ -53,6 +53,7 @@ import {
   writeResearchModelConfig,
   writeResearchToolConfig,
   ResearchDispositionRecorder,
+  selectResearchGoalObjective,
 } from "@honeycrisp/research-agent";
 import type {
   AuthEvent,
@@ -145,6 +146,7 @@ interface ParsedToolsConfigArgs {
 interface ParsedArgs {
   prompt: string | undefined;
   goal: boolean;
+  goalObjective: string | undefined;
   successGates: string[];
   failureOrStopGates: string[];
   scopeConstraints: string[];
@@ -220,6 +222,7 @@ interface ParsedConfigArgs {
 function parseArgs(argv: readonly string[]): ParsedArgs {
   let prompt: string | undefined;
   let goal = false;
+  let goalObjective: string | undefined;
   let json = false;
   let help = false;
   let version = false;
@@ -282,6 +285,10 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
     } else if (arg === "--goal") {
       goal = true;
+    } else if (arg === "--goal-objective") {
+      goalObjective = readOptionValue(argv, index, arg);
+      goal = true;
+      index += 1;
     } else if (arg === "--success") {
       successGates.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -460,6 +467,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   return {
     prompt,
     goal,
+    goalObjective,
     successGates,
     failureOrStopGates,
     scopeConstraints,
@@ -973,6 +981,7 @@ function usage(): string {
     "Options:",
     "  -p, --prompt <prompt>  Research request for the agent",
     "  --goal                 Continue the same Pi session until the objective is complete or strictly blocked",
+    "  --goal-objective <text> Concise persistent objective separate from the research prompt (implies --goal)",
     "  --success <gate>       Add a success/completion gate",
     "  --stop <gate>          Add a failure or stop gate",
     "  --scope <constraint>   Add a scope constraint",
@@ -1297,19 +1306,29 @@ function createRealAgentExecutor(
     ...(args.goal
       ? {
           goal: {
-            objective: args.prompt!,
+            objective: selectResearchGoalObjective({
+              ...(args.goalObjective !== undefined ? { explicitObjective: args.goalObjective } : {}),
+              ...(resumableState?.goal ? { resumedGoal: resumableState.goal } : {}),
+              prompt: args.prompt!,
+            }),
             getDisposition: () => dispositionRecorder.get(),
             resetDisposition: () => dispositionRecorder.resetForGoalContinuation(),
           },
         }
       : {}),
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
-    ...(resumableState ? { initialMessages: resumableState.messages } : {}),
+    ...(resumableState ? { resumableState } : {}),
     ...(controlStream
       ? {
           getModelSelection: () => controlStream.getModelSelection(),
           getSteeringMessages: async () =>
             (await controlStream.takeSteeringInstructions()).map((instruction) => ({
+              role: "user" as const,
+              content: `User steering for the active research run:\n\n${instruction}`,
+              timestamp: Date.now(),
+            })),
+          waitForSteeringMessages: async (signal?: AbortSignal) =>
+            (await controlStream.waitForSteeringInstructions(signal)).map((instruction) => ({
               role: "user" as const,
               content: `User steering for the active research run:\n\n${instruction}`,
               timestamp: Date.now(),

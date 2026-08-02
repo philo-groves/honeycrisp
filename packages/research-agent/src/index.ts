@@ -23,6 +23,7 @@ export * from "./mcp-client.js";
 export * from "./experiment-config.js";
 export * from "./skills.js";
 export * from "./agent-executor.js";
+export * from "./research-focus-guard.js";
 export * from "./system-prompt.js";
 export * from "./subagent-runtime.js";
 export * from "./research-trace.js";

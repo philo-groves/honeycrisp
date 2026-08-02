@@ -57,6 +57,7 @@ test("main CLI documents goal mode and rejects it with the deterministic executo
   const help = runTopCli(["--help"]);
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /--goal\s+Continue the same Pi session/);
+  assert.match(help.stdout, /--goal-objective <text>\s+Concise persistent objective/);
 
   const authFile = await createEmptyAuthFilePath();
   const result = runTopCli(["--goal", "--mock", "-p", "Keep working."], {
@@ -64,6 +65,16 @@ test("main CLI documents goal mode and rejects it with the deterministic executo
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--goal requires the Pi agent executor/);
+
+  const impliedGoal = runTopCli([
+    "--goal-objective",
+    "Investigate authorization boundaries.",
+    "--mock",
+    "-p",
+    "Expanded research prompt.",
+  ], { HONEYCRISP_AUTH_FILE: authFile });
+  assert.equal(impliedGoal.status, 1);
+  assert.match(impliedGoal.stderr, /--goal requires the Pi agent executor/);
 });
 
 test("main CLI uses reconstructed context when a resume capture is unavailable", async () => {

@@ -86,3 +86,49 @@ test("control stream exposes a stop signal for the complete agent tree", async (
   controls.close();
   input.destroy();
 });
+
+test("control stream wakes safeguard steering waits and correlates accepted controls", async () => {
+  const input = new PassThrough();
+  const events = [];
+  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  controls.start();
+
+  const waiting = controls.waitForSteeringInstructions();
+  input.write(`${JSON.stringify({
+    schemaVersion: 1,
+    type: "steer",
+    requestId: " safeguard-recovery-1 ",
+    instruction: "Continue the authorized review safely.",
+  })}\n`);
+
+  assert.deepEqual(await waiting, ["Continue the authorized review safely."]);
+  assert.deepEqual(events, [{
+    type: "steer",
+    accepted: true,
+    requestId: "safeguard-recovery-1",
+  }]);
+  controls.close();
+  input.destroy();
+});
+
+test("control stream correlates rejected controls and does not wait after input EOF", async () => {
+  const input = new PassThrough();
+  const events = [];
+  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  controls.start();
+
+  input.write(`${JSON.stringify({
+    schemaVersion: 1,
+    type: "unsupported",
+    requestId: "invalid-control-1",
+  })}\n`);
+  input.end();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(events[0]?.type, "invalid");
+  assert.equal(events[0]?.accepted, false);
+  assert.equal(events[0]?.requestId, "invalid-control-1");
+  assert.deepEqual(await controls.waitForSteeringInstructions(), []);
+  controls.close();
+  input.destroy();
+});

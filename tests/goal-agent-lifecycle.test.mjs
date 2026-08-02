@@ -32,8 +32,9 @@ const FAUX_MODEL = {
   maxTokens: 4096,
 };
 
-test("goal mode continues one Pi session and keeps terminal controls after research budget exhaustion", async () => {
-  const objective = "Verify the complete authorization-boundary exploit chain.";
+test("goal mode continues one Pi session and keeps session disposition after research budget exhaustion", async () => {
+  const objective = "Verify the authorization boundary.";
+  const researchPrompt = "Review every relevant entry point and verify the complete authorization-boundary exploit chain with reproducible evidence.";
   const recorder = new ResearchDispositionRecorder();
   const dispositionTool = createSessionDispositionTool(recorder);
   const inspectCalls = [];
@@ -55,13 +56,12 @@ test("goal mode continues one Pi session and keeps terminal controls after resea
         blockerDependencies: [],
         externalStateRequired: false,
       }, "disposition_2"),
-      toolCall("update_goal", { status: "complete" }, "goal_complete"),
     ], "toolUse"),
     assistant("The complete authorization-boundary exploit chain is verified."),
   ];
 
   const result = await runResearchAgent({
-    prompt: objective,
+    prompt: researchPrompt,
     tools: [inspectTool.descriptor, dispositionTool.descriptor],
     governance: {
       allowedActionClasses: ["inspect"],
@@ -88,17 +88,30 @@ test("goal mode continues one Pi session and keeps terminal controls after resea
   assert.equal(result.agentRun.output.raw.toolCallCount, 1);
   assert.equal(result.agentRun.output.goal.status, "complete");
   assert.equal(result.agentRun.output.goal.turnsUsed, 2);
+  assert.deepEqual(
+    result.agentRun.output.raw.agentEvents
+      .filter((event) => event.type === "goal_lifecycle")
+      .map((event) => ({ status: event.status, continued: event.continued, outcome: event.dispositionOutcome })),
+    [
+      { status: "active", continued: true, outcome: "objective_partially_achieved" },
+      { status: "complete", continued: false, outcome: "objective_achieved" },
+    ],
+  );
   assert.equal(result.finalDisposition.outcome, "objective_achieved");
   assert.ok(contexts.every((context) => context.sessionId === "goal_session_fixture"));
   assert.ok(contexts[0].toolNames.includes("fixture_inspect"));
   assert.ok(contexts[1].toolNames.includes("session_disposition"));
   assert.ok(!contexts[1].toolNames.includes("fixture_inspect"));
-  assert.ok(contexts[1].toolNames.includes("get_goal"));
-  assert.ok(contexts[1].toolNames.includes("update_goal"));
-  assert.match(contexts[0].systemPrompt, /one persistent objective/);
+  assert.ok(contexts.every((context) => !context.toolNames.includes("get_goal")));
+  assert.ok(contexts.every((context) => !context.toolNames.includes("update_goal")));
+  assert.match(contexts[0].systemPrompt, /goal persistence and terminal state are handled by the host/);
   assert.match(
     contexts.flatMap((context) => context.messageContents).join("\n"),
-    /Continue working toward the active research goal/,
+    /Continue research toward: Verify the authorization boundary\./,
+  );
+  assert.doesNotMatch(
+    contexts.flatMap((context) => context.messageContents).join("\n"),
+    /Continue research toward: Review every relevant entry point/,
   );
 
   const capture = createResearchAgentFlowCapture(result);

@@ -131,6 +131,7 @@ export async function runResearchAgent(
   try {
     const output = await input.executor.execute({
       modelInput,
+      ...(workspaceContext.authorization ? { authorization: workspaceContext.authorization } : {}),
       ...(input.governance ? { governance: input.governance } : {}),
       ...(input.eventSink ? { eventSink: input.eventSink } : {}),
       ...(input.signal ? { signal: input.signal } : {}),

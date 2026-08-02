@@ -260,6 +260,7 @@ export interface ResearchAgentModelInput {
 
 export interface ResearchAgentExecutionInput {
   modelInput: ResearchAgentModelInput;
+  authorization?: ResearchWorkspaceAuthorizationContext;
   governance?: ResearchGovernancePolicy;
   eventSink?: ResearchLiveEventSink;
   signal?: AbortSignal;
