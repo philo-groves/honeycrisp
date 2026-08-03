@@ -22,20 +22,25 @@ export const MEMORY_NODE_TYPES = [
   "trajectory",
 ] as const;
 export const MEMORY_NODE_STATUSES = ["draft", "suspected", "confirmed", "rejected", "stale"] as const;
-export const MEMORY_TIERS = ["session", "workspace", "subject"] as const;
+export const MEMORY_SCOPES = ["session", "workspace", "subject"] as const;
 export const MEMORY_EVIDENCE_KINDS = ["code", "artifact", "command", "url", "human_note"] as const;
 export const MEMORY_EVIDENCE_PATH_BASES = ["workspace", "repository", "asset_root", "external"] as const;
 
 export type MemoryNodeType = (typeof MEMORY_NODE_TYPES)[number];
 export type MemoryNodeStatus = (typeof MEMORY_NODE_STATUSES)[number];
-export type MemoryTier = (typeof MEMORY_TIERS)[number];
+export type MemoryScope = (typeof MEMORY_SCOPES)[number];
 
-export interface MemoryTierContext {
+export interface MemoryContext {
   sessionId?: string;
   workspaceId: string;
   workspaceName: string;
-  subjectId?: string;
-  subjectName?: string;
+  subjectId: string;
+  subjectName: string;
+}
+
+export interface MemoryWorkspaceMembership {
+  id: string;
+  name: string;
 }
 
 export interface MemoryEvidenceRef {
@@ -59,12 +64,10 @@ export interface MemoryEdge {
 
 export interface MemoryNode {
   id: string;
-  tier: MemoryTier;
-  sessionId: string | null;
-  workspaceId: string;
-  workspaceName: string;
-  subjectId: string | null;
-  subjectName: string | null;
+  sessionIds: string[];
+  workspaces: MemoryWorkspaceMembership[];
+  subjectId: string;
+  subjectName: string;
   type: MemoryNodeType;
   title: string;
   summary: string;
@@ -82,7 +85,6 @@ export interface MemoryNode {
 
 export interface SaveMemoryNodeInput {
   id?: string;
-  tier?: MemoryTier;
   type: MemoryNodeType;
   title: string;
   summary?: string;
@@ -97,7 +99,7 @@ export interface SaveMemoryNodeInput {
 
 export interface SearchMemoryNodesInput {
   query?: string;
-  tiers?: readonly MemoryTier[];
+  scope?: MemoryScope;
   types?: readonly MemoryNodeType[];
   statuses?: readonly MemoryNodeStatus[];
   assetIds?: readonly string[];
@@ -108,7 +110,7 @@ export interface SearchMemoryNodesInput {
 interface MemoryDatabaseBinding {
   database: DatabaseSync;
   databasePath: string;
-  context: MemoryTierContext;
+  context: MemoryContext;
 }
 
 interface LocatedMemoryNode {
@@ -123,13 +125,13 @@ export class MemoryGraphStore {
   public constructor(options: {
     workspaceRoot?: string;
     databasePath?: string;
-    context?: MemoryTierContext;
+    context?: MemoryContext;
   } = {}) {
     const workspaceRoot = options.workspaceRoot ?? process.cwd();
     this.databasePath = options.databasePath ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     mkdirSync(dirname(this.databasePath), { recursive: true });
     const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSync };
-    const context = normalizeTierContext(options.context ?? readStoredTierContext(DatabaseSync, this.databasePath, workspaceRoot), workspaceRoot);
+    const context = normalizeMemoryContext(options.context ?? readStoredMemoryContext(DatabaseSync, this.databasePath, workspaceRoot), workspaceRoot);
     this.local = this.openBinding(DatabaseSync, this.databasePath, context);
   }
 
@@ -137,22 +139,19 @@ export class MemoryGraphStore {
     this.local.database.close();
   }
 
-  public getContext(): MemoryTierContext {
+  public getContext(): MemoryContext {
     return { ...this.local.context };
   }
 
   public save(input: SaveMemoryNodeInput): MemoryNode {
     validateNodeInput(input);
-    const tier = input.tier ?? "workspace";
-    const scopeKey = scopeKeyForTier(tier, this.local.context);
     const title = input.title.trim();
     const titleNorm = normalizeTitle(title);
-    const existingLocation = this.findByIdentity(tier, scopeKey, input.type, titleNorm)
-      ?? this.findVisibleByIdentity(input.type, titleNorm);
+    const existingLocation = this.findByIdentity(input.type, titleNorm);
     const existing = existingLocation?.node ?? null;
     const target = existingLocation?.binding ?? this.local;
     const now = new Date().toISOString();
-    const id = existing?.id ?? input.id ?? stableNodeId(tier, scopeKey, input.type, titleNorm);
+    const id = existing?.id ?? input.id ?? stableNodeId(this.local.context.subjectId, input.type, titleNorm);
     if (!existing && input.id) {
       const conflicting = this.get(input.id);
       if (conflicting) throw new Error(`Memory node id already belongs to ${conflicting.type}: ${input.id}`);
@@ -160,6 +159,8 @@ export class MemoryGraphStore {
     const next: MemoryNode = existing
       ? {
           ...existing,
+          sessionIds: mergeSessionMemberships(existing.sessionIds, this.local.context.sessionId),
+          workspaces: mergeWorkspaceMemberships(existing.workspaces, this.local.context),
           summary: input.summary?.trim() || existing.summary,
           body: input.body?.trim() || existing.body,
           status: input.status ?? existing.status,
@@ -173,12 +174,10 @@ export class MemoryGraphStore {
         }
       : {
           id,
-          tier,
-          sessionId: this.local.context.sessionId ?? null,
-          workspaceId: this.local.context.workspaceId,
-          workspaceName: this.local.context.workspaceName,
-          subjectId: this.local.context.subjectId ?? null,
-          subjectName: this.local.context.subjectName ?? null,
+          sessionIds: this.local.context.sessionId ? [this.local.context.sessionId] : [],
+          workspaces: [{ id: this.local.context.workspaceId, name: this.local.context.workspaceName }],
+          subjectId: this.local.context.subjectId,
+          subjectName: this.local.context.subjectName,
           type: input.type,
           title,
           summary: input.summary?.trim() ?? "",
@@ -194,12 +193,11 @@ export class MemoryGraphStore {
           revision: 1,
         };
     validateCompleteNode(next);
-    this.writeNode(target.database, next, titleNorm, existing ? scopeKeyForNode(existing) : scopeKey);
+    this.writeNode(target.database, next, titleNorm);
     return this.getFromDatabase(target.database, id)!;
   }
 
   public correct(id: string, expectedRevision: number, patch: Partial<Omit<SaveMemoryNodeInput, "id">>): MemoryNode {
-    if (patch.tier !== undefined) throw new Error("Memory tier is immutable; save a new node in the intended tier.");
     const located = this.locate(id);
     const existing = located?.node;
     if (!existing || !located) throw new Error(`Memory node not found: ${id}`);
@@ -209,10 +207,12 @@ export class MemoryGraphStore {
     const now = new Date().toISOString();
     const type = patch.type ?? existing.type;
     const title = patch.title?.trim() ?? existing.title;
-    const nextId = type === existing.type ? id : stableNodeId(existing.tier, scopeKeyForNode(existing), type, normalizeTitle(title));
+    const nextId = type === existing.type ? id : stableNodeId(existing.subjectId, type, normalizeTitle(title));
     const next: MemoryNode = {
       ...existing,
       id: nextId,
+      sessionIds: mergeSessionMemberships(existing.sessionIds, this.local.context.sessionId),
+      workspaces: mergeWorkspaceMemberships(existing.workspaces, this.local.context),
       type,
       title,
       ...(patch.summary !== undefined ? { summary: patch.summary.trim() } : {}),
@@ -229,7 +229,7 @@ export class MemoryGraphStore {
     validateNodeInput(next);
     validateCompleteNode(next);
     if (nextId === id) {
-      this.writeNode(located.binding.database, next, normalizeTitle(next.title), scopeKeyForNode(next), expectedRevision);
+      this.writeNode(located.binding.database, next, normalizeTitle(next.title), expectedRevision);
     } else {
       this.writeRetypedNode(located.binding.database, id, next, normalizeTitle(next.title), expectedRevision);
     }
@@ -245,12 +245,15 @@ export class MemoryGraphStore {
     if (!row) return null;
     return {
       id: text(row.id),
-      tier: memoryTier(row.tier),
-      sessionId: nullableText(row.session_id),
-      workspaceId: text(row.workspace_id),
-      workspaceName: text(row.workspace_name),
-      subjectId: nullableText(row.subject_id),
-      subjectName: nullableText(row.subject_name),
+      sessionIds: this.strings(database, "SELECT session_id AS value FROM memory_node_sessions WHERE node_id = ? ORDER BY session_id", id),
+      workspaces: (database
+        .prepare("SELECT workspace_id, workspace_name FROM memory_node_workspaces WHERE node_id = ? ORDER BY workspace_name, workspace_id")
+        .all(id) as Array<{ workspace_id: unknown; workspace_name: unknown }>).map((membership) => ({
+          id: text(membership.workspace_id),
+          name: text(membership.workspace_name),
+        })),
+      subjectId: text(row.subject_id),
+      subjectName: text(row.subject_name),
       type: nodeType(row.type),
       title: text(row.title),
       summary: text(row.summary),
@@ -284,8 +287,7 @@ export class MemoryGraphStore {
   private searchBinding(binding: MemoryDatabaseBinding, input: SearchMemoryNodesInput): MemoryNode[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-    const visibility = visibilityClause(binding, this.local.context);
-    if (!visibility) return [];
+    const visibility = visibilityClause(this.local.context);
     clauses.push(visibility.sql);
     params.push(...visibility.params);
     if (input.query?.trim()) {
@@ -323,9 +325,15 @@ export class MemoryGraphStore {
       clauses.push(`n.status IN (${input.statuses.map(() => "?").join(",")})`);
       params.push(...input.statuses);
     }
-    const tiers = input.tiers?.length ? input.tiers : ["workspace"];
-    clauses.push(`n.tier IN (${tiers.map(() => "?").join(",")})`);
-    params.push(...tiers);
+    const scope = input.scope ?? "workspace";
+    if (scope === "session") {
+      if (!this.local.context.sessionId) return [];
+      clauses.push("EXISTS (SELECT 1 FROM memory_node_sessions s_scope WHERE s_scope.node_id = n.id AND s_scope.session_id = ?)");
+      params.push(this.local.context.sessionId);
+    } else if (scope === "workspace") {
+      clauses.push("EXISTS (SELECT 1 FROM memory_node_workspaces w_scope WHERE w_scope.node_id = n.id AND w_scope.workspace_id = ?)");
+      params.push(this.local.context.workspaceId);
+    }
     for (const assetId of input.assetIds ?? []) {
       clauses.push("EXISTS (SELECT 1 FROM memory_node_assets a WHERE a.node_id = n.id AND a.asset_id = ?)");
       params.push(assetId);
@@ -344,7 +352,7 @@ export class MemoryGraphStore {
   public link(fromId: string, toId: string, relation: string, note = ""): MemoryEdge {
     const from = this.locate(fromId);
     const to = this.locate(toId);
-    if (!from || !to) throw new Error("Both memory edge nodes must exist in the visible memory tiers.");
+    if (!from || !to) throw new Error("Both memory edge nodes must belong to the current subject.");
     const database = this.local.database;
     const cleanRelation = normalizeTag(relation);
     const now = new Date().toISOString();
@@ -374,8 +382,7 @@ export class MemoryGraphStore {
   }
 
   private visibleNodeIds(binding: MemoryDatabaseBinding): Set<string> {
-    const visibility = visibilityClause(binding, this.local.context);
-    if (!visibility) return new Set();
+    const visibility = visibilityClause(this.local.context);
     const rows = binding.database.prepare(`SELECT n.id FROM memory_nodes n WHERE ${visibility.sql}`).all(...visibility.params) as Array<{ id?: unknown }>;
     return new Set(rows.flatMap((row) => typeof row.id === "string" ? [row.id] : []));
   }
@@ -386,26 +393,15 @@ export class MemoryGraphStore {
     return null;
   }
 
-  private findByIdentity(tier: MemoryTier, scopeKey: string, type: MemoryNodeType, titleNorm: string): LocatedMemoryNode | null {
-    const row = this.local.database
-      .prepare("SELECT id FROM memory_nodes WHERE tier = ? AND scope_key = ? AND type = ? AND title_norm = ?")
-      .get(tier, scopeKey, type, titleNorm) as { id?: unknown } | undefined;
-    if (typeof row?.id !== "string") return null;
-    const node = this.getFromDatabase(this.local.database, row.id);
-    return node ? { binding: this.local, node } : null;
-  }
-
-  private findVisibleByIdentity(type: MemoryNodeType, titleNorm: string): LocatedMemoryNode | null {
-    const visibility = visibilityClause(this.local, this.local.context);
+  private findByIdentity(type: MemoryNodeType, titleNorm: string): LocatedMemoryNode | null {
     const row = this.local.database
       .prepare(
         `SELECT n.id FROM memory_nodes n
-         WHERE n.type = ? AND n.title_norm = ? AND ${visibility.sql}
-         ORDER BY CASE n.tier WHEN 'workspace' THEN 0 WHEN 'subject' THEN 1 ELSE 2 END,
-                  n.updated_at DESC, n.id
+         WHERE n.subject_id = ? AND n.type = ? AND n.title_norm = ?
+         ORDER BY n.updated_at DESC, n.id
          LIMIT 1`,
       )
-      .get(type, titleNorm, ...visibility.params) as { id?: unknown } | undefined;
+      .get(this.local.context.subjectId, type, titleNorm) as { id?: unknown } | undefined;
     if (typeof row?.id !== "string") return null;
     const node = this.getFromDatabase(this.local.database, row.id);
     return node ? { binding: this.local, node } : null;
@@ -414,7 +410,7 @@ export class MemoryGraphStore {
   private openBinding(
     Database: new (path: string) => DatabaseSync,
     databasePath: string,
-    context: MemoryTierContext,
+    context: MemoryContext,
   ): MemoryDatabaseBinding {
     mkdirSync(dirname(databasePath), { recursive: true });
     const database = new Database(databasePath);
@@ -563,10 +559,49 @@ export class MemoryGraphStore {
           `);
         },
       },
+      {
+        version: 6,
+        name: "memory_context_memberships",
+        up(database) {
+          database.exec(`
+            CREATE TABLE memory_node_sessions (
+              node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+              session_id TEXT NOT NULL,
+              PRIMARY KEY(node_id, session_id)
+            );
+            CREATE TABLE memory_node_workspaces (
+              node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+              workspace_id TEXT NOT NULL,
+              workspace_name TEXT NOT NULL,
+              PRIMARY KEY(node_id, workspace_id)
+            );
+            INSERT OR IGNORE INTO memory_node_sessions(node_id, session_id)
+              SELECT id, session_id FROM memory_nodes WHERE session_id IS NOT NULL AND trim(session_id) <> '';
+            INSERT OR IGNORE INTO memory_node_workspaces(node_id, workspace_id, workspace_name)
+              SELECT id, workspace_id, workspace_name FROM memory_nodes;
+            UPDATE memory_nodes
+              SET subject_id = 'subject_workspace:' || workspace_id
+              WHERE subject_id IS NULL OR trim(subject_id) = '';
+            UPDATE memory_nodes
+              SET subject_name = workspace_name
+              WHERE subject_name IS NULL OR trim(subject_name) = '';
+            DROP INDEX IF EXISTS memory_nodes_tier_identity_idx;
+            DROP INDEX IF EXISTS memory_nodes_context_idx;
+            ALTER TABLE memory_nodes DROP COLUMN tier;
+            ALTER TABLE memory_nodes DROP COLUMN scope_key;
+            ALTER TABLE memory_nodes DROP COLUMN session_id;
+            ALTER TABLE memory_nodes DROP COLUMN workspace_id;
+            ALTER TABLE memory_nodes DROP COLUMN workspace_name;
+            CREATE INDEX memory_nodes_subject_identity_idx ON memory_nodes(subject_id, type, title_norm, updated_at);
+            CREATE INDEX memory_node_sessions_session_idx ON memory_node_sessions(session_id, node_id);
+            CREATE INDEX memory_node_workspaces_workspace_idx ON memory_node_workspaces(workspace_id, node_id);
+          `);
+        },
+      },
     ]);
   }
 
-  private writeNode(database: DatabaseSync, node: MemoryNode, titleNorm: string, scopeKey: string, expectedRevision?: number): void {
+  private writeNode(database: DatabaseSync, node: MemoryNode, titleNorm: string, expectedRevision?: number): void {
     database.exec("BEGIN IMMEDIATE");
     try {
       if (expectedRevision !== undefined) {
@@ -577,16 +612,21 @@ export class MemoryGraphStore {
       }
       database
         .prepare(
-          `INSERT INTO memory_nodes(id, tier, scope_key, session_id, workspace_id, workspace_name, subject_id, subject_name, type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET title = excluded.title, title_norm = excluded.title_norm, summary = excluded.summary,
+          `INSERT INTO memory_nodes(id, subject_id, subject_name, type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET subject_id = excluded.subject_id, subject_name = excluded.subject_name,
+             title = excluded.title, title_norm = excluded.title_norm, summary = excluded.summary,
              body = excluded.body, status = excluded.status, confidence = excluded.confidence, attributes_json = excluded.attributes_json,
              updated_at = excluded.updated_at, revision = excluded.revision`,
         )
-        .run(node.id, node.tier, scopeKey, node.sessionId, node.workspaceId, node.workspaceName, node.subjectId, node.subjectName, node.type, node.title, titleNorm, node.summary, node.body, node.status, node.confidence, JSON.stringify(node.attributes), node.createdAt, node.updatedAt, node.revision);
+        .run(node.id, node.subjectId, node.subjectName, node.type, node.title, titleNorm, node.summary, node.body, node.status, node.confidence, JSON.stringify(node.attributes), node.createdAt, node.updatedAt, node.revision);
+      database.prepare("DELETE FROM memory_node_sessions WHERE node_id = ?").run(node.id);
+      database.prepare("DELETE FROM memory_node_workspaces WHERE node_id = ?").run(node.id);
       database.prepare("DELETE FROM memory_node_assets WHERE node_id = ?").run(node.id);
       database.prepare("DELETE FROM memory_node_tags WHERE node_id = ?").run(node.id);
       database.prepare("DELETE FROM memory_evidence_refs WHERE node_id = ?").run(node.id);
+      for (const sessionId of node.sessionIds) database.prepare("INSERT INTO memory_node_sessions(node_id, session_id) VALUES (?, ?)").run(node.id, sessionId);
+      for (const workspace of node.workspaces) database.prepare("INSERT INTO memory_node_workspaces(node_id, workspace_id, workspace_name) VALUES (?, ?, ?)").run(node.id, workspace.id, workspace.name);
       for (const assetId of node.assetIds) database.prepare("INSERT INTO memory_node_assets(node_id, asset_id) VALUES (?, ?)").run(node.id, assetId);
       for (const tag of node.tags) database.prepare("INSERT INTO memory_node_tags(node_id, tag) VALUES (?, ?)").run(node.id, tag);
       for (const evidence of node.evidence) {
@@ -629,6 +669,22 @@ export class MemoryGraphStore {
       database.prepare("UPDATE memory_node_assets SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
       database.prepare("UPDATE memory_node_tags SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
       database.prepare("UPDATE memory_evidence_refs SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
+      database.prepare("UPDATE memory_node_sessions SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
+      database.prepare("UPDATE memory_node_workspaces SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
+      database.prepare("DELETE FROM memory_node_sessions WHERE node_id = ?").run(node.id);
+      database.prepare("DELETE FROM memory_node_workspaces WHERE node_id = ?").run(node.id);
+      database.prepare("DELETE FROM memory_node_assets WHERE node_id = ?").run(node.id);
+      database.prepare("DELETE FROM memory_node_tags WHERE node_id = ?").run(node.id);
+      database.prepare("DELETE FROM memory_evidence_refs WHERE node_id = ?").run(node.id);
+      for (const sessionId of node.sessionIds) database.prepare("INSERT INTO memory_node_sessions(node_id, session_id) VALUES (?, ?)").run(node.id, sessionId);
+      for (const workspace of node.workspaces) database.prepare("INSERT INTO memory_node_workspaces(node_id, workspace_id, workspace_name) VALUES (?, ?, ?)").run(node.id, workspace.id, workspace.name);
+      for (const assetId of node.assetIds) database.prepare("INSERT INTO memory_node_assets(node_id, asset_id) VALUES (?, ?)").run(node.id, assetId);
+      for (const tag of node.tags) database.prepare("INSERT INTO memory_node_tags(node_id, tag) VALUES (?, ?)").run(node.id, tag);
+      for (const evidence of node.evidence) {
+        database
+          .prepare("INSERT INTO memory_evidence_refs(id, node_id, kind, path_base, path, locator_json, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(evidence.id, node.id, evidence.kind, evidence.pathBase ?? null, evidence.path ?? null, JSON.stringify(evidence.locator), evidence.summary, evidence.createdAt);
+      }
       replaceMemoryEdgeNodeId(database, "memory_edges", previousId, node.id);
       database.exec("COMMIT");
     } catch (error) {
@@ -674,10 +730,9 @@ function memorySearchScore(node: MemoryNode, query: string): number {
   return score;
 }
 
-function validateNodeInput(input: { type: unknown; title: unknown; tier?: unknown; status?: unknown; confidence?: unknown; attributes?: unknown }): void {
+function validateNodeInput(input: { type: unknown; title: unknown; status?: unknown; confidence?: unknown; attributes?: unknown }): void {
   if (!MEMORY_NODE_TYPES.includes(input.type as MemoryNodeType)) throw new Error(`Unsupported memory node type: ${String(input.type)}`);
   if (typeof input.title !== "string" || !input.title.trim()) throw new Error("Memory node title is required.");
-  if (input.tier !== undefined && !MEMORY_TIERS.includes(input.tier as MemoryTier)) throw new Error(`Unsupported memory tier: ${String(input.tier)}`);
   if (input.status !== undefined && !MEMORY_NODE_STATUSES.includes(input.status as MemoryNodeStatus)) throw new Error(`Unsupported memory node status: ${String(input.status)}`);
   if (input.confidence !== undefined && (typeof input.confidence !== "number" || input.confidence < 0 || input.confidence > 1)) throw new Error("Memory confidence must be between 0 and 1.");
   if (input.type === "chain") {
@@ -701,11 +756,11 @@ function validateCompleteNode(node: Pick<MemoryNode, "type" | "status" | "attrib
   if (node.evidence.length === 0) throw new Error("Historical bug memories require precedent evidence.");
 }
 
-function readStoredTierContext(
+function readStoredMemoryContext(
   Database: new (path: string) => DatabaseSync,
   databasePath: string,
   workspaceRoot: string,
-): MemoryTierContext | undefined {
+): MemoryContext | undefined {
   const database = new Database(databasePath);
   try {
     const tables = new Set(
@@ -720,29 +775,33 @@ function readStoredTierContext(
       .prepare("SELECT workspace_name, scope_owner FROM scope_versions WHERE workspace_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1")
       .get(workspaceId) as Record<string, unknown> | undefined;
     const workspaceName = typeof scopeRow?.workspace_name === "string" && scopeRow.workspace_name.trim() ? scopeRow.workspace_name.trim() : "Workspace";
-    const subjectName = typeof scopeRow?.scope_owner === "string" && scopeRow.scope_owner.trim() ? scopeRow.scope_owner.trim() : undefined;
+    const recordedSubjectName = typeof scopeRow?.scope_owner === "string" && scopeRow.scope_owner.trim() ? scopeRow.scope_owner.trim() : undefined;
+    const subjectName = recordedSubjectName ?? workspaceName;
     return {
       workspaceId,
       workspaceName,
-      ...(subjectName ? { subjectId: stableSubjectId(subjectName), subjectName } : {}),
+      subjectId: recordedSubjectName ? stableSubjectId(recordedSubjectName) : fallbackSubjectId(workspaceId),
+      subjectName,
     };
   } finally {
     database.close();
   }
 }
 
-function normalizeTierContext(context: MemoryTierContext | undefined, workspaceRoot: string): MemoryTierContext {
+function normalizeMemoryContext(context: MemoryContext | undefined, workspaceRoot: string): MemoryContext {
   const resolvedRoot = resolve(workspaceRoot);
   const workspaceId = context?.workspaceId?.trim() || `workspace_${createHash("sha256").update(resolvedRoot).digest("hex").slice(0, 20)}`;
   const workspaceName = context?.workspaceName?.trim() || basename(resolvedRoot) || "Workspace";
-  const subjectName = context?.subjectName?.trim();
-  const subjectId = context?.subjectId?.trim() || (subjectName ? stableSubjectId(subjectName) : undefined);
+  const recordedSubjectName = context?.subjectName?.trim();
+  const recordedSubjectId = context?.subjectId?.trim();
+  const subjectName = recordedSubjectName || workspaceName;
+  const subjectId = recordedSubjectId || (recordedSubjectName ? stableSubjectId(recordedSubjectName) : fallbackSubjectId(workspaceId));
   return {
     ...(context?.sessionId?.trim() ? { sessionId: context.sessionId.trim() } : {}),
     workspaceId,
     workspaceName,
-    ...(subjectId ? { subjectId } : {}),
-    ...(subjectName ? { subjectName } : {}),
+    subjectId,
+    subjectName,
   };
 }
 
@@ -751,51 +810,19 @@ function stableSubjectId(subjectName: string): string {
   return `subject_${createHash("sha256").update(normalized).digest("hex").slice(0, 20)}`;
 }
 
-function scopeKeyForTier(tier: MemoryTier, context: MemoryTierContext): string {
-  if (tier === "session") {
-    if (!context.sessionId) throw new Error("Session-tier memory requires a session id in workspace context.");
-    return context.sessionId;
-  }
-  if (tier === "subject") {
-    if (!context.subjectId) throw new Error("Subject-tier memory requires a scope owner or subject in workspace context.");
-    return context.subjectId;
-  }
-  return context.workspaceId;
+function fallbackSubjectId(workspaceId: string): string {
+  return `subject_workspace:${workspaceId}`;
 }
 
-function scopeKeyForNode(node: MemoryNode): string {
-  if (node.tier === "session") {
-    if (!node.sessionId) throw new Error(`Session-tier memory is missing its session id: ${node.id}`);
-    return node.sessionId;
-  }
-  if (node.tier === "subject") {
-    if (!node.subjectId) throw new Error(`Subject-tier memory is missing its subject id: ${node.id}`);
-    return node.subjectId;
-  }
-  return node.workspaceId;
+function visibilityClause(current: MemoryContext): { sql: string; params: string[] } {
+  return {
+    sql: "n.subject_id = ? AND EXISTS (SELECT 1 FROM memory_node_workspaces visible_workspace WHERE visible_workspace.node_id = n.id)",
+    params: [current.subjectId],
+  };
 }
 
-function visibilityClause(
-  _binding: MemoryDatabaseBinding,
-  current: MemoryTierContext,
-): { sql: string; params: string[] } {
-  const clauses = ["(n.tier = 'workspace' AND n.scope_key = ?)"];
-  const params = [current.workspaceId];
-  if (current.sessionId) {
-    clauses.push("(n.tier = 'session' AND n.scope_key = ?)");
-    params.push(current.sessionId);
-  }
-  if (current.subjectId) {
-    clauses.push("(n.tier = 'subject' AND n.scope_key = ?)");
-    params.push(current.subjectId);
-  }
-  return { sql: `(${clauses.join(" OR ")})`, params };
-}
-
-function nodeIsVisible(node: MemoryNode, current: MemoryTierContext): boolean {
-  if (node.tier === "session") return Boolean(current.sessionId) && node.sessionId === current.sessionId;
-  if (node.tier === "subject") return Boolean(current.subjectId) && node.subjectId === current.subjectId;
-  return node.workspaceId === current.workspaceId;
+function nodeIsVisible(node: MemoryNode, current: MemoryContext): boolean {
+  return node.subjectId === current.subjectId && node.workspaces.length > 0;
 }
 
 function resolveDatabasePath(path: string): string {
@@ -819,14 +846,15 @@ function validateEvidence(item: Omit<MemoryEvidenceRef, "id" | "createdAt">): vo
 
 function normalizeTitle(value: string): string { return value.trim().replace(/\s+/g, " ").toLowerCase(); }
 function normalizeTag(value: string): string { return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); }
-function stableNodeId(tier: MemoryTier, scopeKey: string, type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${tier}:${scopeKey}:${type}:${title}`).digest("hex").slice(0, 20)}`; }
+function stableNodeId(subjectId: string, type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${subjectId}:${type}:${title}`).digest("hex").slice(0, 20)}`; }
+function legacyStableNodeId(tier: string, scopeKey: string, type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${tier}:${scopeKey}:${type}:${title}`).digest("hex").slice(0, 20)}`; }
 function renameLegacyFindingMemoryIds(database: DatabaseSync): void {
   database.exec("PRAGMA defer_foreign_keys = ON");
   const rows = database
     .prepare("SELECT id, tier, scope_key, title_norm FROM memory_nodes WHERE type = 'trajectory' AND id GLOB 'finding_*'")
-    .all() as Array<{ id: string; tier: MemoryTier; scope_key: string; title_norm: string }>;
+    .all() as Array<{ id: string; tier: string; scope_key: string; title_norm: string }>;
   for (const row of rows) {
-    const nextId = stableNodeId(row.tier, row.scope_key, "trajectory", row.title_norm);
+    const nextId = legacyStableNodeId(row.tier, row.scope_key, "trajectory", row.title_norm);
     if (database.prepare("SELECT id FROM memory_nodes WHERE id = ?").get(nextId)) {
       throw new Error(`Cannot rename legacy finding memory ${row.id}; trajectory id already exists: ${nextId}.`);
     }
@@ -854,6 +882,14 @@ function tableExists(database: DatabaseSync, table: string): boolean {
   return Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
 }
 function unique(values: readonly string[]): string[] { return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort(); }
+function mergeSessionMemberships(existing: readonly string[], sessionId: string | undefined): string[] {
+  return unique([...existing, ...(sessionId ? [sessionId] : [])]);
+}
+function mergeWorkspaceMemberships(existing: readonly MemoryWorkspaceMembership[], context: MemoryContext): MemoryWorkspaceMembership[] {
+  const byId = new Map(existing.map((workspace) => [workspace.id, workspace]));
+  byId.set(context.workspaceId, { id: context.workspaceId, name: context.workspaceName });
+  return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+}
 function mergeObjects(base: Record<string, unknown>, update: Record<string, unknown>): Record<string, unknown> { return { ...base, ...update }; }
 function mergeEvidence(existing: readonly MemoryEvidenceRef[], incoming: readonly Omit<MemoryEvidenceRef, "id" | "createdAt">[], nodeId: string, now: string): MemoryEvidenceRef[] {
   const byId = new Map(existing.map((item) => [item.id, item]));
@@ -885,8 +921,6 @@ function evidenceFromRow(row: Record<string, unknown>): MemoryEvidenceRef {
 function edgeFromRow(row: Record<string, unknown>): MemoryEdge { return { fromId: text(row.from_id), toId: text(row.to_id), relation: text(row.relation), note: text(row.note), createdAt: text(row.created_at), updatedAt: text(row.updated_at) }; }
 function jsonObject(value: unknown): Record<string, unknown> { if (typeof value !== "string") return {}; const parsed = JSON.parse(value) as unknown; return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; }
 function text(value: unknown): string { if (typeof value !== "string") throw new Error("Expected SQLite text value."); return value; }
-function nullableText(value: unknown): string | null { return typeof value === "string" ? value : null; }
 function number(value: unknown): number { if (typeof value !== "number") throw new Error("Expected SQLite number value."); return value; }
-function memoryTier(value: unknown): MemoryTier { if (!MEMORY_TIERS.includes(value as MemoryTier)) throw new Error(`Unsupported stored memory tier: ${String(value)}`); return value as MemoryTier; }
 function nodeType(value: unknown): MemoryNodeType { if (!MEMORY_NODE_TYPES.includes(value as MemoryNodeType)) throw new Error(`Unsupported stored memory node type: ${String(value)}`); return value as MemoryNodeType; }
 function nodeStatus(value: unknown): MemoryNodeStatus { if (!MEMORY_NODE_STATUSES.includes(value as MemoryNodeStatus)) throw new Error(`Unsupported stored memory status: ${String(value)}`); return value as MemoryNodeStatus; }

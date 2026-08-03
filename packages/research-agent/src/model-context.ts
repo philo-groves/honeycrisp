@@ -61,11 +61,10 @@ export interface ResearchModelMemoryRelationship {
 
 export interface ResearchModelMemoryContextNode {
   id: string;
-  tier: MemoryNode["tier"];
   scope: {
-    sessionId?: string;
-    workspace: { id: string; name: string };
-    subject?: { id: string; name: string };
+    sessions: readonly string[];
+    workspaces: readonly { id: string; name: string }[];
+    subject: { id: string; name: string };
   };
   type: MemoryNode["type"];
   title: string;
@@ -99,7 +98,7 @@ export interface ResearchModelSkillContext {
 export function createModelWorkspaceContext(
   context: ResearchWorkspaceContext,
 ): ResearchModelWorkspaceContext {
-  const memory = context.memoryTierContext;
+  const memory = context.memoryContext;
   return {
     schemaVersion: 1,
     ...(context.authorization ? { authorization: context.authorization } : {}),
@@ -159,9 +158,11 @@ export function compileMemoryModelContext(
   } = {},
 ): ResearchModelMemoryContextNode[] {
   const nodes = new Map<string, MemoryNode>();
-  for (const node of store.search({ limit: 100 })) nodes.set(node.id, node);
+  const current = store.getContext();
+  for (const node of store.search({ scope: "workspace", limit: 100 })) nodes.set(node.id, node);
+  for (const node of store.search({ scope: "session", limit: 100 })) nodes.set(node.id, node);
   for (const term of queryTerms(prompt).slice(0, 12)) {
-    for (const node of store.search({ query: term, limit: 20 })) {
+    for (const node of store.search({ query: term, scope: "subject", limit: 20 })) {
       nodes.set(node.id, node);
     }
   }
@@ -169,6 +170,8 @@ export function compileMemoryModelContext(
     nodes: [...nodes.values()],
     edges: store.listEdges(),
     prompt,
+    ...(current.sessionId ? { sessionId: current.sessionId } : {}),
+    workspaceId: current.workspaceId,
     ...options,
   });
 }
@@ -179,6 +182,8 @@ export function selectMemoryModelContext(input: {
   prompt: string;
   maxNodes?: number;
   maxCharacters?: number;
+  sessionId?: string;
+  workspaceId?: string;
 }): ResearchModelMemoryContextNode[] {
   const maxNodes = clampInteger(input.maxNodes, DEFAULT_MEMORY_NODE_LIMIT, 1, 100);
   const maxCharacters = clampInteger(
@@ -193,7 +198,7 @@ export function selectMemoryModelContext(input: {
   );
   const seedIds = new Set(
     input.nodes
-      .filter((node) => node.tier === "session" || (relevance.get(node.id) ?? 0) > 0)
+      .filter((node) => (input.sessionId ? node.sessionIds.includes(input.sessionId) : false) || (relevance.get(node.id) ?? 0) > 0)
       .map((node) => node.id),
   );
   const linkedIds = new Set(
@@ -205,14 +210,14 @@ export function selectMemoryModelContext(input: {
   );
   const ranked = input.nodes
     .filter((node) =>
-      node.tier !== "subject" ||
+      (input.workspaceId ? node.workspaces.some((workspace) => workspace.id === input.workspaceId) : true) ||
       (relevance.get(node.id) ?? 0) > 0 ||
       linkedIds.has(node.id),
     )
     .sort((left, right) => {
       const scoreDifference =
-        rankScore(right, relevance.get(right.id) ?? 0, linkedIds.has(right.id)) -
-        rankScore(left, relevance.get(left.id) ?? 0, linkedIds.has(left.id));
+        rankScore(right, relevance.get(right.id) ?? 0, linkedIds.has(right.id), input.sessionId, input.workspaceId) -
+        rankScore(left, relevance.get(left.id) ?? 0, linkedIds.has(left.id), input.sessionId, input.workspaceId);
       return (
         scoreDifference ||
         right.updatedAt.localeCompare(left.updatedAt) ||
@@ -250,13 +255,10 @@ function projectMemoryNode(
   const attributes = Object.keys(node.attributes).length > 0 ? node.attributes : undefined;
   return {
     id: node.id,
-    tier: node.tier,
     scope: {
-      ...(node.sessionId ? { sessionId: node.sessionId } : {}),
-      workspace: { id: node.workspaceId, name: node.workspaceName },
-      ...(node.subjectId && node.subjectName
-        ? { subject: { id: node.subjectId, name: node.subjectName } }
-        : {}),
+      sessions: node.sessionIds,
+      workspaces: node.workspaces,
+      subject: { id: node.subjectId, name: node.subjectName },
     },
     type: node.type,
     title: node.title,
@@ -327,11 +329,21 @@ function relevanceScore(node: MemoryNode, terms: readonly string[]): number {
     (metadata.includes(term) ? 3 : 0), 0);
 }
 
-function rankScore(node: MemoryNode, relevance: number, linked: boolean): number {
-  const tierWeight = node.tier === "session" ? 1_000 : node.tier === "workspace" ? 80 : 0;
+function rankScore(
+  node: MemoryNode,
+  relevance: number,
+  linked: boolean,
+  sessionId: string | undefined,
+  workspaceId: string | undefined,
+): number {
+  const contextWeight = sessionId && node.sessionIds.includes(sessionId)
+    ? 1_000
+    : workspaceId && node.workspaces.some((workspace) => workspace.id === workspaceId)
+      ? 80
+      : 0;
   const statusWeight = node.status === "confirmed" ? 20 : node.status === "rejected" ? -20 : 0;
   const typeWeight = node.type === "hypothesis" ? 8 : 0;
-  return tierWeight + relevance * 100 + (linked ? 40 : 0) + statusWeight + typeWeight;
+  return contextWeight + relevance * 100 + (linked ? 40 : 0) + statusWeight + typeWeight;
 }
 
 function queryTerms(prompt: string): string[] {

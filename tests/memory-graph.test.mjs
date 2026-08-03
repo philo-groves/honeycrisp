@@ -98,9 +98,10 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     assert.deepEqual(descriptors.map((tool) => tool.name), ["memory.search", "memory.get", "memory.save", "memory.correct", "memory.link"]);
     const searchDescriptor = descriptors.find((tool) => tool.name === "memory.search");
     const saveDescriptor = descriptors.find((tool) => tool.name === "memory.save");
-    assert.match(searchDescriptor.description, /workspace knowledge by default/);
-    assert.match(searchDescriptor.inputSchema.properties.tiers.description, /Defaults to workspace/);
+    assert.match(searchDescriptor.description, /current workspace by default/);
+    assert.match(searchDescriptor.inputSchema.properties.scope.description, /Defaults to workspace/);
     assert.match(saveDescriptor.description, /refined in place/);
+    assert.equal("tier" in saveDescriptor.inputSchema.properties, false);
     const saveSchema = saveDescriptor.inputSchema;
     assert.deepEqual(saveSchema.properties.type.enum, ["asset", "bug", "invariant", "mitigation", "source", "sink", "hypothesis", "primitive", "chain", "procedure", "trajectory"]);
     assert.equal(saveSchema.properties.type.enum.includes("evidence"), false);
@@ -174,6 +175,7 @@ test("memory graph shares a database without disturbing host operational tables"
       { component: "honeycrisp_core", version: 1, name: "tiered_memory_graph_baseline" },
     );
     assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
+    assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 6").get().name, "memory_context_memberships");
     assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'beale_workbench'").get().name, "workspace_schema_baseline");
     assert.equal(reopened.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
   } finally {
@@ -189,6 +191,16 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
   initial.close();
 
   const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    DROP TABLE memory_node_sessions;
+    DROP TABLE memory_node_workspaces;
+    DROP INDEX memory_nodes_subject_identity_idx;
+    ALTER TABLE memory_nodes ADD COLUMN tier TEXT NOT NULL DEFAULT 'workspace';
+    ALTER TABLE memory_nodes ADD COLUMN scope_key TEXT NOT NULL DEFAULT 'workspace_default';
+    ALTER TABLE memory_nodes ADD COLUMN session_id TEXT;
+    ALTER TABLE memory_nodes ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'workspace_default';
+    ALTER TABLE memory_nodes ADD COLUMN workspace_name TEXT NOT NULL DEFAULT 'Default Workspace';
+  `);
   legacy.prepare("DELETE FROM schema_migrations WHERE component = 'honeycrisp_core' AND version >= 2").run();
   legacy.prepare(`INSERT INTO memory_nodes (
     id, tier, scope_key, session_id, workspace_id, workspace_name, subject_id, subject_name,
@@ -219,6 +231,17 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
       assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 3").get().name, "rename_legacy_finding_memory_ids");
       assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 4").get().name, "remove_peer_database_federation");
       assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 5").get().name, "workspace_runbook_artifacts");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 6").get().name, "memory_context_memberships");
+      assert.equal(database.prepare("SELECT session_id FROM memory_node_sessions WHERE node_id = ?").get(migratedNode.id), undefined);
+      assert.deepEqual({ ...database.prepare("SELECT workspace_id, workspace_name FROM memory_node_workspaces WHERE node_id = ?").get(migratedNode.id) }, {
+        workspace_id: "workspace_default",
+        workspace_name: "Default Workspace",
+      });
+      assert.deepEqual({ ...database.prepare("SELECT subject_id, subject_name FROM memory_nodes WHERE id = ?").get(migratedNode.id) }, {
+        subject_id: "subject_workspace:workspace_default",
+        subject_name: "Default Workspace",
+      });
+      assert.equal(database.prepare("SELECT name FROM pragma_table_info('memory_nodes') WHERE name = 'tier'").get(), undefined);
       assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_runbooks'").get().name, "honeycrisp_runbooks");
       assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_federated_edges'").get(), undefined);
       assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
@@ -231,29 +254,23 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
   }
 });
 
-test("memory graph tiers session, workspace, and subject knowledge across workspaces in one database", async () => {
-  const zshRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tier-zsh-"));
-  const mdnsRoot = await mkdtemp(join(tmpdir(), "honeycrisp-tier-mdns-"));
+test("memory graph accumulates session and workspace memberships under one subject", async () => {
+  const zshRoot = await mkdtemp(join(tmpdir(), "honeycrisp-context-zsh-"));
+  const mdnsRoot = await mkdtemp(join(tmpdir(), "honeycrisp-context-mdns-"));
   const apple = { subjectId: "subject_apple", subjectName: "Apple" };
   const zshContext = { sessionId: "run_zsh", workspaceId: "workspace_zsh", workspaceName: "Zsh", ...apple };
   const zsh = new MemoryGraphStore({ workspaceRoot: zshRoot, context: zshContext });
-  let subjectNode;
-  let workspaceNode;
-  let sessionNode;
+  let sharedNode;
+  let zshNode;
   try {
-    subjectNode = zsh.save({ tier: "subject", type: "invariant", title: "Apple IPC convention", summary: "Apple components exchange bounded messages." });
-    workspaceNode = zsh.save({ tier: "workspace", type: "invariant", title: "Zsh IPC boundary", summary: "Zsh-specific boundary." });
-    sessionNode = zsh.save({ tier: "session", type: "invariant", title: "Current parser lead", summary: "Current run lead." });
-    zsh.link(subjectNode.id, workspaceNode.id, "observed_in", "Origin workspace relationship");
-    assert.deepEqual(zsh.search().map((node) => node.id), [workspaceNode.id]);
-    assert.deepEqual(zsh.search({ tiers: ["session"] }).map((node) => node.id), [sessionNode.id]);
-    assert.deepEqual(zsh.search({ tiers: ["subject"] }).map((node) => node.id), [subjectNode.id]);
-
-    const crossTierRefinement = zsh.save({ tier: "session", type: "invariant", title: " Zsh IPC boundary ", body: "Refined without a second tier copy." });
-    assert.equal(crossTierRefinement.id, workspaceNode.id);
-    assert.equal(crossTierRefinement.tier, "workspace");
-    assert.equal(crossTierRefinement.revision, 2);
-    assert.deepEqual(zsh.search({ tiers: ["session"] }).map((node) => node.id), [sessionNode.id]);
+    sharedNode = zsh.save({ type: "invariant", title: "Apple IPC convention", summary: "Apple components exchange bounded messages." });
+    zshNode = zsh.save({ type: "invariant", title: "Zsh IPC boundary", summary: "Zsh-specific boundary." });
+    zsh.link(sharedNode.id, zshNode.id, "observed_in", "Origin workspace relationship");
+    assert.deepEqual(sharedNode.sessionIds, ["run_zsh"]);
+    assert.deepEqual(sharedNode.workspaces, [{ id: "workspace_zsh", name: "Zsh" }]);
+    assert.deepEqual(zsh.search({ scope: "session" }).map((node) => node.id).sort(), [sharedNode.id, zshNode.id].sort());
+    assert.deepEqual(zsh.search({ scope: "workspace" }).map((node) => node.id).sort(), [sharedNode.id, zshNode.id].sort());
+    assert.deepEqual(zsh.search({ scope: "subject" }).map((node) => node.id).sort(), [sharedNode.id, zshNode.id].sort());
   } finally {
     zsh.close();
   }
@@ -265,26 +282,75 @@ test("memory graph tiers session, workspace, and subject knowledge across worksp
   });
   try {
     assert.deepEqual(mdns.search(), []);
-    assert.deepEqual(mdns.search({ tiers: ["subject"] }).map((node) => node.id), [subjectNode.id]);
-    assert.equal(mdns.get(workspaceNode.id), null);
-    assert.equal(mdns.get(sessionNode.id), null);
-    assert.equal(mdns.get(subjectNode.id)?.subjectName, "Apple");
-    assert.deepEqual(mdns.listEdges(subjectNode.id), []);
+    assert.deepEqual(mdns.search({ scope: "subject" }).map((node) => node.id).sort(), [sharedNode.id, zshNode.id].sort());
+    assert.equal(mdns.get(sharedNode.id)?.subjectName, "Apple");
+    assert.ok(mdns.listEdges(sharedNode.id).some((edge) => edge.relation === "observed_in"));
 
-    const refined = mdns.save({ tier: "subject", type: "invariant", title: "Apple IPC convention", body: "Check interactions between separately scoped components." });
-    assert.equal(refined.id, subjectNode.id);
+    const refined = mdns.save({ type: "invariant", title: "Apple IPC convention", body: "Check interactions between separately scoped components." });
+    assert.equal(refined.id, sharedNode.id);
     assert.equal(refined.revision, 2);
-    const crossTierRefinement = mdns.save({ tier: "workspace", type: "invariant", title: "Apple IPC convention", summary: "Refined from mDNSResponder without copying it." });
-    assert.equal(crossTierRefinement.id, subjectNode.id);
-    assert.equal(crossTierRefinement.tier, "subject");
-    const localNode = mdns.save({ tier: "workspace", type: "invariant", title: "mDNSResponder IPC boundary", summary: "mDNSResponder-specific boundary." });
+    assert.deepEqual(refined.sessionIds, ["run_mdns", "run_zsh"]);
+    assert.deepEqual(refined.workspaces, [
+      { id: "workspace_zsh", name: "Zsh" },
+      { id: "workspace_mdns", name: "mDNSResponder" },
+    ]);
+    assert.deepEqual(mdns.search({ scope: "session" }).map((node) => node.id), [sharedNode.id]);
+    assert.deepEqual(mdns.search({ scope: "workspace" }).map((node) => node.id), [sharedNode.id]);
+    const localNode = mdns.save({ type: "invariant", title: "mDNSResponder IPC boundary", summary: "mDNSResponder-specific boundary." });
     assert.deepEqual(mdns.search({ query: "boundary" }).map((node) => node.id), [localNode.id]);
-    const crossTierEdge = mdns.link(subjectNode.id, localNode.id, "applies_to", "Shared owner invariant applies at this boundary");
-    assert.deepEqual(mdns.listEdges(subjectNode.id), [crossTierEdge]);
+    const crossWorkspaceEdge = mdns.link(sharedNode.id, localNode.id, "applies_to", "Shared owner invariant applies at this boundary");
+    assert.ok(mdns.listEdges(sharedNode.id).some((edge) => edge.relation === crossWorkspaceEdge.relation));
   } finally {
     mdns.close();
     await rm(zshRoot, { recursive: true, force: true });
     await rm(mdnsRoot, { recursive: true, force: true });
+  }
+});
+
+test("memory correction appends context memberships when reclassifying a node", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-context-correction-"));
+  const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
+  const subject = { subjectId: "subject_apple", subjectName: "Apple" };
+  const first = new MemoryGraphStore({
+    workspaceRoot,
+    databasePath,
+    context: { sessionId: "run_zsh", workspaceId: "workspace_zsh", workspaceName: "Zsh", ...subject },
+  });
+  let node;
+  try {
+    node = first.save({
+      type: "invariant",
+      title: "Apple IPC convention",
+      summary: "Apple components exchange bounded messages.",
+      tags: ["ipc"],
+    });
+  } finally {
+    first.close();
+  }
+
+  const followup = new MemoryGraphStore({
+    workspaceRoot,
+    databasePath,
+    context: { sessionId: "run_mdns", workspaceId: "workspace_mdns", workspaceName: "mDNSResponder", ...subject },
+  });
+  try {
+    const corrected = followup.correct(node.id, 1, {
+      type: "procedure",
+      body: "Compare the bounded-message convention across components.",
+      tags: ["ipc", "cross_workspace"],
+    });
+    assert.notEqual(corrected.id, node.id);
+    assert.equal(corrected.type, "procedure");
+    assert.deepEqual(corrected.sessionIds, ["run_mdns", "run_zsh"]);
+    assert.deepEqual(corrected.workspaces, [
+      { id: "workspace_zsh", name: "Zsh" },
+      { id: "workspace_mdns", name: "mDNSResponder" },
+    ]);
+    assert.deepEqual(corrected.tags, ["cross_workspace", "ipc"]);
+    assert.equal(followup.get(node.id), null);
+  } finally {
+    followup.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
   }
 });
 
@@ -304,9 +370,8 @@ test("memory graph derives shared Beale workspace identity for headless access",
   const store = new MemoryGraphStore({ workspaceRoot });
   try {
     const workspaceNode = store.save({ type: "asset", title: "Zsh parser" });
-    const subjectNode = store.save({ tier: "subject", type: "invariant", title: "Apple parser boundary" });
-    assert.equal(workspaceNode.workspaceId, "workspace_shared");
-    assert.equal(workspaceNode.workspaceName, "Zsh");
+    const subjectNode = store.save({ type: "invariant", title: "Apple parser boundary" });
+    assert.deepEqual(workspaceNode.workspaces, [{ id: "workspace_shared", name: "Zsh" }]);
     assert.equal(subjectNode.subjectName, "Apple");
   } finally {
     store.close();
@@ -314,8 +379,8 @@ test("memory graph derives shared Beale workspace identity for headless access",
 
   const reopened = new MemoryGraphStore({ workspaceRoot });
   try {
-    assert.equal(reopened.search({ tiers: ["workspace"] })[0]?.title, "Zsh parser");
-    assert.equal(reopened.search({ tiers: ["subject"] })[0]?.title, "Apple parser boundary");
+    assert.equal(reopened.search({ scope: "workspace" }).some((node) => node.title === "Zsh parser"), true);
+    assert.equal(reopened.search({ scope: "subject" }).some((node) => node.title === "Apple parser boundary"), true);
   } finally {
     reopened.close();
     await rm(workspaceRoot, { recursive: true, force: true });

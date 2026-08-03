@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
-  ResearchMemoryTierContext,
+  ResearchMemoryContext,
   ResearchWorkspaceAuthorizationContext,
   ResearchWorkspaceContext,
   ResearchWorkspaceRepositoryContext,
@@ -14,7 +14,7 @@ export interface CreateResearchWorkspaceContextInput {
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
   authorization?: ResearchWorkspaceAuthorizationContext;
-  memoryTierContext?: ResearchMemoryTierContext;
+  memoryContext?: ResearchMemoryContext;
 }
 
 export type WorkspaceRepositoryInput =
@@ -33,7 +33,7 @@ export interface ResearchWorkspaceContextOverlay {
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
   authorization?: ResearchWorkspaceAuthorizationContext;
-  memoryTierContext?: ResearchMemoryTierContext;
+  memoryContext?: ResearchMemoryContext;
 }
 
 export function createResearchWorkspaceContext(
@@ -56,7 +56,7 @@ export function createResearchWorkspaceContext(
     schemaVersion: 1,
     workspaceRoot,
     ...(input.authorization ? { authorization: input.authorization } : {}),
-    ...(input.memoryTierContext ? { memoryTierContext: input.memoryTierContext } : {}),
+    ...(input.memoryContext ? { memoryContext: input.memoryContext } : {}),
     knownRepositories: uniqueRepositories(repositories),
     materializedSourcePaths,
     projectNotes: uniqueStrings(input.projectNotes ?? []),
@@ -89,12 +89,12 @@ export function loadResearchWorkspaceContextFile(
     ...readStringArray(parsed.notes),
   ]);
   const authorization = normalizeAuthorization(parsed.authorization);
-  const memoryTierContext = normalizeMemoryTierContext(parsed.memoryTierContext);
+  const memoryContext = normalizeMemoryContext(parsed.memoryContext ?? parsed.memoryTierContext);
   return {
     schemaVersion: 1,
     ...(workspaceRoot ? { workspaceRoot } : {}),
     ...(authorization ? { authorization } : {}),
-    ...(memoryTierContext ? { memoryTierContext } : {}),
+    ...(memoryContext ? { memoryContext } : {}),
     ...(knownRepositories.length > 0 ? { knownRepositories } : {}),
     ...(materializedSourcePaths.length > 0 ? { materializedSourcePaths } : {}),
     ...(projectNotes.length > 0 ? { projectNotes } : {}),
@@ -117,10 +117,10 @@ export function mergeResearchWorkspaceContexts(
       : input.base.authorization
         ? { authorization: input.base.authorization }
         : {}),
-    ...(overlay.memoryTierContext
-      ? { memoryTierContext: overlay.memoryTierContext }
-      : input.base.memoryTierContext
-        ? { memoryTierContext: input.base.memoryTierContext }
+    ...(overlay.memoryContext
+      ? { memoryContext: overlay.memoryContext }
+      : input.base.memoryContext
+        ? { memoryContext: input.base.memoryContext }
         : {}),
     knownRepositories: uniqueRepositories([
       ...input.base.knownRepositories,
@@ -137,19 +137,21 @@ export function mergeResearchWorkspaceContexts(
   };
 }
 
-function normalizeMemoryTierContext(value: unknown): ResearchMemoryTierContext | undefined {
+function normalizeMemoryContext(value: unknown): ResearchMemoryContext | undefined {
   if (!isRecord(value)) return undefined;
   const workspaceId = typeof value.workspaceId === "string" ? value.workspaceId.trim() : "";
   const workspaceName = typeof value.workspaceName === "string" ? value.workspaceName.trim() : "";
   if (!workspaceId || !workspaceName) return undefined;
-  const subjectId = typeof value.subjectId === "string" ? value.subjectId.trim() : "";
-  const subjectName = typeof value.subjectName === "string" ? value.subjectName.trim() : "";
+  const recordedSubjectId = typeof value.subjectId === "string" ? value.subjectId.trim() : "";
+  const recordedSubjectName = typeof value.subjectName === "string" ? value.subjectName.trim() : "";
+  const subjectId = recordedSubjectId || `subject_workspace:${workspaceId}`;
+  const subjectName = recordedSubjectName || workspaceName;
   return {
     ...(typeof value.sessionId === "string" && value.sessionId.trim() ? { sessionId: value.sessionId.trim() } : {}),
     workspaceId,
     workspaceName,
-    ...(subjectId ? { subjectId } : {}),
-    ...(subjectName ? { subjectName } : {}),
+    subjectId,
+    subjectName,
   };
 }
 

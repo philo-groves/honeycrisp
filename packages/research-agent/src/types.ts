@@ -83,12 +83,12 @@ export interface ResearchWorkspaceAuthorizationContext {
   expiresAt?: string;
 }
 
-export interface ResearchMemoryTierContext {
+export interface ResearchMemoryContext {
   sessionId?: string;
   workspaceId: string;
   workspaceName: string;
-  subjectId?: string;
-  subjectName?: string;
+  subjectId: string;
+  subjectName: string;
 }
 
 export interface ResearchAgentInstructionSource {
@@ -110,7 +110,7 @@ export interface ResearchAgentInstructions {
 export interface ResearchWorkspaceContext {
   schemaVersion: 1;
   workspaceRoot: string;
-  memoryTierContext?: ResearchMemoryTierContext;
+  memoryContext?: ResearchMemoryContext;
   authorization?: ResearchWorkspaceAuthorizationContext;
   knownRepositories: readonly ResearchWorkspaceRepositoryContext[];
   materializedSourcePaths: readonly string[];

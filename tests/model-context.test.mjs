@@ -26,19 +26,12 @@ test("model workspace context preserves research identity without storage paths"
       scopeOwner: "Apple",
       networkProfile: "offline",
     },
-    memoryTierContext: {
+    memoryContext: {
       sessionId: "run_zftp",
       workspaceId: "workspace_zsh",
       workspaceName: "Zsh",
       subjectId: "subject_apple",
       subjectName: "Apple",
-      peers: [{
-        databasePath: "/private/workspaces/mdns/.honeycrisp/memory/memory.sqlite",
-        workspaceId: "workspace_mdns",
-        workspaceName: "mDNSResponder",
-        subjectId: "subject_apple",
-        subjectName: "Apple",
-      }],
     },
     knownRepositories: [{
       rootPath: "/sources/zsh",
@@ -78,11 +71,11 @@ test("repository content roots become bounded file-read hints", () => {
   ]);
 });
 
-test("memory context selects bounded tiered nodes with evidence and relationships", () => {
+test("memory context prioritizes current memberships and relevant subject knowledge", () => {
   const nodes = [
     memoryNode({
       id: "mem_session_zftp",
-      tier: "session",
+      sessionIds: ["run_zftp"],
       type: "hypothesis",
       title: "ZFTP length handling",
       summary: "The ZFTP command parser may mishandle a negative length.",
@@ -98,21 +91,23 @@ test("memory context selects bounded tiered nodes with evidence and relationship
     }),
     memoryNode({
       id: "mem_subject_zftp",
-      tier: "subject",
+      sessionIds: ["run_mdns"],
+      workspaces: [{ id: "workspace_mdns", name: "mDNSResponder" }],
       type: "invariant",
       title: "Apple ZFTP module boundary",
       summary: "ZFTP module input must remain length-bounded before allocation.",
     }),
     memoryNode({
       id: "mem_subject_mdns",
-      tier: "subject",
+      sessionIds: ["run_mdns"],
+      workspaces: [{ id: "workspace_mdns", name: "mDNSResponder" }],
       type: "invariant",
       title: "mDNS label compression",
       summary: "DNS labels require bounded pointer traversal.",
     }),
     memoryNode({
       id: "mem_workspace_parser",
-      tier: "workspace",
+      sessionIds: ["run_older"],
       type: "source",
       title: "Parser entrypoints",
       summary: "General shell parser orientation.",
@@ -129,6 +124,8 @@ test("memory context selects bounded tiered nodes with evidence and relationship
       updatedAt: "2026-07-20T12:00:00.000Z",
     }],
     prompt: "Continue vulnerability research on the ZFTP allocation boundary.",
+    sessionId: "run_zftp",
+    workspaceId: "workspace_zsh",
     maxNodes: 3,
   });
 
@@ -145,6 +142,11 @@ test("memory context selects bounded tiered nodes with evidence and relationship
     note: "The candidate crosses this invariant.",
   });
   assert.ok(!context.some((node) => node.id === "mem_subject_mdns"));
+  assert.deepEqual(context[0].scope, {
+    sessions: ["run_zftp"],
+    workspaces: [{ id: "workspace_zsh", name: "Zsh" }],
+    subject: { id: "subject_apple", name: "Apple" },
+  });
 });
 
 test("available tool capture summarizes actual tools without duplicating schemas or permissions", () => {
@@ -202,10 +204,8 @@ test("memory context retrieves an older relevant node beyond the recent context 
 function memoryNode(overrides) {
   return {
     id: "mem_default",
-    tier: "workspace",
-    sessionId: "run_zftp",
-    workspaceId: "workspace_zsh",
-    workspaceName: "Zsh",
+    sessionIds: ["run_zftp"],
+    workspaces: [{ id: "workspace_zsh", name: "Zsh" }],
     subjectId: "subject_apple",
     subjectName: "Apple",
     type: "hypothesis",

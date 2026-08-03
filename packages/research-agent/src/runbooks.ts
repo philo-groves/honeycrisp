@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { MemoryGraphStore, type MemoryTierContext } from "./memory-graph.js";
+import { MemoryGraphStore, type MemoryContext } from "./memory-graph.js";
 import {
   registerResearchStorageArtifact,
   type ResearchStorageArtifactManifestEntry,
@@ -92,7 +92,7 @@ export class RunbookStore {
   public constructor(
     private readonly databasePath: string,
     private readonly storageLayout: ResearchStorageLayout,
-    private readonly context: MemoryTierContext,
+    private readonly context: MemoryContext,
   ) {
     mkdirSync(dirname(databasePath), { recursive: true });
     const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSync };
@@ -314,7 +314,7 @@ function createNotebook(input: {
   title: string;
   purpose: string;
   status: RunbookStatus;
-  context: MemoryTierContext;
+  context: MemoryContext;
   revision: number;
   createdAt: string;
   updatedAt: string;

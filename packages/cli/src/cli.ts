@@ -2346,9 +2346,9 @@ async function createRuntimeConfig(args: {
   });
   const memoryGraph = new MemoryGraphStore({
     workspaceRoot,
-    ...(workspaceContext.memoryTierContext
+    ...(workspaceContext.memoryContext
       ? {
-          context: workspaceContext.memoryTierContext,
+          context: workspaceContext.memoryContext,
         }
       : {}),
   });

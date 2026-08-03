@@ -313,19 +313,12 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
     workspaceContext: {
       schemaVersion: 1,
       workspaceRoot: "/private/workspaces/fixture",
-      memoryTierContext: {
+      memoryContext: {
         sessionId: "run_fixture",
         workspaceId: "workspace_fixture",
         workspaceName: "Fixture",
         subjectId: "subject_fixture",
         subjectName: "Fixture Owner",
-        peers: [{
-          databasePath: "/private/peer/memory.sqlite",
-          workspaceId: "workspace_peer",
-          workspaceName: "Peer Fixture",
-          subjectId: "subject_fixture",
-          subjectName: "Fixture Owner",
-        }],
       },
       knownRepositories: [],
       materializedSourcePaths: [],
@@ -333,10 +326,10 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
     },
     memoryContext: [{
       id: "mem_fixture_parser",
-      tier: "workspace",
       scope: {
-        sessionId: "run_fixture",
-        workspace: { id: "workspace_fixture", name: "Fixture" },
+        sessions: ["run_fixture"],
+        workspaces: [{ id: "workspace_fixture", name: "Fixture" }],
+        subject: { id: "subject_fixture", name: "Fixture Owner" },
       },
       type: "hypothesis",
       title: "Parser boundary",
