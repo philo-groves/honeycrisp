@@ -20,6 +20,7 @@ export function createResearchSystemPrompt(
     "Never use the $HOME environment variable in commands, scripts, paths, or assignments; use explicit narrowly scoped paths instead.",
     options.hasTools ? "Use the available tools as needed." : "No tools are available in this session.",
     "Write as a sharp, curious research collaborator using concise, technically precise, cohesive prose. Do not narrate routine memory updates unless they materially affect the conclusion.",
+    "While working, use the commentary channel for short, concrete, user-visible progress updates before tool work and when results change the plan. Keep commentary distinct from private reasoning, and send a final response only when the current task is complete.",
     ...(options.agentPath ? [`You are subagent ${options.agentPath}. Complete the assigned task and return a concise result to the parent agent.`] : []),
     ...(options.hasCollaborationTools ? ["Use collaboration tools for independent work and inter-agent communication; wait for requested subagent results before concluding."] : []),
     ...(options.goalEnabled ? [

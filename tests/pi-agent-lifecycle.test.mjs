@@ -230,6 +230,8 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   assert.match(contexts[0].systemPrompt, /A refuted path should redirect exploration within the relevant subsystem, not end it/);
   assert.match(contexts[0].systemPrompt, /sharp, curious research collaborator/);
   assert.match(contexts[0].systemPrompt, /Do not narrate routine memory updates unless they materially affect the conclusion/);
+  assert.match(contexts[0].systemPrompt, /use the commentary channel for short, concrete, user-visible progress updates/);
+  assert.match(contexts[0].systemPrompt, /send a final response only when the current task is complete/);
   assert.doesNotMatch(contexts[0].systemPrompt, /decide how to investigate it and when the work is complete/);
 });
 
@@ -1626,6 +1628,7 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   assert.equal(child.toolCallCount, 1);
   assert.deepEqual(calls, [{ path: "parse.c" }]);
   assert.ok(childContext);
+  assert.match(childContext.systemPrompt, /use the commentary channel/);
   assert.equal(childContext.reasoning, "low");
   assert.notEqual(childContext.sessionId, "run_subagent_affinity");
   assert.equal(childContext.sessionId, contexts.findLast((context) => context.model === "child-model").sessionId);
@@ -1728,7 +1731,7 @@ test("Pi Agent interrupts and settles active children after an irrecoverable roo
   assert.equal(childAborted, true);
 });
 
-test("Pi Agent executor streams live thought events", async () => {
+test("Pi Agent executor streams live thought and phased message events", async () => {
   const liveEvents = [];
   const result = await runResearchAgent({
     prompt: "Prepare a concise parser inspection plan.",
@@ -1742,16 +1745,98 @@ test("Pi Agent executor streams live thought events", async () => {
     }),
   });
   const thoughtEvents = liveEvents.filter((event) => event.kind === "model.thought");
+  const outputEvents = liveEvents.filter((event) => event.kind === "model.output");
   const agentEvents = liveEvents.filter((event) => event.kind === "agent.event");
 
   assert.equal(result.agentRun.status, "complete");
   assert.ok(thoughtEvents.length >= 2);
   assert.equal(thoughtEvents.at(-1).payload.phase, "completed");
   assert.equal(thoughtEvents.at(-1).payload.text, "Inspect parser entrypoints first.");
+  assert.deepEqual(
+    outputEvents.map((event) => ({
+      itemId: event.payload.itemId,
+      messagePhase: event.payload.messagePhase,
+      text: event.payload.text,
+    })),
+    [
+      {
+        itemId: "commentary_message",
+        messagePhase: "commentary",
+        text: "I am checking parser entrypoints before choosing the next step.",
+      },
+      {
+        itemId: "text:2",
+        messagePhase: undefined,
+        text: "Provider text with a non-Codex JSON signature.",
+      },
+      {
+        itemId: "final_message",
+        messagePhase: "final_answer",
+        text: "## Result\nPrepared parser inspection plan.",
+      },
+    ],
+  );
+  assert.equal(result.agentRun.output.text, "## Result\nPrepared parser inspection plan.");
   assert.equal(agentEvents.length, 1);
   assert.equal(agentEvents[0].payload.type, "turn_completed");
   assert.equal(agentEvents[0].payload.turn, 1);
   assert.deepEqual(agentEvents[0].payload.usage, { ...ZERO_USAGE, cacheHitRate: 0 });
+});
+
+test("Pi Agent rejects a terminal response that contains commentary without a final answer", async () => {
+  const result = await runResearchAgent({
+    prompt: "Finish the parser review.",
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistant({
+          type: "text",
+          text: "I am still checking the final parser edge.",
+          textSignature: JSON.stringify({
+            v: 1,
+            id: "commentary_only",
+            phase: "commentary",
+          }),
+        }),
+      ]),
+      toolRegistry: createResearchToolRegistry(),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "error");
+  assert.match(result.agentRun.output.text, /ended after commentary without a final answer/);
+});
+
+test("Pi Agent retains the unphased final-answer fallback after phased commentary", async () => {
+  const result = await runResearchAgent({
+    prompt: "Finish the parser review.",
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistant([
+          {
+            type: "text",
+            text: "I am checking the final parser edge.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "commentary_then_legacy",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "The parser review is complete.",
+          },
+        ]),
+      ]),
+      toolRegistry: createResearchToolRegistry(),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(result.agentRun.output.text, "The parser review is complete.");
 });
 
 test("Pi Agent executor reports prompt cache hit rate in live and captured usage", async () => {
@@ -1966,7 +2051,30 @@ function createThoughtStreamingModels() {
           ...thinking.content,
           {
             type: "text",
+            text: "I am checking parser entrypoints before choosing the next step.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "commentary_message",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Provider text with a non-Codex JSON signature.",
+            textSignature: JSON.stringify({
+              v: 2,
+              id: "provider_signature",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
             text: "## Result\nPrepared parser inspection plan.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "final_message",
+              phase: "final_answer",
+            }),
           },
         ],
       };
@@ -1996,6 +2104,18 @@ function createThoughtStreamingModels() {
           yield {
             type: "text_end",
             contentIndex: 1,
+            content: "I am checking parser entrypoints before choosing the next step.",
+            partial: finalMessage,
+          };
+          yield {
+            type: "text_end",
+            contentIndex: 2,
+            content: "Provider text with a non-Codex JSON signature.",
+            partial: finalMessage,
+          };
+          yield {
+            type: "text_end",
+            contentIndex: 3,
             content: "## Result\nPrepared parser inspection plan.",
             partial: finalMessage,
           };
@@ -2060,6 +2180,7 @@ function createSubagentModels(contexts) {
     streamSimple(model, context, options = {}) {
       const captured = {
         model: model.id,
+        systemPrompt: context.systemPrompt,
         reasoning: options.reasoning,
         sessionId: options.sessionId,
         toolNames: context.tools?.map((tool) => tool.name) ?? [],

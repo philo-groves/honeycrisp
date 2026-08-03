@@ -783,9 +783,13 @@ export function createPiAgentExecutor(
         if (finalAssistant && (finalAssistant.stopReason === "error" || finalAssistant.stopReason === "aborted")) {
           throw new Error(finalAssistant.errorMessage ?? `Model stopped: ${finalAssistant.stopReason}`);
         }
+        const finalText = finalAssistant ? assistantText(finalAssistant.content) : "";
+        if (finalAssistant && !finalText && hasCommentary(finalAssistant.content)) {
+          throw new Error("Model ended after commentary without a final answer.");
+        }
         return {
           messages: agentMessages,
-          text: finalAssistant ? assistantText(finalAssistant.content) : "",
+          text: finalText,
           turnCount: currentTurn,
           toolCallCount,
           modelCalls: assistantMessages.map(modelCallMetadata),
@@ -1866,11 +1870,54 @@ function truncateModelToolResult(text: string): string {
 function assistantText(
   content: Extract<Message, { role: "assistant" }>["content"],
 ): string {
-  return content
-    .filter((item) => item.type === "text")
+  const textItems = content.filter((item) => item.type === "text");
+  const finalAnswerItems = textItems.filter((item) =>
+    codexTextSignature(item.textSignature).messagePhase === "final_answer"
+  );
+  const selectedItems = finalAnswerItems.length > 0
+    ? finalAnswerItems
+    : textItems.filter((item) => codexTextSignature(item.textSignature).messagePhase === undefined);
+  return selectedItems
     .map((item) => item.text)
     .join("\n")
     .trim();
+}
+
+function hasCommentary(
+  content: Extract<Message, { role: "assistant" }>["content"],
+): boolean {
+  for (const item of content) {
+    if (item.type !== "text") continue;
+    const phase = codexTextSignature(item.textSignature).messagePhase;
+    if (phase === "commentary") return true;
+  }
+  return false;
+}
+
+type CodexMessagePhase = "commentary" | "final_answer";
+
+function codexTextSignature(signature: string | undefined): {
+  id?: string;
+  messagePhase?: CodexMessagePhase;
+} {
+  if (!signature) return {};
+  try {
+    const parsed: unknown = JSON.parse(signature);
+    if (!isRecord(parsed)) return {};
+    if (parsed.v !== 1 || typeof parsed.id !== "string" || !parsed.id.trim()) return {};
+    const id = typeof parsed.id === "string" && parsed.id.length > 0
+      ? parsed.id.trim()
+      : undefined;
+    const messagePhase = parsed.phase === "commentary" || parsed.phase === "final_answer"
+      ? parsed.phase
+      : undefined;
+    return {
+      ...(id ? { id } : {}),
+      ...(messagePhase ? { messagePhase } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 function modelCallMetadata(
@@ -2027,6 +2074,9 @@ function agentLiveEvent(
       const item = isAssistantMessage(update.partial)
         ? update.partial.content[update.contentIndex]
         : undefined;
+      const signature = item?.type === "text"
+        ? codexTextSignature(item.textSignature)
+        : {};
       return {
         schemaVersion: 1,
         kind: "model.output",
@@ -2042,7 +2092,7 @@ function agentLiveEvent(
                 ? "completed"
                 : "delta",
           contentIndex: update.contentIndex,
-          itemId: `text:${update.contentIndex}`,
+          itemId: signature.id ?? `text:${update.contentIndex}`,
           responseId: update.partial.responseId ?? null,
           provider: update.partial.provider,
           model: update.partial.model,
@@ -2054,6 +2104,7 @@ function agentLiveEvent(
                 ? item.text
                 : "",
           ...(update.type === "text_delta" ? { delta: update.delta } : {}),
+          ...(signature.messagePhase ? { messagePhase: signature.messagePhase } : {}),
         },
       };
     }
