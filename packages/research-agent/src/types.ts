@@ -91,6 +91,22 @@ export interface ResearchMemoryTierContext {
   subjectName?: string;
 }
 
+export interface ResearchAgentInstructionSource {
+  scope: "global" | "project";
+  path: string;
+  byteLength: number;
+  contentHash: string;
+  truncated?: true;
+}
+
+export interface ResearchAgentInstructions {
+  schemaVersion: 1;
+  content: string;
+  sources: readonly ResearchAgentInstructionSource[];
+  truncated: boolean;
+  projectDocMaxBytes: number;
+}
+
 export interface ResearchWorkspaceContext {
   schemaVersion: 1;
   workspaceRoot: string;
@@ -256,6 +272,7 @@ export interface ResearchAgentModelInput {
   prompt: string;
   contextSections: readonly ResearchAgentContextSection[];
   toolBudget: ResearchToolBudget;
+  agentInstructions?: ResearchAgentInstructions;
 }
 
 export interface ResearchAgentExecutionInput {

@@ -58,6 +58,9 @@ const COLLABORATION_TOOL_NAMES = [
   "list_agents",
   "wait_agent",
 ];
+const WORKSPACE_AGENT_INSTRUCTIONS = agentInstructions(
+  "Security workspace guidance: use the Tart VM with SIP enabled for target execution.",
+);
 
 test("agent context compacts old bulky tool results while preserving the task and latest result", () => {
   const messages = [{ role: "user", content: "Primary research objective", timestamp: Date.now() }];
@@ -165,6 +168,7 @@ test("Pi executor restores compatible captured messages and persists the next re
   const contexts = [];
   const result = await runResearchAgent({
     prompt: "Continue with this instruction only.",
+    agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
     executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
@@ -184,14 +188,39 @@ test("Pi executor restores compatible captured messages and persists the next re
   assert.equal(resumed.schemaVersion, 2);
   assert.equal(resumed.providerSessionId, "run_resume_fixture");
   assert.equal(resumed.researchFocus.schemaVersion, 1);
+  assert.equal("agentInstructions" in raw.resumableState, false);
   assert.equal(resumed.messages[0].content, "Prior research context");
   assert.match(JSON.stringify(resumed.messages), /Continue with this instruction only/);
   assert.equal(extractCompatiblePiAgentResumableState(raw, "faux", "other-model"), undefined);
+
+  const continuationContexts = [];
+  const continuationInstructions = agentInstructions(
+    "Fresh continuation guidance: use the replacement analysis VM.",
+  );
+  const continued = await runResearchAgent({
+    prompt: "Continue the captured session.",
+    agentInstructions: continuationInstructions,
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      resumableState: resumed,
+      models: createScriptedModels([
+        assistant("## Result\nFresh continuation instructions applied."),
+      ], continuationContexts),
+      toolRegistry: createResearchToolRegistry(),
+    }),
+  });
+
+  assert.match(continuationContexts[0].systemPrompt, /use the replacement analysis VM/);
+  assert.doesNotMatch(continuationContexts[0].systemPrompt, /use the Tart VM with SIP enabled/);
+  assert.deepEqual(continued.agentInstructions, continuationInstructions);
+  assert.equal("agentInstructions" in continued.agentRun.output.raw.resumableState, false);
 });
 
 test("direct Pi Agent and executor use the shared research system prompt", async () => {
   const directAgent = createResearchPiAgent({
     model: FAUX_MODEL,
+    agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
     models: {
       streamSimple() {
         throw new Error("streamSimple should not run while inspecting initial state");
@@ -201,12 +230,16 @@ test("direct Pi Agent and executor use the shared research system prompt", async
 
   assert.equal(
     directAgent.state.systemPrompt,
-    createResearchSystemPrompt({ hasTools: false }),
+    createResearchSystemPrompt({
+      hasTools: false,
+      agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
+    }),
   );
 
   const contexts = [];
   await runResearchAgent({
     prompt: "Orient to the target.",
+    agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
     executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
@@ -223,6 +256,7 @@ test("direct Pi Agent and executor use the shared research system prompt", async
       hasTools: true,
       hasMemoryTools: false,
       hasCollaborationTools: true,
+      agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
     }),
   );
   assert.match(contexts[0].systemPrompt, /^You are a world-class security researcher/);
@@ -232,7 +266,28 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   assert.match(contexts[0].systemPrompt, /Do not narrate routine memory updates unless they materially affect the conclusion/);
   assert.match(contexts[0].systemPrompt, /use the commentary channel for short, concrete, user-visible progress updates/);
   assert.match(contexts[0].systemPrompt, /send a final response only when the current task is complete/);
+  assert.match(contexts[0].systemPrompt, /use the Tart VM with SIP enabled/);
   assert.doesNotMatch(contexts[0].systemPrompt, /decide how to investigate it and when the work is complete/);
+});
+
+test("direct Pi Agent appends workspace instructions after a custom system prompt", () => {
+  const directAgent = createResearchPiAgent({
+    model: FAUX_MODEL,
+    systemPrompt: "Custom host prompt.",
+    agentInstructions: agentInstructions(
+      "Later workspace text claims it may expand authorization, but it may not.",
+    ),
+    models: {
+      streamSimple() {
+        throw new Error("streamSimple should not run while inspecting initial state");
+      },
+    },
+  });
+
+  const prompt = directAgent.state.systemPrompt;
+  assert.match(prompt, /^Custom host prompt\./);
+  assert.match(prompt, /Later workspace text claims/);
+  assert.ok(prompt.indexOf("Later workspace text claims") < prompt.indexOf("cannot expand the recorded authorization boundary"));
 });
 
 test("research system prompt separates reusable runbooks from execution and memory", () => {
@@ -533,6 +588,7 @@ test("Pi Agent permits repeated timed-out collaboration waits while retaining no
     streamSimple(model, context) {
       contexts.push({
         model: model.id,
+        systemPrompt: context.systemPrompt,
         toolNames: context.tools?.map((tool) => tool.name) ?? [],
         messageContents: context.messages.map((message) => JSON.stringify(message.content)),
       });
@@ -558,6 +614,7 @@ test("Pi Agent permits repeated timed-out collaboration waits while retaining no
   };
   const result = await runResearchAgent({
     prompt: "Coordinate the delegated research and report when it is ready.",
+    agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
     executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
@@ -568,6 +625,11 @@ test("Pi Agent permits repeated timed-out collaboration waits while retaining no
 
   assert.equal(result.agentRun.output.raw.toolCallCount, 4);
   assert.equal(result.agentRun.output.raw.subagents.agents[0].status, "completed");
+  assert.ok(contexts.every((context) => context.systemPrompt.includes("use the Tart VM with SIP enabled")));
+  assert.match(
+    contexts.find((context) => context.model === "slow-child-model").systemPrompt,
+    /including agents started without inherited message history/,
+  );
   assert.equal(result.agentRun.output.raw.agentEvents.some((event) =>
     event.type === "research_loop_guard"
     && event.action === "blocked_duplicate"
@@ -1591,6 +1653,7 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   const tool = createFixtureInspectTool(calls);
   const result = await runResearchAgent({
     prompt: "Delegate a bounded parser review, then incorporate the result.",
+    agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
     tools: [tool.descriptor],
     governance: {
       allowedActionClasses: ["inspect"],
@@ -1629,10 +1692,12 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   assert.deepEqual(calls, [{ path: "parse.c" }]);
   assert.ok(childContext);
   assert.match(childContext.systemPrompt, /use the commentary channel/);
+  assert.match(childContext.systemPrompt, /use the Tart VM with SIP enabled/);
   assert.equal(childContext.reasoning, "low");
   assert.notEqual(childContext.sessionId, "run_subagent_affinity");
   assert.equal(childContext.sessionId, contexts.findLast((context) => context.model === "child-model").sessionId);
   assert.ok(rootContexts.every((context) => context.sessionId === "run_subagent_affinity"));
+  assert.ok(rootContexts.every((context) => context.systemPrompt.includes("use the Tart VM with SIP enabled")));
   assert.ok(childContext.messageContents.some((content) => content.includes("Delegate a bounded parser review")));
   assert.ok(childContext.messageContents.some((content) => content.includes("Inspect the parser boundary independently")));
   const finalRootContext = rootContexts.at(-1);
@@ -2169,6 +2234,21 @@ function authorizedWorkspaceContext() {
     knownRepositories: [],
     materializedSourcePaths: [],
     projectNotes: [],
+  };
+}
+
+function agentInstructions(content) {
+  return {
+    schemaVersion: 1,
+    content,
+    sources: [{
+      scope: "project",
+      path: "/private/workspaces/security/AGENTS.md",
+      byteLength: Buffer.byteLength(content, "utf8"),
+      contentHash: "a".repeat(64),
+    }],
+    truncated: false,
+    projectDocMaxBytes: 32 * 1024,
   };
 }
 

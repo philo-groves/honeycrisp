@@ -6,7 +6,11 @@ import type {
   ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
-import { createResearchSystemPrompt } from "./system-prompt.js";
+import {
+  appendResearchAgentInstructions,
+  createResearchSystemPrompt,
+} from "./system-prompt.js";
+import type { ResearchAgentInstructions } from "./types.js";
 
 export interface CreateResearchPiAgentOptions {
   model: Model<any>;
@@ -15,6 +19,7 @@ export interface CreateResearchPiAgentOptions {
   systemPrompt?: string;
   thinkingLevel?: ThinkingLevel;
   agentOptions?: Omit<AgentOptions, "initialState" | "streamFn">;
+  agentInstructions?: ResearchAgentInstructions;
 }
 
 export function createResearchPiAgent(
@@ -26,9 +31,12 @@ export function createResearchPiAgent(
     ...options.agentOptions,
     initialState: {
       model: options.model,
-      systemPrompt: options.systemPrompt ?? createResearchSystemPrompt({
-        hasTools: (options.tools?.length ?? 0) > 0,
-      }),
+      systemPrompt: options.systemPrompt !== undefined
+        ? appendResearchAgentInstructions(options.systemPrompt, options.agentInstructions)
+        : createResearchSystemPrompt({
+            hasTools: (options.tools?.length ?? 0) > 0,
+            ...(options.agentInstructions ? { agentInstructions: options.agentInstructions } : {}),
+          }),
       thinkingLevel: options.thinkingLevel ?? "medium",
       tools: [...(options.tools ?? [])],
     },

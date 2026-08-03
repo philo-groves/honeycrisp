@@ -215,6 +215,7 @@ export function createPiAgentExecutor(
             ...(options.resumableState?.goal ? { reactivateTerminalInitialState: true } : {}),
           })
         : null;
+      const agentInstructions = input.modelInput.agentInstructions;
       let runSession!: (request: SubagentRunRequest & { root?: boolean }) => Promise<SubagentRunResult & {
         agentEvents: Record<string, unknown>[];
         researchFocusState: ResearchFocusPersistedState;
@@ -552,6 +553,7 @@ export function createPiAgentExecutor(
               ...(request.root ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),
               goalEnabled: request.root === true && goalRuntime !== null,
+              ...(agentInstructions ? { agentInstructions } : {}),
             }),
             messages: initialMessages,
             ...(tools.length > 0 ? { tools } : {}),

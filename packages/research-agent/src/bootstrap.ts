@@ -6,6 +6,7 @@ import { createResearchWorkspaceContext } from "./workspace-context.js";
 import { createToolBudget } from "./tool-policy.js";
 import { selectResearchSkills } from "./skills.js";
 import { createResearchTraceEvents } from "./research-trace.js";
+import { discoverResearchAgentInstructions } from "./agent-instructions.js";
 import {
   createAvailableToolContext,
   createModelSkillContext,
@@ -20,6 +21,7 @@ import { fallbackResearchFinalDisposition, type ResearchFinalDisposition } from 
 import type {
   ResearchAgentExecutor,
   ResearchAgentRunResult,
+  ResearchAgentInstructions,
   ResearchCollaborationToolDescriptor,
   ResearchEvent,
   ResearchGovernancePolicy,
@@ -36,6 +38,7 @@ export interface RunResearchAgentInput {
   workspaceRoot?: string;
   storageLayout?: ResearchStorageLayout;
   workspaceContext?: ResearchWorkspaceContext;
+  agentInstructions?: ResearchAgentInstructions;
   memoryContext?: readonly ResearchModelMemoryContextNode[];
   events?: readonly ResearchEvent[];
   tools?: readonly ResearchToolDescriptor[];
@@ -60,6 +63,7 @@ export interface RunResearchAgentResult {
   availableTools: readonly ResearchAvailableToolContext[];
   selectedSkills: readonly ResearchSelectedSkill[];
   collaborationTools: readonly ResearchCollaborationToolDescriptor[];
+  agentInstructions: ResearchAgentInstructions;
   piBase: {
     agentCorePackage: "@earendil-works/pi-agent-core";
     aiPackage: "@earendil-works/pi-ai";
@@ -93,6 +97,9 @@ export async function runResearchAgent(
   });
   const toolBudget = createToolBudget(input.governance, tools);
   const collaborationTools = input.executor.collaborationTools ?? [];
+  const agentInstructions = input.agentInstructions ?? discoverResearchAgentInstructions({
+    workingDirectory: workspaceContext.workspaceRoot,
+  });
   const modelWorkspaceContext = createModelWorkspaceContext(workspaceContext);
   const memoryContext = input.memoryContext ?? [];
   const availableTools = createAvailableToolContext(tools);
@@ -108,6 +115,7 @@ export async function runResearchAgent(
       },
     ],
     toolBudget,
+    ...(agentInstructions.content ? { agentInstructions } : {}),
   };
   const contextEvent: ResearchEvent = {
     id: createResearchEventId(),
@@ -120,6 +128,7 @@ export async function runResearchAgent(
       selectedSkills: modelSelectedSkills,
       availableTools,
       collaborationTools,
+      agentInstructions: agentInstructionsMetadata(agentInstructions),
       summary: "Compiled model context for the research session.",
     },
   };
@@ -195,12 +204,22 @@ export async function runResearchAgent(
     modelSelectedSkills,
     selectedSkills,
     collaborationTools,
+    agentInstructions,
     piBase: {
       agentCorePackage: "@earendil-works/pi-agent-core",
       aiPackage: "@earendil-works/pi-ai",
     },
     response: agentRun.output.text,
     finalDisposition,
+  };
+}
+
+function agentInstructionsMetadata(instructions: ResearchAgentInstructions): Record<string, unknown> {
+  return {
+    schemaVersion: instructions.schemaVersion,
+    sources: instructions.sources,
+    truncated: instructions.truncated,
+    projectDocMaxBytes: instructions.projectDocMaxBytes,
   };
 }
 
