@@ -13,12 +13,35 @@ import {
   createResearchStorageLayout,
   createResearchToolRegistry,
   createShellTool,
+  createToolResultMessage,
   createStorageListTool,
   createStructuredFileReadTool,
   createSynthesisTool,
   ensureResearchStorageLayout,
   registerResearchStorageArtifact,
 } from "../packages/research-agent/dist/index.js";
+
+const allowShell = async (request) => approvedAuthorization(request);
+
+function approvedAuthorization(request) {
+  return {
+    approvalRequestId: "fixture_" + request.actionId,
+    actionId: request.actionId,
+    mode: "danger",
+    decision: "approved",
+    source: "danger",
+    reason: "Danger Mode test fixture.",
+    command: {
+      commandHash: "sha256:fixture",
+      utility: request.utility,
+      args: request.args,
+      cwd: request.cwd,
+      timeoutMs: request.timeoutMs,
+      stdinPresent: request.stdin !== undefined,
+      stdinBytes: request.stdin?.length ?? 0,
+    },
+  };
+}
 
 test("shell tool enforces disabled utilities before spawning and captures argv output", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-tool-"));
@@ -37,7 +60,12 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
 
   try {
     const registry = createResearchToolRegistry([
-      createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath, protectedDirectories: [protectedDirectory] }),
+      createShellTool({
+        workspaceRoot: root,
+        shellOptionsPath: optionsPath,
+        protectedDirectories: [protectedDirectory],
+        authorize: allowShell,
+      }),
     ]);
     const disabled = await registry.execute({
       id: "shell_disabled",
@@ -162,8 +190,12 @@ test("shell tool serializes the same utility across tool instances", async () =>
   }));
 
   try {
-    const first = createResearchToolRegistry([createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath })]);
-    const second = createResearchToolRegistry([createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath })]);
+    const first = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath, authorize: allowShell }),
+    ]);
+    const second = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath, authorize: allowShell }),
+    ]);
     const startedAt = Date.now();
     const results = await Promise.all([
       first.execute({
@@ -190,7 +222,9 @@ test("shell tool serializes the same utility across tool instances", async () =>
 test("shell tool terminates descendant processes when a command times out", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-timeout-"));
   try {
-    const registry = createResearchToolRegistry([createShellTool({ workspaceRoot: root })]);
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, authorize: allowShell }),
+    ]);
     const startedAt = Date.now();
     const parentScript = [
       "const { spawn } = require('node:child_process');",
@@ -211,6 +245,183 @@ test("shell tool terminates descendant processes when a command times out", asyn
     const descendantPid = Number.parseInt(timedOut.result.output.stdout.trim(), 10);
     assert.ok(Number.isInteger(descendantPid));
     await assertProcessExited(descendantPid);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell tool blocks denied commands before spawn and keeps hard guards ahead of authorization", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-denied-"));
+  const marker = join(root, "spawned.txt");
+  const protectedDirectory = join(root, "protected");
+  await mkdir(protectedDirectory);
+  const requests = [];
+  const authorize = async (request) => {
+    requests.push(request);
+    return {
+      ...approvedAuthorization(request),
+      mode: "manual_approval",
+      decision: "denied",
+      source: "human",
+      reason: "Fixture denial.",
+    };
+  };
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({
+        workspaceRoot: root,
+        protectedDirectories: [protectedDirectory],
+        authorize,
+      }),
+    ]);
+    const denied = await registry.execute({
+      id: "shell_denied_before_spawn",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: {
+        utility: "node",
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync(" + JSON.stringify(marker) + ", 'spawned')",
+        ],
+        cwd: ".",
+        stdin: "token=secret-value",
+        timeoutMs: 1_000,
+      },
+    });
+    assert.equal(denied.result.status, "blocked");
+    assert.match(denied.result.summary, /denied by Manual Approval/);
+    await assert.rejects(access(marker));
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].cwd, root);
+    assert.equal(requests[0].stdin, "token=secret-value");
+
+    const hardGuarded = await registry.execute({
+      id: "shell_guard_before_authorizer",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "rm", args: ["-rf", protectedDirectory] },
+    });
+    assert.equal(hardGuarded.result.status, "error");
+    assert.equal(requests.length, 1);
+    await access(protectedDirectory);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell capture events and tool results omit stdin and redact credential argv values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-redaction-"));
+  const secrets = [
+    "raw-stdin-secret",
+    "password-argv-secret",
+    "token-argv-secret",
+    "header-argv-secret",
+    "user-password-secret",
+    "cookie-pair-secret",
+    "cookie-short-secret",
+    "cookie-header-secret",
+  ];
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, authorize: allowShell }),
+    ]);
+    const record = await registry.execute({
+      id: "shell_sanitized_transport",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: {
+        utility: "node",
+        args: [
+          "-e",
+          "",
+          "--",
+          "--password",
+          secrets[1],
+          "--token",
+          secrets[2],
+          "-H",
+          `Authorization: Basic ${secrets[3]}`,
+          "--user",
+          `researcher:${secrets[4]}`,
+          "--cookie",
+          `session=${secrets[5]}`,
+          "-b",
+          secrets[6],
+          "--header",
+          `Cookie: session=${secrets[7]}`,
+        ],
+        cwd: ".",
+        stdin: secrets[0],
+        timeoutMs: 1_000,
+      },
+    });
+    assert.equal(record.result.status, "complete");
+    const toolResult = createToolResultMessage(record.result, record.action.id, "shell_run");
+    const captured = JSON.stringify({ record, toolResult });
+    for (const secret of secrets) assert.doesNotMatch(captured, new RegExp(secret));
+
+    for (const event of record.events) {
+      const normalized = event.payload.normalizedInputs;
+      assert.equal("stdin" in normalized, false);
+      assert.equal(normalized.stdinPresent, true);
+      assert.equal(normalized.stdinBytes, Buffer.byteLength(secrets[0]));
+      assert.match(normalized.stdinHash, /^sha256:/);
+      assert.equal(normalized.timeoutMs, 1_000);
+    }
+    assert.deepEqual(record.action.input.args.slice(3), [
+      "--password",
+      "[REDACTED]",
+      "--token",
+      "[REDACTED]",
+      "-H",
+      "Authorization: [REDACTED]",
+      "--user",
+      "[REDACTED]",
+      "--cookie",
+      "[REDACTED]",
+      "-b",
+      "[REDACTED]",
+      "--header",
+      "Cookie: [REDACTED]",
+    ]);
+    assert.deepEqual(record.result.output.args, record.action.input.args);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("tool runtime budget aborts a pending approval before any later spawn", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-budget-"));
+  const marker = join(root, "late-spawn.txt");
+  let approve;
+  const authorize = (request) => new Promise((resolveApproval) => {
+    approve = () => resolveApproval(approvedAuthorization(request));
+  });
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, authorize }),
+    ]);
+    const result = await registry.execute({
+      id: "shell_late_approval",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: {
+        utility: "node",
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync(" + JSON.stringify(marker) + ", 'spawned')",
+        ],
+      },
+    }, {
+      governance: { maxRuntimeMs: 25 },
+    });
+    assert.equal(result.result.status, "blocked");
+    assert.match(result.result.summary, /runtime budget exceeded/);
+    assert.equal(typeof approve, "function");
+    approve();
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 75));
+    await assert.rejects(access(marker));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

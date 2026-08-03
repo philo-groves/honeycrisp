@@ -4,6 +4,10 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { createResearchEventId, nowIso } from "./ids.js";
+import {
+  redactShellArguments,
+  sanitizeShellActionInput,
+} from "./shell-safety.js";
 import type {
   ResearchActionClass,
   ResearchArtifactRef,
@@ -156,15 +160,19 @@ export class ResearchToolRegistry {
     }
 
     const result = await executeWithRuntimeBudget(
-      () => tool.execute(
+      (signal) => tool.execute(
       {
         ...normalizedAction,
         toolName: tool.descriptor.name,
       },
-      options,
+      {
+        ...options,
+        ...(signal ? { signal } : {}),
+      },
       ),
       getRuntimeBudgetMs(normalizedAction, options.governance),
       normalizedAction,
+      options.signal,
     );
     const outputValidationError = validateToolOutput(tool, result);
     if (outputValidationError) {
@@ -263,7 +271,7 @@ export function createToolRequestedEvent(
       toolActionId: action.id,
       toolName: action.toolName,
       actionClass: action.actionClass,
-      normalizedInputs: action.input,
+      normalizedInputs: projectToolActionInput(action),
       expectedOutputs: action.expectedOutputs ?? [],
       budgetLimits: action.budget ?? {},
       summary: `Requested ${action.toolName} for ${action.actionClass}.`,
@@ -275,23 +283,26 @@ export function createToolObservedEvent(
   result: ResearchToolExecutionResult,
   options: ResearchToolExecutionContext = {},
 ): ResearchEvent {
+  const projectedResult = projectToolResult(result);
   return {
     id: createResearchEventId(),
     kind: "tool.observed",
     timestamp: nowIso(),
-    ...(result.artifactRefs?.length ? { artifactRefs: result.artifactRefs } : {}),
+    ...(projectedResult.artifactRefs?.length
+      ? { artifactRefs: projectedResult.artifactRefs }
+      : {}),
     payload: {
-      toolActionId: result.action.id,
-      toolName: result.action.toolName,
-      actionClass: result.action.actionClass,
-      normalizedInputs: result.action.input,
-      generatedArtifactRefs: result.artifactRefs ?? [],
-      status: result.status,
-      followUpActionsProposed: result.followUpActions,
-      summary: result.summary,
-      ...(result.rawOutputRef ? { rawOutputRef: result.rawOutputRef } : {}),
-      ...(result.error ? { error: result.error } : {}),
-      ...(result.output !== undefined ? { result: result.output } : {}),
+      toolActionId: projectedResult.action.id,
+      toolName: projectedResult.action.toolName,
+      actionClass: projectedResult.action.actionClass,
+      normalizedInputs: projectToolActionInput(projectedResult.action),
+      generatedArtifactRefs: projectedResult.artifactRefs ?? [],
+      status: projectedResult.status,
+      followUpActionsProposed: projectedResult.followUpActions,
+      summary: projectedResult.summary,
+      ...(projectedResult.rawOutputRef ? { rawOutputRef: projectedResult.rawOutputRef } : {}),
+      ...(projectedResult.error ? { error: projectedResult.error } : {}),
+      ...(projectedResult.output !== undefined ? { result: projectedResult.output } : {}),
     },
   };
 }
@@ -301,23 +312,24 @@ export function createToolResultMessage(
   toolCallId: string,
   toolName: string,
 ): ToolResultMessage {
+  const projectedResult = projectToolResult(result);
   return {
     role: "toolResult",
     toolCallId,
     toolName,
-    isError: result.status !== "complete",
+    isError: projectedResult.status !== "complete",
     timestamp: Date.now(),
-    details: result,
+    details: projectedResult,
     content: [
       {
         type: "text",
         text: JSON.stringify(
           {
-            status: result.status,
-            summary: result.summary,
-            output: result.output,
-            error: result.error,
-            followUpActions: result.followUpActions,
+            status: projectedResult.status,
+            summary: projectedResult.summary,
+            output: projectedResult.output,
+            error: projectedResult.error,
+            followUpActions: projectedResult.followUpActions,
           },
           null,
           2,
@@ -611,29 +623,33 @@ function getRuntimeBudgetMs(
 }
 
 async function executeWithRuntimeBudget(
-  execute: () => Promise<ResearchToolExecutionResult>,
+  execute: (signal?: AbortSignal) => Promise<ResearchToolExecutionResult>,
   timeoutMs: number | undefined,
   action: ResearchToolAction,
+  outerSignal?: AbortSignal,
 ): Promise<ResearchToolExecutionResult> {
   if (!timeoutMs || timeoutMs <= 0) {
-    return execute();
+    return execute(outerSignal);
   }
 
+  const controller = new AbortController();
+  const signal = outerSignal
+    ? AbortSignal.any([outerSignal, controller.signal])
+    : controller.signal;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      execute(),
+      execute(signal),
       new Promise<ResearchToolExecutionResult>((resolve) => {
-        timeout = setTimeout(
-          () =>
-            resolve(
-              createBlockedToolResult(
-                action,
-                `Tool runtime budget exceeded after ${timeoutMs}ms.`,
-              ),
+        timeout = setTimeout(() => {
+          controller.abort(new Error(`Tool runtime budget exceeded after ${timeoutMs}ms.`));
+          resolve(
+            createBlockedToolResult(
+              action,
+              `Tool runtime budget exceeded after ${timeoutMs}ms.`,
             ),
-          timeoutMs,
-        );
+          );
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -819,14 +835,55 @@ function createExecutionRecord(
   result: ResearchToolExecutionResult,
   options: ResearchToolExecutionContext,
 ): ResearchToolExecutionRecord {
+  const projectedResult = projectToolResult(result);
   return {
-    action: result.action,
-    result,
+    action: projectedResult.action,
+    result: projectedResult,
     events: [
-      createToolRequestedEvent(result.action, options),
-      createToolObservedEvent(result, options),
+      createToolRequestedEvent(projectedResult.action, options),
+      createToolObservedEvent(projectedResult, options),
     ],
   };
+}
+
+function projectToolResult(
+  result: ResearchToolExecutionResult,
+): ResearchToolExecutionResult {
+  if (!isShellToolName(result.action.toolName)) return result;
+  const action = projectToolAction(result.action);
+  return {
+    ...result,
+    action,
+    ...(result.output === undefined
+      ? {}
+      : { output: projectShellToolOutput(result.output) }),
+  };
+}
+
+function projectToolAction(action: ResearchToolAction): ResearchToolAction {
+  return isShellToolName(action.toolName)
+    ? { ...action, input: sanitizeShellActionInput(action.input) }
+    : action;
+}
+
+function projectToolActionInput(action: ResearchToolAction): Record<string, unknown> {
+  return isShellToolName(action.toolName)
+    ? sanitizeShellActionInput(action.input)
+    : action.input;
+}
+
+function projectShellToolOutput(output: unknown): unknown {
+  if (!isRecord(output)) return output;
+  const projected = { ...output };
+  delete projected.stdin;
+  if (Array.isArray(projected.args) && projected.args.every((value) => typeof value === "string")) {
+    projected.args = redactShellArguments(projected.args);
+  }
+  return projected;
+}
+
+function isShellToolName(toolName: string): boolean {
+  return toolName === "shell.run" || toolName === "shell_run";
 }
 
 function isResearchActionClass(value: unknown): value is ResearchActionClass {

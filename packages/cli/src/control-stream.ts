@@ -1,4 +1,8 @@
 import type { Readable } from "node:stream";
+import type {
+  ManualShellApprovalResult,
+  ShellSafetyMode,
+} from "@honeycrisp/research-agent";
 
 interface HoneycrispControlRequest {
   schemaVersion: 1;
@@ -11,6 +15,12 @@ export type HoneycrispControlMessage = HoneycrispControlRequest & (
   | { type: "stop" }
   | { type: "configure"; modelSelection: HoneycrispModelSelection }
   | { type: "steer"; instruction: string; modelSelection?: HoneycrispModelSelection }
+  | { type: "configure_shell_safety"; shellSafetyMode: ShellSafetyMode }
+  | {
+      type: "resolve_shell_approval";
+      approvalRequestId: string;
+      decision: "approved" | "denied";
+    }
 );
 
 export interface HoneycrispModelSelection {
@@ -20,11 +30,28 @@ export interface HoneycrispModelSelection {
 }
 
 export type HoneycrispControlEvent =
-  | { type: "pause" | "resume" | "stop" | "configure" | "steer"; accepted: true; requestId?: string }
+  | {
+      type:
+        | "pause"
+        | "resume"
+        | "stop"
+        | "configure"
+        | "steer"
+        | "configure_shell_safety"
+        | "resolve_shell_approval";
+      accepted: true;
+      requestId?: string;
+    }
   | { type: "invalid"; accepted: false; error: string; requestId?: string };
 
 interface SteeringWaiter {
   resolve(instructions: string[]): void;
+  signal?: AbortSignal;
+  abort?: () => void;
+}
+
+interface ShellApprovalWaiter {
+  resolve(result: ManualShellApprovalResult): void;
   signal?: AbortSignal;
   abort?: () => void;
 }
@@ -34,8 +61,10 @@ export class HoneycrispControlStream {
   private paused = false;
   private readonly steeringInstructions: string[] = [];
   private modelSelection: HoneycrispModelSelection | undefined;
+  private shellSafetyMode: ShellSafetyMode | undefined;
   private readonly resumeWaiters = new Set<() => void>();
   private readonly steeringWaiters = new Set<SteeringWaiter>();
+  private readonly shellApprovalWaiters = new Map<string, ShellApprovalWaiter>();
   private readonly stopController = new AbortController();
   private started = false;
   private inputEnded = false;
@@ -60,16 +89,18 @@ export class HoneycrispControlStream {
   }
 
   public close(): void {
-    if (!this.started) return;
-    this.started = false;
+    if (this.started) {
+      this.started = false;
+      this.input.off("data", this.handleData);
+      this.input.off("end", this.handleEnd);
+      this.input.pause();
+    }
     this.inputEnded = true;
-    this.input.off("data", this.handleData);
-    this.input.off("end", this.handleEnd);
-    this.input.pause();
     this.buffer = "";
     this.paused = false;
     this.resolveResumeWaiters();
     this.resolveSteeringWaiters([]);
+    this.denyShellApprovalWaiters("Manual Approval denied because the control stream closed.");
   }
 
   public async takeSteeringInstructions(): Promise<string[]> {
@@ -101,6 +132,42 @@ export class HoneycrispControlStream {
     return this.modelSelection ? { ...this.modelSelection } : undefined;
   }
 
+  public getShellSafetyMode(): ShellSafetyMode | undefined {
+    return this.shellSafetyMode;
+  }
+
+  public waitForShellApproval(
+    approvalRequestId: string,
+    signal?: AbortSignal,
+  ): Promise<ManualShellApprovalResult> {
+    if (!approvalRequestId.trim() || approvalRequestId.trim().length > 200) {
+      return Promise.reject(new Error("Shell approval request ID must be a non-empty string of at most 200 characters."));
+    }
+    const normalizedId = approvalRequestId.trim();
+    if (this.shellApprovalWaiters.has(normalizedId)) {
+      return Promise.reject(new Error("A shell approval waiter already exists for this request ID."));
+    }
+    if (!this.started || this.inputEnded || signal?.aborted || this.stopController.signal.aborted) {
+      return Promise.resolve({
+        decision: "denied",
+        reason: "Manual Approval denied because the control stream is unavailable.",
+      });
+    }
+    return new Promise((resolve) => {
+      const waiter: ShellApprovalWaiter = { resolve, ...(signal ? { signal } : {}) };
+      if (signal) {
+        waiter.abort = () => {
+          this.resolveShellApprovalWaiter(normalizedId, {
+            decision: "denied",
+            reason: "Manual Approval denied because shell execution was aborted.",
+          });
+        };
+        signal.addEventListener("abort", waiter.abort, { once: true });
+      }
+      this.shellApprovalWaiters.set(normalizedId, waiter);
+    });
+  }
+
   private readonly handleData = (chunk: string | Buffer): void => {
     this.buffer += chunk.toString();
     let newlineIndex = this.buffer.indexOf("\n");
@@ -120,6 +187,7 @@ export class HoneycrispControlStream {
     this.paused = false;
     this.resolveResumeWaiters();
     this.resolveSteeringWaiters(this.steeringInstructions.splice(0));
+    this.denyShellApprovalWaiters("Manual Approval denied because the control stream ended.");
   };
 
   private handleLine(line: string): void {
@@ -138,9 +206,22 @@ export class HoneycrispControlStream {
         this.paused = false;
         this.resolveResumeWaiters();
         this.resolveSteeringWaiters([]);
+        this.denyShellApprovalWaiters("Manual Approval denied because the run was stopped.");
         this.stopController.abort(new Error("Honeycrisp run stopped by the host."));
       } else if (message.type === "configure") {
         this.modelSelection = message.modelSelection;
+      } else if (message.type === "configure_shell_safety") {
+        this.shellSafetyMode = message.shellSafetyMode;
+      } else if (message.type === "resolve_shell_approval") {
+        if (!this.shellApprovalWaiters.has(message.approvalRequestId)) {
+          throw new Error("Shell approval response does not match a pending request.");
+        }
+        this.resolveShellApprovalWaiter(message.approvalRequestId, {
+          decision: message.decision,
+          reason: message.decision === "approved"
+            ? "The researcher approved this shell command."
+            : "The researcher denied this shell command.",
+        });
       } else {
         if (message.modelSelection) this.modelSelection = message.modelSelection;
         this.steeringInstructions.push(message.instruction);
@@ -182,6 +263,28 @@ export class HoneycrispControlStream {
     }
     this.steeringWaiters.clear();
   }
+
+  private resolveShellApprovalWaiter(
+    approvalRequestId: string,
+    result: ManualShellApprovalResult,
+  ): void {
+    const waiter = this.shellApprovalWaiters.get(approvalRequestId);
+    if (!waiter) return;
+    this.shellApprovalWaiters.delete(approvalRequestId);
+    if (waiter.signal && waiter.abort) {
+      waiter.signal.removeEventListener("abort", waiter.abort);
+    }
+    waiter.resolve(result);
+  }
+
+  private denyShellApprovalWaiters(reason: string): void {
+    for (const approvalRequestId of [...this.shellApprovalWaiters.keys()]) {
+      this.resolveShellApprovalWaiter(approvalRequestId, {
+        decision: "denied",
+        reason,
+      });
+    }
+  }
 }
 
 function parseControlMessage(line: string): HoneycrispControlMessage {
@@ -213,7 +316,38 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
       ...(requestId ? { requestId } : {}),
     };
   }
+  if (parsed.type === "configure_shell_safety") {
+    return {
+      schemaVersion: 1,
+      type: "configure_shell_safety",
+      shellSafetyMode: parseShellSafetyMode(parsed.shellSafetyMode),
+      ...(requestId ? { requestId } : {}),
+    };
+  }
+  if (parsed.type === "resolve_shell_approval") {
+    const approvalRequestId = parseRequestId(parsed.approvalRequestId);
+    if (!approvalRequestId) {
+      throw new Error("Shell approval responses require an approvalRequestId.");
+    }
+    if (parsed.decision !== "approved" && parsed.decision !== "denied") {
+      throw new Error("Shell approval decision must be approved or denied.");
+    }
+    return {
+      schemaVersion: 1,
+      type: "resolve_shell_approval",
+      approvalRequestId,
+      decision: parsed.decision,
+      ...(requestId ? { requestId } : {}),
+    };
+  }
   throw new Error("Unknown Honeycrisp control message type.");
+}
+
+function parseShellSafetyMode(value: unknown): ShellSafetyMode {
+  if (value === "manual_approval" || value === "auto_review" || value === "danger") {
+    return value;
+  }
+  throw new Error("Shell safety mode must be manual_approval, auto_review, or danger.");
 }
 
 function parseRequestId(value: unknown): string | undefined {

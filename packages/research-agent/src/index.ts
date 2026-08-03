@@ -11,6 +11,7 @@ export * from "./tool-config.js";
 export * from "./code-tools.js";
 export * from "./built-in-tools.js";
 export * from "./shell-tool.js";
+export * from "./shell-safety.js";
 export * from "./tool-policy.js";
 export * from "./ids.js";
 export * from "./flow-capture.js";

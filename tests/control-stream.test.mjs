@@ -78,13 +78,95 @@ test("control stream exposes a stop signal for the complete agent tree", async (
   controls.start();
 
   assert.equal(controls.signal.aborted, false);
+  const pendingApproval = controls.waitForShellApproval("approval_stopped");
   input.write(`${JSON.stringify({ schemaVersion: 1, type: "stop" })}\n`);
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(controls.signal.aborted, true);
+  assert.equal((await pendingApproval).decision, "denied");
   assert.deepEqual(events, [{ type: "stop", accepted: true }]);
   controls.close();
   input.destroy();
+});
+
+test("control stream configures safety and correlates concurrent shell approvals", async () => {
+  const input = new PassThrough();
+  const events = [];
+  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  controls.start();
+
+  input.write(JSON.stringify({
+    schemaVersion: 1,
+    type: "configure_shell_safety",
+    requestId: "safety-1",
+    shellSafetyMode: "manual_approval",
+  }) + "\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(controls.getShellSafetyMode(), "manual_approval");
+  assert.deepEqual(events.at(-1), {
+    type: "configure_shell_safety",
+    accepted: true,
+    requestId: "safety-1",
+  });
+
+  const first = controls.waitForShellApproval("approval-1");
+  const second = controls.waitForShellApproval("approval-2");
+  input.write(JSON.stringify({
+    schemaVersion: 1,
+    type: "resolve_shell_approval",
+    requestId: "resolve-2",
+    approvalRequestId: "approval-2",
+    decision: "denied",
+  }) + "\n");
+  input.write(JSON.stringify({
+    schemaVersion: 1,
+    type: "resolve_shell_approval",
+    requestId: "resolve-1",
+    approvalRequestId: "approval-1",
+    decision: "approved",
+  }) + "\n");
+  assert.equal((await second).decision, "denied");
+  assert.equal((await first).decision, "approved");
+
+  input.write(JSON.stringify({
+    schemaVersion: 1,
+    type: "resolve_shell_approval",
+    requestId: "duplicate-1",
+    approvalRequestId: "approval-1",
+    decision: "denied",
+  }) + "\n");
+  input.write(JSON.stringify({
+    schemaVersion: 1,
+    type: "configure_shell_safety",
+    requestId: "invalid-safety",
+    shellSafetyMode: "unreviewed",
+  }) + "\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.at(-2)?.type, "invalid");
+  assert.equal(events.at(-2)?.requestId, "duplicate-1");
+  assert.equal(events.at(-1)?.type, "invalid");
+  assert.equal(events.at(-1)?.requestId, "invalid-safety");
+  controls.close();
+  input.destroy();
+});
+
+test("control stream denies pending shell approvals on EOF and close", async () => {
+  const endedInput = new PassThrough();
+  const endedControls = new HoneycrispControlStream(endedInput);
+  endedControls.start();
+  const endedApproval = endedControls.waitForShellApproval("approval-eof");
+  endedInput.end();
+  assert.equal((await endedApproval).decision, "denied");
+  endedControls.close();
+
+  const closedInput = new PassThrough();
+  const closedControls = new HoneycrispControlStream(closedInput);
+  closedControls.start();
+  const closedApproval = closedControls.waitForShellApproval("approval-close");
+  closedControls.close();
+  assert.equal((await closedApproval).decision, "denied");
+  endedInput.destroy();
+  closedInput.destroy();
 });
 
 test("control stream wakes safeguard steering waits and correlates accepted controls", async () => {

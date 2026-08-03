@@ -9,6 +9,14 @@ import type {
   ResearchToolExecutionResult,
 } from "./tool-registry.js";
 import type { ResearchToolAction } from "./types.js";
+import type {
+  ShellAuthorizationDecision,
+  ShellCommandAuthorizer,
+} from "./shell-safety.js";
+import {
+  redactShellArguments,
+  sanitizeShellAuthorizationDecision,
+} from "./shell-safety.js";
 
 const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -55,6 +63,7 @@ export interface ShellToolOptions {
   shellOptionsPath?: string;
   maxOutputBytes?: number;
   protectedDirectories?: readonly string[];
+  authorize?: ShellCommandAuthorizer;
 }
 
 interface ShellLease {
@@ -83,7 +92,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       name: "shell.run",
       transportName: "shell_run",
       description:
-        "Run one host utility with explicit argv. Use it for repository inspection, builds, tests, debugging, and bounded proof work. Utility policy and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
+        "Run one host utility with explicit argv. Use it for repository inspection, builds, tests, debugging, and bounded proof work. Utility policy, shell safety authorization, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
       actionClasses: ["search", "inspect", "analyze", "experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],
@@ -117,6 +126,40 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
           );
         }
         await assertFolderDeleteAllowed(utility, args, cwd, protectedDirectories);
+        if (!options.authorize) {
+          return blockedAuthorizationResult(
+            action,
+            startedAt,
+            "Shell execution denied because no shell safety authorizer is configured.",
+          );
+        }
+        let authorization: ShellAuthorizationDecision;
+        try {
+          authorization = sanitizeShellAuthorizationDecision(await options.authorize({
+            actionId: action.id,
+            workspaceRoot,
+            utility,
+            args,
+            cwd,
+            ...(stdin === undefined ? {} : { stdin }),
+            timeoutMs,
+          }, context?.signal));
+        } catch {
+          return blockedAuthorizationResult(
+            action,
+            startedAt,
+            "Shell execution denied because the shell safety authorizer failed closed.",
+          );
+        }
+        if (authorization.decision !== "approved") {
+          return blockedAuthorizationResult(
+            action,
+            startedAt,
+            shellAuthorizationDenialSummary(authorization),
+            authorization,
+          );
+        }
+        throwIfAborted(context?.signal);
 
         const deadline = Date.now() + timeoutMs;
         const lease = await acquireLease(
@@ -137,6 +180,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
             startedAt,
             timeoutMs: Math.max(1, deadline - Date.now()),
             maxOutputBytes,
+            authorization,
             ...(context?.signal ? { signal: context.signal } : {}),
           });
         } finally {
@@ -444,6 +488,7 @@ async function runUtility(input: {
   startedAt: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  authorization: ShellAuthorizationDecision;
   signal?: AbortSignal;
 }): Promise<ResearchToolExecutionResult> {
   return new Promise((resolvePromise) => {
@@ -506,7 +551,12 @@ async function runUtility(input: {
       clearTimeout(timeout);
       if (forceStop) clearTimeout(forceStop);
       input.signal?.removeEventListener("abort", abort);
-      resolvePromise(errorResult(input.action, input.startedAt, errorMessage(error)));
+      resolvePromise(errorResult(input.action, input.startedAt, errorMessage(error), {
+        utility: input.utility,
+        args: redactShellArguments(input.args),
+        cwd: input.cwd,
+        authorization: input.authorization,
+      }));
     });
     child.on("close", (exitCode, signal) => {
       if (settled) return;
@@ -517,12 +567,13 @@ async function runUtility(input: {
       const captured = output.value();
       const resultOutput = {
         utility: input.utility,
-        args: input.args,
+        args: redactShellArguments(input.args),
         cwd: input.cwd,
         exitCode,
         signal,
         timedOut,
         aborted,
+        authorization: input.authorization,
         ...captured,
       };
       if (exitCode === 0 && !timedOut && !aborted) {
@@ -685,6 +736,35 @@ function errorResult(
     followUpActions: ["Inspect the error and adjust the next utility invocation."],
     error: { message },
   };
+}
+
+function blockedAuthorizationResult(
+  action: ResearchToolAction,
+  startedAt: string,
+  message: string,
+  authorization?: ShellAuthorizationDecision,
+): ResearchToolExecutionResult {
+  return {
+    action,
+    status: "blocked",
+    startedAt,
+    completedAt: nowIso(),
+    summary: message,
+    ...(authorization ? { output: { authorization } } : {}),
+    followUpActions: [
+      "Narrow the command or ask the researcher to select an appropriate shell safety mode.",
+    ],
+    error: { message },
+  };
+}
+
+function shellAuthorizationDenialSummary(authorization: ShellAuthorizationDecision): string {
+  const source = authorization.source === "human"
+    ? "Manual Approval"
+    : authorization.source === "small_model"
+      ? "Auto-Review"
+      : "shell safety policy";
+  return "Shell execution denied by " + source + ": " + authorization.reason;
 }
 
 function errorMessage(error: unknown): string {

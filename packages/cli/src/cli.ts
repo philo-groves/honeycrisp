@@ -23,6 +23,8 @@ import {
   createResearchStorageLayout,
   createResearchToolRegistry,
   createShellTool,
+  createShellSafetyAuthorizer,
+  DEFAULT_SHELL_REVIEW_MODELS,
   createResearchWorkspaceContext,
   createMcpResearchTools,
   MemoryGraphStore,
@@ -78,6 +80,9 @@ import type {
   ResearchToolSideEffect,
   ResearchToolRegistry,
   ResearchWorkspaceContext,
+  ShellCommandAuthorizer,
+  ShellReviewerSelection,
+  ShellSafetyMode,
 } from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
@@ -159,6 +164,9 @@ interface ParsedArgs {
   model: string | undefined;
   titleModel: string | undefined;
   titleEffort: ResearchModelEffort | undefined;
+  shellSafetyMode: ShellSafetyMode;
+  shellReviewModels: Readonly<Record<string, string>>;
+  shellReviewEffort: ResearchModelEffort;
   maxTokens: number | undefined;
   reasoning: ResearchModelEffort | undefined;
   executor: CliExecutorKind;
@@ -232,6 +240,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let model: string | undefined;
   let titleModel: string | undefined;
   let titleEffort: ResearchModelEffort | undefined;
+  let shellSafetyMode: ShellSafetyMode = "auto_review";
+  let shellReviewModels: Readonly<Record<string, string>> = DEFAULT_SHELL_REVIEW_MODELS;
+  let shellReviewEffort: ResearchModelEffort = "medium";
   let executor: CliExecutorKind = "agent";
   let toolExecution: CliToolExecutionMode | undefined;
   let maxTokens: number | undefined;
@@ -422,6 +433,15 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--shell-options") {
       shellOptionsPath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--shell-safety-mode") {
+      shellSafetyMode = parseShellSafetyMode(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--shell-review-models") {
+      shellReviewModels = parseShellReviewModels(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--shell-review-effort") {
+      shellReviewEffort = parseShellReviewEffort(readOptionValue(argv, index, arg));
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -480,6 +500,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     model,
     titleModel,
     titleEffort,
+    shellSafetyMode,
+    shellReviewModels,
+    shellReviewEffort,
     maxTokens,
     reasoning,
     executor,
@@ -863,6 +886,52 @@ function parseReasoning(value: string): ResearchModelEffort {
   throw new Error("--reasoning must be one of minimal, low, medium, high, xhigh, max.");
 }
 
+function parseShellSafetyMode(value: string): ShellSafetyMode {
+  if (value === "manual_approval" || value === "auto_review" || value === "danger") {
+    return value;
+  }
+  throw new Error("--shell-safety-mode must be manual_approval, auto_review, or danger.");
+}
+
+function parseShellReviewEffort(value: string): ResearchModelEffort {
+  if (
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+  ) {
+    return value;
+  }
+  throw new Error("--shell-review-effort must be one of minimal, low, medium, high, xhigh, max.");
+}
+
+function parseShellReviewModels(value: string): Readonly<Record<string, string>> {
+  if (value.length > 16_000) {
+    throw new Error("--shell-review-models JSON is too large.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("--shell-review-models must be a JSON object mapping providers to model IDs.");
+  }
+  if (!isRecord(parsed)) {
+    throw new Error("--shell-review-models must be a JSON object mapping providers to model IDs.");
+  }
+  const result: Record<string, string> = {};
+  for (const [rawProvider, rawModel] of Object.entries(parsed)) {
+    const provider = rawProvider.trim();
+    const model = typeof rawModel === "string" ? rawModel.trim() : "";
+    if (!provider || provider.length > 200 || !model || model.length > 200) {
+      throw new Error("--shell-review-models requires non-empty provider and model strings.");
+    }
+    result[provider] = model;
+  }
+  return result;
+}
+
 function parseInspectionAction(value: string): LocalInspectionAction {
   if (value === "list" || value === "read_text") {
     return value;
@@ -1006,6 +1075,10 @@ function usage(): string {
     "  --inspect-bytes <n>    Max bytes for read_text inspection",
     "  --tool-family <name>   Enable shell, local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
     "  --shell-options <path> Harness-wide shell utility policy JSON",
+    "  --shell-safety-mode <m> Shell safety: manual_approval, auto_review (default), or danger",
+    "  --shell-review-models <json> Provider-to-small-reviewer-model JSON object",
+    "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3",
+    "  --shell-review-effort <level> Small-model review effort (default: medium)",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --tool-config <path>   Runtime tool preference config (default: .honeycrisp/tools.json)",
     "  --no-default-tool-config Ignore .honeycrisp/tools.json unless --tool-config is provided",
@@ -1118,7 +1191,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       throw new Error("--goal requires the Pi agent executor and cannot be combined with --mock.");
     }
 
-    const runtimeConfig = await createRuntimeConfig(args);
     const liveEventSink = args.eventStream ? createCliLiveEventSink() : undefined;
     const controlStream = args.controlStream
       ? new HoneycrispControlStream(input, (event) => {
@@ -1131,8 +1203,39 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         })
       : undefined;
     controlStream?.start();
+    let runtimeConfig: Awaited<ReturnType<typeof createRuntimeConfig>> | undefined;
     try {
       let modelConfig: ResolvedResearchModelConfig | undefined;
+      const shellAuthorizer = createShellSafetyAuthorizer({
+        getMode: () => controlStream?.getShellSafetyMode() ?? args.shellSafetyMode,
+        getReviewerSelection: (): ShellReviewerSelection | undefined => {
+          const provider =
+            controlStream?.getModelSelection()?.provider ??
+            modelConfig?.provider ??
+            args.provider;
+          const model = provider ? args.shellReviewModels[provider] : undefined;
+          return provider && model
+            ? {
+                provider,
+                model,
+                reasoningEffort: args.shellReviewEffort,
+              }
+            : undefined;
+        },
+        requestManualApproval: (request, signal) => {
+          if (!controlStream || !liveEventSink) {
+            return Promise.resolve({
+              decision: "denied",
+              reason: "Manual Approval requires both the control stream and live event stream.",
+            });
+          }
+          return controlStream.waitForShellApproval(request.approvalRequestId, signal);
+        },
+        onRequested: (event) => emitShellSafetyEvent(liveEventSink, event),
+        onResolved: (event) => emitShellSafetyEvent(liveEventSink, event),
+      });
+      runtimeConfig = await createRuntimeConfig({ ...args, shellAuthorizer });
+      const dispositionRecorder = runtimeConfig.dispositionRecorder;
       let resumableState: PiAgentResumableState | undefined;
       let effectivePrompt = args.resumeFallbackPrompt ?? args.prompt;
       const agentExecutor = args.mock
@@ -1179,7 +1282,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           : {}),
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
         executor: agentExecutor,
-        finalDispositionProvider: () => runtimeConfig.dispositionRecorder.get(),
+        finalDispositionProvider: () => dispositionRecorder.get(),
         ...(liveEventSink ? { eventSink: liveEventSink } : {}),
         ...(controlStream ? { signal: controlStream.signal } : {}),
       });
@@ -1209,7 +1312,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       if (!args.eventStream) console.log(result.response);
     } finally {
       controlStream?.close();
-      await runtimeConfig.cleanup?.();
+      await runtimeConfig?.cleanup?.();
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1354,6 +1457,18 @@ function createCliLiveEventSink(): ResearchLiveEventSink {
   return (event) => {
     output.write(`${LIVE_EVENT_PREFIX}${JSON.stringify(event)}\n`);
   };
+}
+
+async function emitShellSafetyEvent(
+  sink: ResearchLiveEventSink | undefined,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await sink?.({
+    schemaVersion: 1,
+    kind: "agent.event",
+    timestamp: new Date().toISOString(),
+    payload,
+  });
 }
 
 async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
@@ -2175,6 +2290,7 @@ async function createRuntimeConfig(args: {
   inspectBytes: number | undefined;
   runtimeTools: RuntimeToolConfig;
   workspaceRoot?: string;
+  shellAuthorizer?: ShellCommandAuthorizer;
 }): Promise<{
   events: ResearchEvent[];
   tools: ResearchToolDescriptor[];
@@ -2286,6 +2402,7 @@ async function createRuntimeConfig(args: {
   if (families.has("shell")) {
     const tool = createShellTool({
       workspaceRoot,
+      ...(args.shellAuthorizer ? { authorize: args.shellAuthorizer } : {}),
       ...(runtimeTools.shellOptionsPath
         ? { shellOptionsPath: runtimeTools.shellOptionsPath }
         : {}),
