@@ -51,6 +51,17 @@ export interface ResearchToolExecutionResult {
   };
 }
 
+export interface ModelToolResultDetails {
+  status: ResearchToolExecutionStatus;
+  summary: string;
+  rawOutputRef?: string;
+  artifactRefs?: readonly ResearchArtifactRef[];
+  followUpActions?: readonly string[];
+  error?: {
+    message: string;
+  };
+}
+
 export interface ResearchExecutableTool {
   descriptor: ResearchToolDescriptor;
   parameters?: Tool["parameters"];
@@ -319,7 +330,7 @@ export function createToolResultMessage(
     toolName,
     isError: projectedResult.status !== "complete",
     timestamp: Date.now(),
-    details: projectedResult,
+    details: modelToolResultDetails(projectedResult),
     content: [
       {
         type: "text",
@@ -336,6 +347,23 @@ export function createToolResultMessage(
         ),
       },
     ],
+  };
+}
+
+export function modelToolResultDetails(
+  result: ResearchToolExecutionResult,
+): ModelToolResultDetails {
+  return {
+    status: result.status,
+    summary: result.summary,
+    ...(result.rawOutputRef ? { rawOutputRef: result.rawOutputRef } : {}),
+    ...(result.artifactRefs?.length
+      ? { artifactRefs: result.artifactRefs }
+      : {}),
+    ...(result.followUpActions.length
+      ? { followUpActions: result.followUpActions }
+      : {}),
+    ...(result.error ? { error: result.error } : {}),
   };
 }
 

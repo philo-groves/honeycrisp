@@ -14,10 +14,12 @@ test("subagent runtime sanitizes partial inheritance and applies explicit overri
     },
   });
   const tools = toolsByName(manager, "root");
+  const secondTurn = user("second turn");
+  secondTurn.uncloneable = () => "structurally shared";
   manager.captureContext("root", "spawn_partial", [
     user("first turn"),
     assistant("first answer"),
-    user("second turn"),
+    secondTurn,
     assistantTool("spawn_partial"),
   ]);
 
@@ -35,6 +37,8 @@ test("subagent runtime sanitizes partial inheritance and applies explicit overri
   assert.equal(requests[0].model, "child-model");
   assert.equal(requests[0].reasoning, "low");
   assert.deepEqual(requests[0].inheritedMessages.map((message) => message.content), ["second turn"]);
+  assert.equal(requests[0].inheritedMessages[0], secondTurn);
+  assert.equal(requests[0].inheritedMessages[0].uncloneable(), "structurally shared");
   assert.equal(spawned.details.task_name, "/root/focused_review");
   assert.equal(manager.snapshot().agents[0].status, "completed");
 
@@ -48,6 +52,34 @@ test("subagent runtime sanitizes partial inheritance and applies explicit overri
     }),
     /Full-history children inherit/,
   );
+
+  await tools.spawn_agent.execute("spawn_invalid", {
+    task_name: "valid_after_invalid",
+    message: "Launch without the rejected call's stale context.",
+    fork_turns: "all",
+  });
+  await manager.settle();
+  assert.deepEqual(requests[1].inheritedMessages, []);
+
+  manager.captureContext("root", "spawn_released", [user("must be released"), assistantTool("spawn_released")]);
+  manager.releaseContext("spawn_released");
+  await tools.spawn_agent.execute("spawn_released", {
+    task_name: "explicitly_released",
+    message: "Launch without explicitly released context.",
+    fork_turns: "all",
+  });
+  await manager.settle();
+  assert.deepEqual(requests[2].inheritedMessages, []);
+
+  manager.captureContext("root", "spawn_agent_released", [user("must also be released"), assistantTool("spawn_agent_released")]);
+  manager.releaseContextsForAgent("root");
+  await tools.spawn_agent.execute("spawn_agent_released", {
+    task_name: "agent_contexts_released",
+    message: "Launch after releasing every snapshot owned by root.",
+    fork_turns: "all",
+  });
+  await manager.settle();
+  assert.deepEqual(requests[3].inheritedMessages, []);
 });
 
 test("subagent runtime supports mailboxes, idle follow-ups, waiting, listing, and interruption", async () => {
@@ -327,7 +359,8 @@ test("host steering broadcasts to the root and every active child", async () => 
 
   assert.deepEqual(rootMailbox.map((message) => message.content), [steering.content]);
   assert.deepEqual(childMailbox.map((message) => message.content), [steering.content]);
-  assert.notEqual(rootMailbox[0], childMailbox[0]);
+  assert.equal(rootMailbox[0], steering);
+  assert.equal(childMailbox[0], steering);
   await rootTools.interrupt_agent.execute("interrupt_broadcast", {
     target: spawned.details.agent_id,
   });

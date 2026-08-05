@@ -4,10 +4,14 @@
 
 ### Added
 
+- Added a serialized provider-matched background memory curator that reviews completed root and subagent turns, validates explicit memory requests, maintains graph relationships, emits live mutation activity, and carries persistence notifications into the root agent's next natural turn or resumable context.
 - Added Manual Approval, provider-small-model Auto-Review, and Danger Mode authorization for host shell commands, including live mode changes and correlated concurrent approval responses.
 
 ### Changed
 
+- Made the configurable memory-type descriptions the shared authoritative taxonomy for research-agent and background-curator prompts, with a validated CLI transport for host frontends.
+- Reworked model-context compaction to use copy-on-write message arrays, compact toward a lower watermark, retain untouched immutable messages by reference, discard history before the latest accepted native OpenAI compaction boundary, and release the loop's discarded message accumulator after each turn.
+- Replaced model-facing memory mutation tools with read-only search/get access plus advisory `memory.request`; trusted background curation now owns memory creation, correction, and linking and drains its turn queue before capture and shutdown.
 - Replaced storage tiers with subject-owned memories that accumulate session and workspace membership lists whenever they are saved or corrected; memory search now uses a single Session, Workspace, or Subject scope while save no longer asks the model to choose ownership.
 - Loaded Codex-compatible `AGENTS.md` guidance once per invocation from the host configuration and active workspace into root and subagent system context, including continuation invocations, while retaining only source metadata in durable events.
 - Preserved OpenAI Codex commentary and final-answer message phases in live root and subagent output, selected only terminal answer text for captured results, and instructed every research agent to emit concise user-facing commentary while working.
@@ -19,6 +23,10 @@
 
 ### Fixed
 
+- Aligned research-agent requests, curator prompting, and validation on lowercase-hyphenated root-cause keys, normalized equivalent separators at the curator boundary, and made source, sink, and asset links recommended rather than required for confirmed chains.
+- Consolidated same-type curator saves by stable or semantically equivalent root cause even when titles differ, preserved established root-cause identities during additive refinement, and rejected primitive mutations that omit root-cause metadata.
+- Prevented long research turns from retaining full-context deep copies for ordinary and parallel tool calls; spawn inheritance and curator queueing now use bounded structural snapshots, while model-visible tool details omit full outputs that remain available in canonical observed events and artifacts.
+- Stopping a research session now cancels the active background memory-curator review and silently drops queued reviews instead of draining the aborted queue as a burst of failed tool events.
 - Aborted the underlying tool execution when its runtime budget expires so a late shell approval cannot spawn a process after the command was reported blocked.
 - Made context-window recovery one-shot, authoritative for subsequent turns, and durable in resumable state while stripping bulky raw tool-result details.
 - Kept peer-agent output in a lower-trust assistant-data envelope, rejected self-messaging, derived safety-recovery authorization only from host workspace metadata, retained adopted recovery context across later turns, and kept provider error text out of host steering instructions.

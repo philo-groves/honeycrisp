@@ -77,12 +77,15 @@ test("main CLI documents goal mode and rejects it with the deterministic executo
   assert.match(impliedGoal.stderr, /--goal requires the Pi agent executor/);
 });
 
-test("main CLI accepts and documents shell safety configuration", async () => {
+test("main CLI accepts and documents shell safety and memory curator model configuration", async () => {
   const help = runTopCli(["--help"]);
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /--shell-safety-mode <m>/);
   assert.match(help.stdout, /--shell-review-models <json>/);
   assert.match(help.stdout, /--shell-review-effort <level>/);
+  assert.match(help.stdout, /--memory-models <json>/);
+  assert.match(help.stdout, /--memory-effort <level>/);
+  assert.match(help.stdout, /--memory-type-descriptions <json>/);
   assert.match(help.stdout, /openai-codex=gpt-5\.6-luna/);
   assert.match(help.stdout, /anthropic=claude-haiku-4-5/);
   assert.match(help.stdout, /xai=grok-4\.3/);
@@ -102,6 +105,12 @@ test("main CLI accepts and documents shell safety configuration", async () => {
       reviewModels,
       "--shell-review-effort",
       "medium",
+      "--memory-models",
+      reviewModels,
+      "--memory-effort",
+      "medium",
+      "--memory-type-descriptions",
+      JSON.stringify({ primitive: "A custom proven root-cause memory." }),
       "-p",
       "Exercise shell safety parsing.",
     ], { HONEYCRISP_AUTH_FILE: authFile });
@@ -137,6 +146,36 @@ test("main CLI accepts and documents shell safety configuration", async () => {
   ], { HONEYCRISP_AUTH_FILE: authFile });
   assert.equal(invalidEffort.status, 1);
   assert.match(invalidEffort.stderr, /--shell-review-effort must be/);
+
+  const invalidMemoryModels = runTopCli([
+    "--mock",
+    "--memory-models",
+    "[]",
+    "-p",
+    "Reject invalid memory curator mapping.",
+  ], { HONEYCRISP_AUTH_FILE: authFile });
+  assert.equal(invalidMemoryModels.status, 1);
+  assert.match(invalidMemoryModels.stderr, /--memory-models must be a JSON object/);
+
+  const invalidMemoryEffort = runTopCli([
+    "--mock",
+    "--memory-effort",
+    "extreme",
+    "-p",
+    "Reject invalid memory curator effort.",
+  ], { HONEYCRISP_AUTH_FILE: authFile });
+  assert.equal(invalidMemoryEffort.status, 1);
+  assert.match(invalidMemoryEffort.stderr, /--memory-effort must be/);
+
+  const invalidMemoryDescriptions = runTopCli([
+    "--mock",
+    "--memory-type-descriptions",
+    JSON.stringify({ finding: "Unsupported legacy type." }),
+    "-p",
+    "Reject invalid memory descriptions.",
+  ], { HONEYCRISP_AUTH_FILE: authFile });
+  assert.equal(invalidMemoryDescriptions.status, 1);
+  assert.match(invalidMemoryDescriptions.stderr, /Unsupported memory type description: finding/);
 });
 
 test("main CLI uses reconstructed context when a resume capture is unavailable", async () => {
@@ -461,10 +500,8 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
       "code.query",
       "code.references",
       "file.read",
-      "memory.correct",
       "memory.get",
-      "memory.link",
-      "memory.save",
+      "memory.request",
       "memory.search",
       "repository.search",
       "runbook.append",
@@ -631,9 +668,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
     "session.disposition",
     "memory.search",
     "memory.get",
-    "memory.save",
-    "memory.correct",
-    "memory.link",
+    "memory.request",
     "runbook.list",
     "runbook.get",
     "runbook.create",
@@ -647,7 +682,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
   assert.equal(workspaceDefault.status, 0, workspaceDefault.stderr);
   assert.deepEqual(
     workspaceDefaultPayload.tools.map((tool) => tool.name),
-    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "repository.search"],
+    ["session.disposition", "memory.search", "memory.get", "memory.request", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "repository.search"],
   );
   assert.equal(
     workspaceDefaultPayload.workspaceContext.workspaceRoot,

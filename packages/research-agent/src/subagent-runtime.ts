@@ -91,6 +91,11 @@ interface Waiter {
   timer: NodeJS.Timeout;
 }
 
+interface ContextSnapshot {
+  agentId: string;
+  messages: AgentMessage[];
+}
+
 const DEFAULT_MAX_THREADS = 6;
 const DEFAULT_MAX_DEPTH = 1;
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -101,7 +106,7 @@ const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as
 
 export class SubagentManager {
   private readonly sessions = new Map<string, SubagentSession>();
-  private readonly contextSnapshots = new Map<string, AgentMessage[]>();
+  private readonly contextSnapshots = new Map<string, ContextSnapshot>();
   private readonly waiters = new Set<Waiter>();
   private readonly maxThreads: number;
   private readonly maxDepth: number;
@@ -134,7 +139,17 @@ export class SubagentManager {
 
   public captureContext(agentId: string, toolCallId: string, messages: readonly AgentMessage[]): void {
     this.ensureSession(agentId);
-    this.contextSnapshots.set(toolCallId, cloneMessages(messages));
+    this.contextSnapshots.set(toolCallId, { agentId, messages: [...messages] });
+  }
+
+  public releaseContext(toolCallId: string): void {
+    this.contextSnapshots.delete(toolCallId);
+  }
+
+  public releaseContextsForAgent(agentId: string): void {
+    for (const [toolCallId, snapshot] of this.contextSnapshots) {
+      if (snapshot.agentId === agentId) this.contextSnapshots.delete(toolCallId);
+    }
   }
 
   public createTools(agentId: string): AgentTool[] {
@@ -162,7 +177,7 @@ export class SubagentManager {
     }
     for (const session of this.sessions.values()) {
       if (session.status !== "running" && session.status !== "pending") continue;
-      session.mailbox.push(...cloneMessages(messages));
+      session.mailbox.push(...messages);
     }
     this.notifyActivity();
   }
@@ -207,6 +222,7 @@ export class SubagentManager {
   }
 
   public interruptAll(): void {
+    this.contextSnapshots.clear();
     for (const session of this.sessions.values()) {
       if (session.id !== "root" && (session.status === "running" || session.status === "pending")) {
         session.status = "interrupted";
@@ -356,6 +372,7 @@ export class SubagentManager {
     toolCallId: string,
     input: Record<string, unknown>,
   ): Record<string, unknown> {
+    const parentMessages = this.takeContextSnapshot(parentId, toolCallId);
     const parent = this.ensureSession(parentId);
     if (parent.depth >= this.maxDepth) {
       throw new Error(`Subagent depth limit reached (${this.maxDepth}).`);
@@ -380,8 +397,6 @@ export class SubagentManager {
     if (forkTurns === "all" && (modelOverride || reasoningOverride)) {
       throw new Error("Full-history children inherit the parent model and reasoning effort. Omit overrides or use partial/no inheritance.");
     }
-    const parentMessages = this.contextSnapshots.get(toolCallId) ?? [];
-    this.contextSnapshots.delete(toolCallId);
     const inheritedMessages = inheritMessages(parentMessages, toolCallId, forkTurns);
     const id = `agent_${randomUUID().replaceAll("-", "")}`;
     const child: SubagentSession = {
@@ -457,6 +472,7 @@ export class SubagentManager {
     if (target.status === "running" || target.status === "pending") {
       target.status = "interrupted";
       target.completedAt = new Date().toISOString();
+      this.releaseContextsForAgent(target.id);
       target.controller?.abort();
       this.enqueueParentNotification(target, `Agent ${target.path} was interrupted.`);
       this.notifyActivity();
@@ -544,14 +560,14 @@ export class SubagentManager {
       model: session.model,
       ...(session.reasoning ? { reasoning: session.reasoning } : {}),
       prompt,
-      inheritedMessages: cloneMessages(inheritedMessages),
+      inheritedMessages: [...inheritedMessages],
       signal: controller.signal,
     }).then((result) => {
       if (session.status === "interrupted") return;
       session.status = "completed";
       session.completedAt = new Date().toISOString();
       session.output = result.text;
-      session.messages = cloneMessages(result.messages);
+      session.messages = [...result.messages];
       session.turnCount += result.turnCount;
       session.toolCallCount += result.toolCallCount;
       session.modelCalls = [...session.modelCalls, ...result.modelCalls];
@@ -566,6 +582,7 @@ export class SubagentManager {
       this.enqueueParentNotification(session, `Agent ${session.path} failed: ${session.error}`);
       void this.emitActivity({ type: "errored", agentId: session.id, agentPath: session.path, parentId: session.parentId, status: session.status, message: session.error });
     }).finally(() => {
+      this.releaseContextsForAgent(session.id);
       delete session.promise;
       this.notifyActivity();
     });
@@ -595,6 +612,12 @@ export class SubagentManager {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Unknown agent: ${id}`);
     return session;
+  }
+
+  private takeContextSnapshot(agentId: string, toolCallId: string): AgentMessage[] {
+    const snapshot = this.contextSnapshots.get(toolCallId);
+    this.contextSnapshots.delete(toolCallId);
+    return snapshot?.agentId === agentId ? snapshot.messages : [];
   }
 
   private notifyActivity(): void {
@@ -711,7 +734,7 @@ function normalizeForkTurns(value: string): string {
 }
 
 function inheritMessages(messages: readonly AgentMessage[], toolCallId: string, forkTurns: string): AgentMessage[] {
-  const sanitized = cloneMessages(messages);
+  const sanitized = [...messages];
   const last = sanitized.at(-1);
   if (isAssistantWithToolCall(last, toolCallId)) sanitized.pop();
   if (forkTurns === "none") return [];
@@ -764,10 +787,6 @@ function agentMessages(authorPath: string, authorModel: string, message: string)
       timestamp,
     },
   ];
-}
-
-function cloneMessages(messages: readonly AgentMessage[]): AgentMessage[] {
-  return structuredClone(messages) as AgentMessage[];
 }
 
 function requiredString(value: unknown, field: string): string {

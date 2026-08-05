@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   applyNativeOpenAiCompaction,
   compactAgentContext,
+  createCuratedMemoryTools,
+  DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
   createPiAgentExecutor,
   ResearchDispositionRecorder,
   createResearchPiAgent,
@@ -12,6 +14,7 @@ import {
   createSessionDispositionTool,
   extractCompatiblePiAgentResumableState,
   modelRetryDelayMs,
+  MemoryGraphStore,
   runResearchAgent,
 } from "../packages/research-agent/dist/index.js";
 import {
@@ -77,17 +80,41 @@ test("agent context compacts old bulky tool results while preserving the task an
     });
   }
 
+  const originalSerialized = JSON.stringify(messages);
   const compacted = compactAgentContext(messages, 100_000);
   const serialized = JSON.stringify(compacted);
 
+  assert.notEqual(compacted, messages);
+  assert.equal(compacted.length, messages.length);
+  assert.equal(compacted[0], messages[0]);
+  for (let index = 1; index < messages.length; index += 2) {
+    assert.equal(compacted[index], messages[index], "untouched assistant messages must be shared");
+  }
+  const replacedResults = compacted.filter((message, index) =>
+    message.role === "toolResult" && message !== messages[index]
+  );
+  assert.ok(replacedResults.length > 0);
+  assert.ok(replacedResults.every((message) => message.details.compacted === true));
+  assert.equal(compacted.at(-1), messages.at(-1), "the latest result should remain shared");
+  assert.equal(JSON.stringify(messages), originalSerialized, "compaction must not mutate its input");
   assert.match(serialized, /Primary research objective/);
   assert.match(serialized, /LATEST_RESULT/);
   assert.match(serialized, /output compacted for context/);
-  assert.ok(serialized.length < JSON.stringify(messages).length);
+  assert.ok(serialized.length < originalSerialized.length);
   assert.ok(compacted.some((message) =>
     message.role === "toolResult"
     && JSON.stringify(message.content).includes("output compacted for context")
   ));
+
+  const moderatelyGrown = [
+    ...compacted,
+    { role: "user", content: "m".repeat(20_000), timestamp: Date.now() },
+  ];
+  assert.equal(
+    compactAgentContext(moderatelyGrown, 100_000),
+    moderatelyGrown,
+    "the lower watermark should prevent immediate recompaction",
+  );
 });
 
 test("OpenAI Responses requests enable native compaction before local context fallback", () => {
@@ -297,6 +324,201 @@ test("research system prompt separates reusable runbooks from execution and memo
   assert.match(prompt, /Keep concise research facts in memory and multi-step procedures in runbooks/);
 });
 
+test("curated memory prompt gives root agents and subagents read-only memory ownership", () => {
+  for (const agentPath of [undefined, "/root/reviewer"]) {
+    const prompt = createResearchSystemPrompt({
+      hasTools: true,
+      hasCuratedMemoryTools: true,
+      ...(agentPath ? { agentPath } : {}),
+    });
+    assert.match(prompt, /separate background curator and is read-only to you/);
+    assert.match(prompt, /Search memory early/);
+    assert.match(prompt, /Use memory\.get/);
+    assert.match(prompt, /use memory\.request/);
+    assert.match(prompt, /independently validates evidence, duplicate knowledge, status changes, and relationships/);
+    assert.match(prompt, /request is advisory and may be rejected or merged/);
+    assert.doesNotMatch(prompt, /Save a hypothesis/);
+    assert.doesNotMatch(prompt, /Save reusable sequences/);
+    assert.doesNotMatch(prompt, /Save user-controlled ingress/);
+    assert.doesNotMatch(prompt, /memory\.save|memory\.correct|memory\.link/);
+  }
+});
+
+test("research-agent memory guidance uses the supplied authoritative type descriptions", () => {
+  const prompt = createResearchSystemPrompt({
+    hasTools: true,
+    hasCuratedMemoryTools: true,
+    memoryTypeDescriptions: {
+      ...DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
+      primitive: "CUSTOM_AGENT_PRIMITIVE: a workspace-defined proven mechanism.",
+    },
+  });
+  assert.match(prompt, /memory type descriptions are authoritative for this run/i);
+  assert.match(prompt, /CUSTOM_AGENT_PRIMITIVE/);
+  assert.doesNotMatch(prompt, /One independently proven security flaw or exploitation capability/);
+});
+
+test("Pi executor curates true completed turns and notifies the root on a natural next turn", async (t) => {
+  const store = new MemoryGraphStore({
+    databasePath: ":memory:",
+    workspaceRoot: "/private/tmp/honeycrisp-pi-curator",
+    context: {
+      sessionId: "session_pi_curator",
+      workspaceId: "workspace_pi_curator",
+      workspaceName: "PI Curator Workspace",
+      subjectId: "subject_pi_curator",
+      subjectName: "PI Curator Subject",
+    },
+  });
+  t.after(() => store.close());
+  const contexts = [];
+  const liveEvents = [];
+  const curatorSystemPrompts = [];
+  let curatorCall = 0;
+  const curatedTools = createCuratedMemoryTools(store);
+  const result = await runResearchAgent({
+    prompt: "Establish whether the parser has a durable length invariant.",
+    tools: curatedTools.map((tool) => tool.descriptor),
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      memoryTypeDescriptions: {
+        ...DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
+        invariant: "SHARED_INVARIANT_DESCRIPTION: a falsifiable workspace security rule.",
+      },
+      models: createScriptedModels([
+        assistant(toolCall("memory_request", {
+          intent: "create",
+          reason: "The proven parser length rule is missing from durable memory.",
+          candidate: {
+            type: "invariant",
+            title: "Parser length is bounded",
+            claim: "The validated length never exceeds the parser allocation.",
+          },
+        }, "request_memory_1"), "toolUse"),
+        assistant("## Result\nThe parser length invariant is established."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry(curatedTools),
+      memoryCurator: {
+        store,
+        getModelSelection: () => ({ provider: "faux", model: "small-model", reasoningEffort: "medium" }),
+        models: {
+          getModel() {
+            return { ...FAUX_MODEL, id: "small-model", name: "Small Model" };
+          },
+          async completeSimple(_model, context) {
+            curatorCall += 1;
+            curatorSystemPrompts.push(context.systemPrompt);
+            return {
+              ...assistant(curatorCall === 1
+                ? JSON.stringify({
+                    version: 1,
+                    operations: [{
+                      op: "save",
+                      type: "invariant",
+                      title: "Parser length is bounded",
+                      summary: "The validated length never exceeds the parser allocation.",
+                      status: "confirmed",
+                    }],
+                  })
+                : '{"version":1,"operations":[]}'),
+              model: "small-model",
+              usage: {
+                ...ZERO_USAGE,
+                input: 11,
+                output: 7,
+                totalTokens: 18,
+              },
+            };
+          },
+        },
+      },
+    }),
+  });
+
+  assert.equal(curatorCall, 2, "each completed provider turn must be reviewed once");
+  assert.match(contexts[0].systemPrompt, /SHARED_INVARIANT_DESCRIPTION/);
+  assert.ok(curatorSystemPrompts.every((prompt) => prompt.includes("SHARED_INVARIANT_DESCRIPTION")));
+  assert.ok(["memory_get", "memory_request", "memory_search"].every((name) => contexts[0].toolNames.includes(name)));
+  assert.equal(contexts[0].toolNames.some((name) => ["memory_save", "memory_correct", "memory_link"].includes(name)), false);
+  assert.match(contexts[1].messageContents.join("\n"), /background_memory_updates/);
+  assert.match(contexts[1].messageContents.join("\n"), /Parser length is bounded/);
+  assert.equal(store.search({ query: "Parser length is bounded", scope: "subject" }).length, 1);
+
+  const curatorToolEvents = result.agentRun.output.toolEvents.filter((event) =>
+    event.payload.toolName === "memory.curator"
+  );
+  assert.deepEqual(curatorToolEvents.map((event) => event.kind), [
+    "tool.requested", "tool.observed", "tool.requested", "tool.observed",
+  ]);
+  assert.ok(curatorToolEvents.every((event) =>
+    event.agentId === "memory_curator" && event.agentPath === "/root"
+  ));
+  const completedEvents = result.agentRun.output.raw.agentEvents.filter((event) =>
+    event.type === "memory_curator.completed"
+  );
+  assert.equal(completedEvents.length, 2);
+  assert.ok(completedEvents.every((event) => event.contextUsageEligible === false));
+  assert.ok(liveEvents.some((event) =>
+    event.kind === "agent.event"
+    && event.payload.type === "memory_curator.completed"
+    && event.payload.usage.totalTokens === 18
+  ));
+});
+
+test("Pi executor retains a final-turn curator notification in resumable context", async (t) => {
+  const store = new MemoryGraphStore({
+    databasePath: ":memory:",
+    workspaceRoot: "/private/tmp/honeycrisp-final-curator",
+    context: {
+      sessionId: "session_final_curator",
+      workspaceId: "workspace_final_curator",
+      workspaceName: "Final Curator Workspace",
+      subjectId: "subject_final_curator",
+      subjectName: "Final Curator Subject",
+    },
+  });
+  t.after(() => store.close());
+  const result = await runResearchAgent({
+    prompt: "Finish after establishing a reusable parser boundary.",
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([assistant("## Result\nThe parser boundary is established.")]),
+      memoryCurator: {
+        store,
+        getModelSelection: () => ({ provider: "faux", model: "small-model" }),
+        models: {
+          getModel() {
+            return { ...FAUX_MODEL, id: "small-model", name: "Small Model" };
+          },
+          async completeSimple() {
+            return {
+              ...assistant(JSON.stringify({
+                version: 1,
+                operations: [{
+                  op: "save",
+                  type: "invariant",
+                  title: "Final parser boundary",
+                  summary: "The final turn established a reusable parser boundary.",
+                }],
+              })),
+              model: "small-model",
+            };
+          },
+        },
+      },
+    }),
+  });
+
+  const resumable = JSON.stringify(result.agentRun.output.raw.resumableState.messages);
+  assert.match(resumable, /background_memory_updates/);
+  assert.match(resumable, /Final parser boundary/);
+});
+
 test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", async () => {
   const calls = [];
   const contexts = [];
@@ -308,6 +530,12 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
     ],
     contexts,
   );
+  const priorImmutableMessage = {
+    role: "user",
+    content: "Prior immutable context with ignored host metadata.",
+    timestamp: Date.now(),
+    ignoredHostMetadata: { uncloneable: () => "must not be cloned for ordinary tools" },
+  };
   const result = await runResearchAgent({
     prompt: "Inspect parse.c with the fixture tool.",
     workspaceContext: {
@@ -362,6 +590,7 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
       provider: "faux",
       model: "faux-model",
       sessionId: "run_fixture_affinity",
+      initialMessages: [priorImmutableMessage],
       models,
       toolRegistry: createResearchToolRegistry([tool]),
       toolExecution: "sequential",
@@ -380,11 +609,20 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
   assert.equal(calls.length, 1);
   assert.equal(observed.payload.toolName, "fixture.inspect");
   assert.equal(observed.payload.status, "complete");
+  assert.deepEqual(observed.payload.result, { path: "parse.c" });
   assert.equal("evidenceExtracted" in observed.payload, false);
   assert.equal("claimsProposed" in observed.payload, false);
   assert.ok(raw.agentEvents.some((event) => event.type === "tool_execution_update"));
   assert.deepEqual(contexts[0].toolNames, ["fixture_inspect", ...COLLABORATION_TOOL_NAMES]);
   assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
+  const modelToolResultIndex = contexts[1].messageRoles.indexOf("toolResult");
+  const modelToolResultDetails = contexts[1].messageDetails[modelToolResultIndex];
+  assert.deepEqual(modelToolResultDetails, {
+    status: "complete",
+    summary: "Fixture inspected parse.c.",
+  });
+  assert.equal("output" in modelToolResultDetails, false);
+  assert.equal("action" in modelToolResultDetails, false);
   assert.deepEqual(contexts.map((context) => context.sessionId), [
     "run_fixture_affinity",
     "run_fixture_affinity",
@@ -435,14 +673,14 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   const systemPrompt = contexts[0].systemPrompt;
   assert.match(systemPrompt, /Never use the \$HOME environment variable/);
   assert.match(systemPrompt, /Use durable memory as a concise research graph/);
-  assert.match(systemPrompt, /Save a hypothesis for a specific, testable but unproven security proposition/);
+  assert.match(systemPrompt, /specific, testable, currently unproven security proposition/);
   assert.match(systemPrompt, /Evidence is attached to graph nodes as supporting references/);
   assert.match(systemPrompt, /Do not create finding memories/);
-  assert.match(systemPrompt, /Save user-controlled ingress as sources/);
-  assert.match(systemPrompt, /static analysis/);
-  assert.match(systemPrompt, /realistic proof-of-vulnerability/);
-  assert.match(systemPrompt, /review subagent independently approve it/);
-  assert.match(systemPrompt, /leave it suspected/);
+  assert.match(systemPrompt, /attacker-controlled or lower-trust ingress/);
+  assert.match(systemPrompt, /direct code, artifact, command, or verifier evidence/);
+  assert.match(systemPrompt, /proof-of-vulnerability evidence/);
+  assert.match(systemPrompt, /independent review approval/);
+  assert.match(systemPrompt, /Keep it draft or suspected while active/);
 });
 
 test("Pi Agent streams a tool request before long-running execution completes", async () => {
@@ -647,12 +885,17 @@ test("Pi Agent restores a host research checkpoint after native compaction", asy
     },
     toolCall("fixture_inspect", { path: "target.c" }, "inspect_after_compaction"),
   ], "toolUse");
+  const legacyContextSentinel = "LEGACY_CONTEXT_SHOULD_BE_PRUNED";
   const result = await runResearchAgent({
     prompt: "Inspect target.c and preserve the decisive result across compaction.",
     tools: [tool.descriptor],
     executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
+      initialMessages: [
+        { role: "user", content: "Earlier context before native compaction.", timestamp: Date.now() },
+        assistant(legacyContextSentinel),
+      ],
       models: createScriptedModels([
         compactedTurn,
         assistant("## Result\nContinued from the host checkpoint."),
@@ -662,6 +905,9 @@ test("Pi Agent restores a host research checkpoint after native compaction", asy
   });
 
   assert.deepEqual(calls, [{ path: "target.c" }]);
+  assert.match(contexts[0].messageContents.join("\n"), new RegExp(legacyContextSentinel));
+  assert.doesNotMatch(contexts[1].messageContents.join("\n"), new RegExp(legacyContextSentinel));
+  assert.match(contexts[1].messageContents.join("\n"), /opaque-provider-state/);
   assert.match(contexts[1].messageContents.join("\n"), /Research checkpoint after context compaction/);
   assert.match(contexts[1].messageContents.join("\n"), /Fixture inspected target\.c/);
   const checkpointIndexes = contexts[1].messageContents.flatMap((content, index) =>
@@ -674,6 +920,10 @@ test("Pi Agent restores a host research checkpoint after native compaction", asy
   assert.ok(result.agentRun.output.raw.agentEvents.some((event) =>
     event.type === "research_checkpoint" && event.reason === "native"
   ));
+  assert.doesNotMatch(
+    JSON.stringify(result.agentRun.output.raw.resumableState.messages),
+    new RegExp(legacyContextSentinel),
+  );
 });
 
 test("Pi Agent resumes a native-compacted checkpoint exactly once", async () => {
@@ -737,7 +987,7 @@ test("Pi Agent resumes a native-compacted checkpoint exactly once", async () => 
   ), false);
 });
 
-test("Pi Agent checkpoints initial and resumable local compaction without accumulating copies", async () => {
+test("Pi Agent checkpoints initial local compaction once without reconstructing discarded history", async () => {
   const initialMessages = [{ role: "user", content: "Earlier research objective", timestamp: Date.now() }];
   for (let index = 0; index < 10; index += 1) {
     initialMessages.push(assistant(
@@ -775,7 +1025,7 @@ test("Pi Agent checkpoints initial and resumable local compaction without accumu
   const localEvents = result.agentRun.output.raw.agentEvents.filter((event) =>
     event.type === "research_checkpoint" && event.reason === "local"
   );
-  assert.deepEqual(localEvents.map((event) => event.phase), ["initial_context", "resumable_capture"]);
+  assert.deepEqual(localEvents.map((event) => event.phase), ["initial_context"]);
   assert.equal(
     (JSON.stringify(result.agentRun.output.raw.resumableState.messages)
       .match(/Research checkpoint after context compaction/g) ?? []).length,
@@ -1639,10 +1889,23 @@ test("Pi Agent beforeToolCall preflight preserves blocked tool events", async ()
   assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
 });
 
-test("Pi Agent coordinates a partial-context subagent with a model and effort override", async () => {
+test("Pi Agent coordinates a partial-context subagent with a model and effort override", async (t) => {
   const contexts = [];
   const liveEvents = [];
   const calls = [];
+  const curatorInputs = [];
+  const memoryStore = new MemoryGraphStore({
+    databasePath: ":memory:",
+    workspaceRoot: "/private/tmp/honeycrisp-subagent-curator",
+    context: {
+      sessionId: "session_subagent_curator",
+      workspaceId: "workspace_subagent_curator",
+      workspaceName: "Subagent Curator Workspace",
+      subjectId: "subject_subagent_curator",
+      subjectName: "Subagent Curator Subject",
+    },
+  });
+  t.after(() => memoryStore.close());
   const tool = createFixtureInspectTool(calls);
   const result = await runResearchAgent({
     prompt: "Delegate a bounded parser review, then incorporate the result.",
@@ -1664,6 +1927,19 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
       sessionId: "run_subagent_affinity",
       models: createSubagentModels(contexts),
       toolRegistry: createResearchToolRegistry([tool]),
+      memoryCurator: {
+        store: memoryStore,
+        getModelSelection: () => ({ provider: "faux", model: "small-model" }),
+        models: {
+          getModel() {
+            return { ...FAUX_MODEL, id: "small-model", name: "Small Model" };
+          },
+          async completeSimple(_model, context) {
+            curatorInputs.push(context.messages[0].content);
+            return { ...assistant('{"version":1,"operations":[]}'), model: "small-model" };
+          },
+        },
+      },
     }),
   });
 
@@ -1722,6 +1998,12 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
     && event.payload.agentPath === "/root"
     && event.payload.event.kind === "tool.observed"
     && event.payload.event.payload.toolName === "spawn_agent"
+  ));
+  assert.ok(curatorInputs.some((content) => content.includes('"agentPath":"/root"')));
+  assert.ok(curatorInputs.some((content) => content.includes('"agentPath":"/root/parser_review"')));
+  assert.ok(result.agentRun.output.toolEvents.some((event) =>
+    event.agentId === "memory_curator"
+    && event.payload.normalizedInputs.agentPath === "/root/parser_review"
   ));
 });
 
@@ -2204,6 +2486,9 @@ function createScriptedModels(messages, contexts = []) {
         ),
         messageProviders: context.messages.map((message) =>
           message.role === "assistant" ? message.provider : null
+        ),
+        messageDetails: context.messages.map((message) =>
+          message.role === "toolResult" ? message.details : null
         ),
         messageContents: context.messages.map((message) => JSON.stringify(message.content)),
       });

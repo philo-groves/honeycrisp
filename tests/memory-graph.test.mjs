@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   MemoryGraphStore,
+  createCuratedMemoryTools,
   createMemoryGraphTools,
   createResearchToolRegistry,
   getDefaultMemoryDatabasePath,
@@ -135,6 +136,131 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
       createdAt: linked.result.output.createdAt,
       updatedAt: linked.result.output.updatedAt,
     });
+  } finally {
+    store.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("curated memory tools keep the graph read-only and queue constrained requests", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-curated-memory-tools-"));
+  const store = new MemoryGraphStore({ workspaceRoot });
+  const existing = store.save({
+    type: "primitive",
+    title: "Bounded parser read",
+    summary: "The parser reads within the mapped input.",
+    status: "confirmed",
+  });
+  const registry = createResearchToolRegistry(createCuratedMemoryTools(store));
+  try {
+    const descriptors = registry.listDescriptors();
+    assert.deepEqual(descriptors.map((tool) => tool.name), ["memory.search", "memory.get", "memory.request"]);
+    assert.deepEqual(descriptors.map((tool) => tool.transportName), ["memory_search", "memory_get", "memory_request"]);
+    assert.equal(descriptors.some((tool) => ["memory.save", "memory.correct", "memory.link"].includes(tool.name)), false);
+
+    const requestDescriptor = descriptors.find((tool) => tool.name === "memory.request");
+    assert.equal(requestDescriptor.sideEffects, "none");
+    assert.deepEqual(requestDescriptor.requiredPermissions, []);
+    assert.deepEqual(requestDescriptor.inputSchema.properties.intent.enum, ["create", "revise", "relate", "reconsider"]);
+    assert.equal(requestDescriptor.inputSchema.additionalProperties, false);
+    assert.equal(
+      requestDescriptor.inputSchema.properties.candidate.properties.attributes.properties.rootCauseKey.pattern,
+      "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    );
+    assert.match(requestDescriptor.description, /never mutates the memory graph directly/);
+
+    const searched = await registry.execute({
+      id: "search_curated_memory",
+      actionClass: "recall",
+      toolName: "memory.search",
+      input: { query: "bounded parser" },
+    });
+    assert.equal(searched.result.output[0].id, existing.id);
+    const read = await registry.execute({
+      id: "get_curated_memory",
+      actionClass: "recall",
+      toolName: "memory.get",
+      input: { id: existing.id },
+    });
+    assert.equal(read.result.output.id, existing.id);
+
+    const requested = await registry.execute({
+      id: "request_curated_memory",
+      actionClass: "synthesize",
+      toolName: "memory.request",
+      input: {
+        intent: "create",
+        reason: "A distinct attacker-controlled length was established by the parser experiment.",
+        candidate: {
+          type: "source",
+          title: "Attacker-controlled parser length",
+          claim: "The parser accepts a length from the untrusted input header.",
+        },
+        evidenceRefs: [{ toolCallId: "parser_probe_1", artifactId: "artifact_parser_probe" }],
+      },
+    });
+    assert.equal(requested.result.status, "complete");
+    assert.equal(requested.result.summary, "Memory request queued for curator review.");
+    assert.equal(requested.result.output.status, "queued");
+    assert.equal(requested.result.output.intent, "create");
+    assert.match(requested.result.output.requestId, /^memory_request_/);
+    assert.deepEqual(store.search({ scope: "workspace" }).map((node) => [node.id, node.revision]), [[existing.id, 1]]);
+
+    const structuredRequest = await registry.execute({
+      id: "request_structured_primitive",
+      actionClass: "synthesize",
+      toolName: "memory.request",
+      input: {
+        intent: "create",
+        reason: "The proof establishes one durable root-cause flaw.",
+        candidate: {
+          type: "primitive",
+          title: "Parser length wraps before allocation",
+          claim: "An attacker-controlled length wraps before the allocation bound is checked.",
+          attributes: {
+            rootCause: "Allocation uses a wrapped attacker-controlled length before validation.",
+            rootCauseKey: "parser-length-wrap-before-validation",
+            impact: "Out-of-bounds memory access.",
+            reachability: "A crafted parser input reaches the unchecked allocation.",
+          },
+        },
+      },
+    });
+    assert.equal(structuredRequest.result.status, "complete");
+
+    const malformedKey = await registry.execute({
+      id: "request_malformed_root_cause_key",
+      actionClass: "synthesize",
+      toolName: "memory.request",
+      input: {
+        intent: "create",
+        reason: "The proposed identity uses the wrong separator.",
+        candidate: {
+          type: "primitive",
+          title: "Malformed primitive request",
+          claim: "A proven flaw with an invalid structured identity.",
+          attributes: {
+            rootCause: "A proven parser flaw.",
+            rootCauseKey: "parser_length_wrap",
+          },
+        },
+      },
+    });
+    assert.equal(malformedKey.result.status, "error");
+    assert.match(malformedKey.result.error.message, /rootCauseKey/);
+
+    const invalid = await registry.execute({
+      id: "invalid_curated_memory_request",
+      actionClass: "synthesize",
+      toolName: "memory.request",
+      input: {
+        intent: "create",
+        reason: "Missing candidate details must not be accepted.",
+      },
+    });
+    assert.equal(invalid.result.status, "error");
+    assert.match(invalid.result.error.message, /candidate is required/);
+    assert.equal(store.get(existing.id).revision, 1);
   } finally {
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });

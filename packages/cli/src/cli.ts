@@ -13,7 +13,7 @@ import {
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
   createDeterministicAgentExecutor,
-  createMemoryGraphTools,
+  createCuratedMemoryTools,
   createRunbookTools,
   compileMemoryModelContext,
   createPiAgentExecutor,
@@ -25,6 +25,7 @@ import {
   createShellTool,
   createShellSafetyAuthorizer,
   DEFAULT_SHELL_REVIEW_MODELS,
+  DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
   createResearchWorkspaceContext,
   createMcpResearchTools,
   MemoryGraphStore,
@@ -50,6 +51,7 @@ import {
   logoutAuthProvider,
   mergeResearchWorkspaceContexts,
   resolveResearchModelConfig,
+  resolveMemoryTypeDescriptions,
   verifyProviderAuth,
   workspaceContextFileReadHints,
   writeResearchModelConfig,
@@ -72,6 +74,8 @@ import type {
   PiAgentResumableState,
   MemoryNodeStatus,
   MemoryNodeType,
+  MemoryTypeDescriptions,
+  MemoryTypeDescriptionsInput,
   ResearchModelMemoryContextNode,
   ResearchToolConfigPreference,
   ResolvedResearchModelConfig,
@@ -167,6 +171,9 @@ interface ParsedArgs {
   shellSafetyMode: ShellSafetyMode;
   shellReviewModels: Readonly<Record<string, string>>;
   shellReviewEffort: ResearchModelEffort;
+  memoryModels: Readonly<Record<string, string>>;
+  memoryEffort: ResearchModelEffort;
+  memoryTypeDescriptions: MemoryTypeDescriptions;
   maxTokens: number | undefined;
   reasoning: ResearchModelEffort | undefined;
   executor: CliExecutorKind;
@@ -243,6 +250,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let shellSafetyMode: ShellSafetyMode = "auto_review";
   let shellReviewModels: Readonly<Record<string, string>> = DEFAULT_SHELL_REVIEW_MODELS;
   let shellReviewEffort: ResearchModelEffort = "medium";
+  let memoryModels: Readonly<Record<string, string>> = DEFAULT_SHELL_REVIEW_MODELS;
+  let memoryEffort: ResearchModelEffort = "medium";
+  let memoryTypeDescriptions: MemoryTypeDescriptions = DEFAULT_MEMORY_TYPE_DESCRIPTIONS;
   let executor: CliExecutorKind = "agent";
   let toolExecution: CliToolExecutionMode | undefined;
   let maxTokens: number | undefined;
@@ -442,6 +452,17 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--shell-review-effort") {
       shellReviewEffort = parseShellReviewEffort(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--memory-models") {
+      memoryModels = parseProviderModelMap(readOptionValue(argv, index, arg), "--memory-models");
+      index += 1;
+    } else if (arg === "--memory-effort") {
+      memoryEffort = parseAuxiliaryModelEffort(readOptionValue(argv, index, arg), "--memory-effort");
+      index += 1;
+    } else if (arg === "--memory-type-descriptions") {
+      memoryTypeDescriptions = parseMemoryTypeDescriptionsOption(
+        readOptionValue(argv, index, arg),
+      );
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -503,6 +524,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     shellSafetyMode,
     shellReviewModels,
     shellReviewEffort,
+    memoryModels,
+    memoryEffort,
+    memoryTypeDescriptions,
     maxTokens,
     reasoning,
     executor,
@@ -894,6 +918,10 @@ function parseShellSafetyMode(value: string): ShellSafetyMode {
 }
 
 function parseShellReviewEffort(value: string): ResearchModelEffort {
+  return parseAuxiliaryModelEffort(value, "--shell-review-effort");
+}
+
+function parseAuxiliaryModelEffort(value: string, option: string): ResearchModelEffort {
   if (
     value === "minimal" ||
     value === "low" ||
@@ -904,32 +932,57 @@ function parseShellReviewEffort(value: string): ResearchModelEffort {
   ) {
     return value;
   }
-  throw new Error("--shell-review-effort must be one of minimal, low, medium, high, xhigh, max.");
+  throw new Error(`${option} must be one of minimal, low, medium, high, xhigh, max.`);
 }
 
 function parseShellReviewModels(value: string): Readonly<Record<string, string>> {
+  return parseProviderModelMap(value, "--shell-review-models");
+}
+
+function parseProviderModelMap(value: string, option: string): Readonly<Record<string, string>> {
   if (value.length > 16_000) {
-    throw new Error("--shell-review-models JSON is too large.");
+    throw new Error(`${option} JSON is too large.`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value) as unknown;
   } catch {
-    throw new Error("--shell-review-models must be a JSON object mapping providers to model IDs.");
+    throw new Error(`${option} must be a JSON object mapping providers to model IDs.`);
   }
   if (!isRecord(parsed)) {
-    throw new Error("--shell-review-models must be a JSON object mapping providers to model IDs.");
+    throw new Error(`${option} must be a JSON object mapping providers to model IDs.`);
   }
   const result: Record<string, string> = {};
   for (const [rawProvider, rawModel] of Object.entries(parsed)) {
     const provider = rawProvider.trim();
     const model = typeof rawModel === "string" ? rawModel.trim() : "";
     if (!provider || provider.length > 200 || !model || model.length > 200) {
-      throw new Error("--shell-review-models requires non-empty provider and model strings.");
+      throw new Error(`${option} requires non-empty provider and model strings.`);
     }
     result[provider] = model;
   }
   return result;
+}
+
+function parseMemoryTypeDescriptionsOption(value: string): MemoryTypeDescriptions {
+  if (value.length > 64_000) {
+    throw new Error("--memory-type-descriptions JSON is too large.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("--memory-type-descriptions must be a JSON object mapping memory types to descriptions.");
+  }
+  if (!isRecord(parsed)) {
+    throw new Error("--memory-type-descriptions must be a JSON object mapping memory types to descriptions.");
+  }
+  try {
+    return resolveMemoryTypeDescriptions(parsed as MemoryTypeDescriptionsInput);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`--memory-type-descriptions is invalid: ${message}`);
+  }
 }
 
 function parseInspectionAction(value: string): LocalInspectionAction {
@@ -1079,6 +1132,10 @@ function usage(): string {
     "  --shell-review-models <json> Provider-to-small-reviewer-model JSON object",
     "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3",
     "  --shell-review-effort <level> Small-model review effort (default: medium)",
+    "  --memory-models <json> Provider-to-small-memory-model JSON object",
+    "                         Defaults to the provider-associated small review models",
+    "  --memory-effort <level> Background memory-curator effort (default: medium)",
+    "  --memory-type-descriptions <json> Per-memory-type description overrides used by the agent and curator",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --tool-config <path>   Runtime tool preference config (default: .honeycrisp/tools.json)",
     "  --no-default-tool-config Ignore .honeycrisp/tools.json unless --tool-config is provided",
@@ -1243,6 +1300,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         : createRealAgentExecutor(
             args,
             runtimeConfig.toolRegistry,
+            runtimeConfig.memoryGraph,
             (modelConfig = await resolveResearchModelConfig({
               workspaceRoot: args.workspaceRoot,
               ...(args.configPath ? { configPath: args.configPath } : {}),
@@ -1389,6 +1447,7 @@ async function loadCompatibleResumeState(
 function createRealAgentExecutor(
   args: ParsedArgs,
   toolRegistry: ResearchToolRegistry | undefined,
+  memoryGraph: MemoryGraphStore,
   modelConfig: ResolvedResearchModelConfig,
   dispositionRecorder: ResearchDispositionRecorder,
   controlStream: HoneycrispControlStream | undefined,
@@ -1420,7 +1479,25 @@ function createRealAgentExecutor(
         }
       : {}),
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
+    memoryTypeDescriptions: args.memoryTypeDescriptions,
     ...(resumableState ? { resumableState } : {}),
+    memoryCurator: {
+      store: memoryGraph,
+      ...(controlStream ? { signal: controlStream.signal } : {}),
+      getModelSelection: (curatorInput) => {
+        const provider = curatorInput.agentPath === "/root"
+          ? controlStream?.getModelSelection()?.provider ?? modelConfig.provider
+          : modelConfig.provider;
+        const memoryModel = args.memoryModels[provider];
+        return memoryModel
+          ? {
+              provider,
+              model: memoryModel,
+              reasoningEffort: args.memoryEffort,
+            }
+          : undefined;
+      },
+    },
     ...(controlStream
       ? {
           getModelSelection: () => controlStream.getModelSelection(),
@@ -2302,6 +2379,7 @@ async function createRuntimeConfig(args: {
   runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
+  memoryGraph: MemoryGraphStore;
   cleanup?: () => Promise<void>;
 }> {
   const workspaceRoot = args.workspaceRoot ?? process.cwd();
@@ -2352,7 +2430,7 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   });
-  const memoryTools = createMemoryGraphTools(memoryGraph);
+  const memoryTools = createCuratedMemoryTools(memoryGraph);
   executableTools.push(...memoryTools);
   toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));
   cleanupCallbacks.push(async () => memoryGraph.close());
@@ -2495,6 +2573,7 @@ async function createRuntimeConfig(args: {
     memoryContext,
     runtimeTools,
     dispositionRecorder,
+    memoryGraph,
     capture: createRuntimeCapture({
       families,
       args: runtimeArgs,

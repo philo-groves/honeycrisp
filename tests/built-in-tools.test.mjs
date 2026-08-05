@@ -18,6 +18,7 @@ import {
   createStructuredFileReadTool,
   createSynthesisTool,
   ensureResearchStorageLayout,
+  modelToolResultDetails,
   registerResearchStorageArtifact,
 } from "../packages/research-agent/dist/index.js";
 
@@ -389,6 +390,54 @@ test("shell capture events and tool results omit stdin and redact credential arg
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("tool-result details retain bounded metadata without the full execution payload", () => {
+  const result = {
+    action: {
+      id: "bounded_details",
+      actionClass: "inspect",
+      toolName: "fixture.inspect",
+      input: { marker: "action-input-must-not-be-retained" },
+    },
+    status: "error",
+    startedAt: "2026-08-05T12:00:00.000Z",
+    completedAt: "2026-08-05T12:00:01.000Z",
+    summary: "Fixture inspection failed.",
+    output: { marker: "full-output-remains-in-content" },
+    rawOutputRef: "raw://fixture-output",
+    artifactRefs: [
+      {
+        id: "artifact_fixture",
+        kind: "inspection",
+        uri: "artifact://fixture",
+      },
+    ],
+    followUpActions: ["Inspect the captured artifact."],
+    error: { message: "Fixture failure." },
+  };
+  const expectedDetails = {
+    status: "error",
+    summary: "Fixture inspection failed.",
+    rawOutputRef: "raw://fixture-output",
+    artifactRefs: result.artifactRefs,
+    followUpActions: result.followUpActions,
+    error: { message: "Fixture failure." },
+  };
+
+  assert.deepEqual(modelToolResultDetails(result), expectedDetails);
+
+  const message = createToolResultMessage(
+    result,
+    "tool_call_bounded_details",
+    "fixture_inspect",
+  );
+  assert.deepEqual(message.details, expectedDetails);
+  assert.equal("action" in message.details, false);
+  assert.equal("output" in message.details, false);
+  assert.equal("startedAt" in message.details, false);
+  assert.equal("completedAt" in message.details, false);
+  assert.match(message.content[0].text, /full-output-remains-in-content/);
 });
 
 test("tool runtime budget aborts a pending approval before any later spawn", async () => {
