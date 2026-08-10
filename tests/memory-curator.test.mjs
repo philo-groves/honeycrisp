@@ -880,6 +880,47 @@ test("memory curator applies trusted node mutations and resolves relationship te
   }
 });
 
+test("memory curator normalizes common temporary ref variants consistently in links", async () => {
+  const store = createStore("normalized-temp-refs");
+  const source = store.save({ type: "source", title: "Authorized request", status: "confirmed" });
+  const curator = new SerializedMemoryCurator({
+    store,
+    getModelSelection: () => ({ provider: "faux", model: "small-model" }),
+    models: fixtureModels(async () => assistantResponse(JSON.stringify({
+      version: 1,
+      operations: [
+        {
+          op: "save",
+          ref: "Shared-Backend",
+          type: "asset",
+          title: "Shared backend service",
+          status: "confirmed",
+        },
+        {
+          op: "link",
+          from: "@shared backend",
+          to: source.id,
+          relation: "receives",
+        },
+      ],
+    }))),
+  });
+
+  try {
+    curator.enqueueRequest({ ...ROOT_SOURCE, request: "Record the shared backend." });
+    const [result] = await curator.drain();
+    assert.equal(result.status, "complete");
+    assert.deepEqual(
+      result.notifications.map((notification) => notification.kind),
+      ["created", "linked"],
+    );
+    const asset = store.search({ query: "Shared backend service", scope: "subject" })[0];
+    assert.deepEqual(store.listEdges(asset.id).map((edge) => edge.toId), [source.id]);
+  } finally {
+    store.close();
+  }
+});
+
 test("memory curator rejects unsupported plans, stale revisions, missing endpoints, and incomplete confirmed chains", async () => {
   const store = createStore("validation");
   const hypothesis = store.save({ type: "hypothesis", title: "Candidate parser issue", status: "suspected" });

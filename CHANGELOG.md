@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- Normalized common case and separator variants in memory-curator temporary refs and their `@ref` link endpoints so otherwise valid curation plans do not fail on model-generated ref spelling.
 - Aligned research-agent requests, curator prompting, and validation on lowercase-hyphenated root-cause keys, normalized equivalent separators at the curator boundary, and made source, sink, and asset links recommended rather than required for confirmed chains.
 - Consolidated same-type curator saves by stable or semantically equivalent root cause even when titles differ, preserved established root-cause identities during additive refinement, and rejected primitive mutations that omit root-cause metadata.
 - Prevented long research turns from retaining full-context deep copies for ordinary and parallel tool calls; spawn inheritance and curator queueing now use bounded structural snapshots, while model-visible tool details omit full outputs that remain available in canonical observed events and artifacts.

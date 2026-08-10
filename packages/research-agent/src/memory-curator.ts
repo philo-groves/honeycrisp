@@ -56,7 +56,6 @@ const MAX_RELATION_NOTE_CHARACTERS = 2_000;
 const MAX_NOTIFICATION_TEXT_CHARACTERS = 500;
 const MAX_ARRAY_ITEMS = 128;
 const TEMP_REF_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u;
-const TEMP_ENDPOINT_PATTERN = /^@([a-z][a-z0-9_]{0,63})$/u;
 const REQUIRED_CONFIRMED_CHAIN_NEIGHBOR_TYPES = [
   "primitive",
 ] as const satisfies readonly MemoryNodeType[];
@@ -90,6 +89,7 @@ export function createMemoryCuratorSystemPrompt(
     '{"op":"save","ref":"optional_temp_name","type":"memory_type","title":"title","summary":"optional","body":"optional","status":"optional","confidence":0.0,"assetIds":["optional"],"tags":["optional"],"attributes":{},"evidence":[{"kind":"code|artifact|command|url|human_note","pathBase":"workspace|repository|asset_root|external","path":"optional relative path or URL","locator":{},"summary":"evidence summary"}]}',
     '{"op":"correct","ref":"optional_temp_name","id":"existing_memory_id","expectedRevision":1,"patch":{"type":"optional","title":"optional","summary":"optional","body":"optional","status":"optional","confidence":0.0,"assetIds":[],"tags":[],"attributes":{},"evidence":[]}}',
     '{"op":"link","from":"existing_memory_id_or_@temp_ref","to":"existing_memory_id_or_@temp_ref","relation":"relationship","note":"optional"}',
+    "Temporary refs must start with a lowercase letter and use only lowercase letters, digits, and underscores. Refer to them in links as @ followed by the same ref.",
     "Use an empty operations array when no durable change is justified.",
   ].join("\n");
 }
@@ -1963,13 +1963,23 @@ function memoryNodeStatus(value: unknown, path: string): MemoryNodeStatus {
 
 function optionalTempRef(value: unknown, path: string): string | undefined {
   if (value === undefined) return undefined;
-  const ref = boundedRequiredString(value, path, 64);
+  const ref = normalizeTempRef(boundedRequiredString(value, path, 64));
   if (!TEMP_REF_PATTERN.test(ref)) throw new Error(`${path} must use lowercase letters, digits, and underscores.`);
   return ref;
 }
 
 function tempEndpointRef(value: string): string | undefined {
-  return value.match(TEMP_ENDPOINT_PATTERN)?.[1];
+  if (!value.startsWith("@")) return undefined;
+  const ref = normalizeTempRef(value.slice(1));
+  return TEMP_REF_PATTERN.test(ref) ? ref : undefined;
+}
+
+function normalizeTempRef(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "_")
+    .replace(/^_+|_+$/gu, "");
 }
 
 function boundedConfidence(value: unknown, path: string): number {
