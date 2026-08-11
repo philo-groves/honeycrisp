@@ -14,6 +14,15 @@ export type ResearchProfileAttributeType =
   | "number"
   | "boolean";
 
+export type ResearchProfileSessionHeat = "none" | "low" | "medium" | "high" | "critical";
+
+export interface ResearchProfileSessionHeatPalette {
+  low: string;
+  medium: string;
+  high: string;
+  critical: string;
+}
+
 export interface ResearchProfileAttributeDefinition {
   type: ResearchProfileAttributeType;
   description: string;
@@ -45,6 +54,7 @@ export interface ResearchProfileMemoryType {
   order: number;
   defaultStatus: string;
   allowedStatuses: readonly string[];
+  sessionHeat?: Readonly<Partial<Record<string, ResearchProfileSessionHeat>>>;
   contextWeight?: number;
   attributes?: Readonly<Record<string, ResearchProfileAttributeDefinition>>;
   requirements?: readonly ResearchProfileMemoryRequirement[];
@@ -148,6 +158,7 @@ export interface ResearchProfilePresentation {
   memoryLabel: string;
   runbookLabel: string;
   sessionLabel: string;
+  sessionHeatPalette?: ResearchProfileSessionHeatPalette;
 }
 
 export interface ResearchProfile {
@@ -261,6 +272,7 @@ const SECURITY_MEMORY_TYPE_DEFINITIONS: readonly Omit<ResearchProfileMemoryType,
     order: 60,
     defaultStatus: "draft",
     allowedStatuses: ["draft", "suspected", "confirmed", "rejected", "stale"],
+    sessionHeat: { confirmed: "low" },
   },
   {
     id: "hypothesis",
@@ -294,6 +306,7 @@ const SECURITY_MEMORY_TYPE_DEFINITIONS: readonly Omit<ResearchProfileMemoryType,
     order: 80,
     defaultStatus: "draft",
     allowedStatuses: ["draft", "suspected", "confirmed", "rejected", "stale"],
+    sessionHeat: { suspected: "medium", confirmed: "medium" },
     attributes: {
       rootCause: { type: "string", description: "Concise underlying security mechanism." },
       rootCauseKey: {
@@ -315,6 +328,7 @@ const SECURITY_MEMORY_TYPE_DEFINITIONS: readonly Omit<ResearchProfileMemoryType,
     order: 90,
     defaultStatus: "draft",
     allowedStatuses: ["draft", "suspected", "confirmed", "rejected", "stale"],
+    sessionHeat: { suspected: "high", confirmed: "critical" },
     attributes: {
       rootCause: { type: "string", description: "Concise underlying security mechanism." },
       rootCauseKey: {
@@ -365,7 +379,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.0.0",
+  version: "1.1.0",
   name: "Security Research",
   description: "Authorized open-ended vulnerability discovery, chaining, verification, and reporting.",
   agent: {
@@ -489,8 +503,420 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     memoryLabel: "Memory",
     runbookLabel: "Runbooks",
     sessionLabel: "Research Session",
+    sessionHeatPalette: {
+      low: "#cdaa32",
+      medium: "#e8842c",
+      high: "#ff4a54",
+      critical: "#b4121c",
+    },
   },
 };
+
+const MATHEMATICS_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = [
+  {
+    id: "problem",
+    name: "Problem",
+    pluralName: "Problems",
+    description: "A precise mathematical question under investigation, including its assumptions, quantifiers, domain, and intended notion of resolution.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Questions and statements",
+    icon: "circle-help",
+    color: "blue",
+    order: 10,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+    contextWeight: 10,
+    attributes: {
+      domain: { type: "string", description: "Primary mathematical domain or subfield." },
+      statement: { type: "string", description: "Normalized statement with explicit assumptions and quantifiers." },
+    },
+  },
+  {
+    id: "definition",
+    name: "Definition",
+    pluralName: "Definitions",
+    description: "A reusable definition, notation choice, normalization, or convention needed to state and compare mathematical claims precisely.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Questions and statements",
+    icon: "braces",
+    color: "slate",
+    order: 20,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "verified", "superseded"],
+  },
+  {
+    id: "conjecture",
+    name: "Conjecture",
+    pluralName: "Conjectures",
+    description: "A specific unproved mathematical proposition. Keep it draft or plausible while open, refute it with a verified counterexample, and reclassify it as a theorem when proved.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Questions and statements",
+    icon: "sparkles",
+    color: "purple",
+    order: 30,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "refuted", "superseded"],
+    sessionHeat: { plausible: "low" },
+    contextWeight: 9,
+    attributes: {
+      statement: { type: "string", description: "Exact conjectural statement with assumptions and quantifiers." },
+      origin: { type: "string", description: "Source, motivation, or derivation of the conjecture." },
+    },
+  },
+  {
+    id: "lemma",
+    name: "Lemma",
+    pluralName: "Lemmas",
+    description: "An intermediate proposition whose role is to support another result. A verified lemma must have a complete checkable argument or formal proof reference.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Established results",
+    icon: "git-branch",
+    color: "cyan",
+    order: 40,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+    sessionHeat: { plausible: "low", verified: "medium" },
+    contextWeight: 8,
+    attributes: {
+      statement: { type: "string", description: "Exact statement with assumptions and quantifiers." },
+    },
+    requirements: [{ statuses: ["verified"], requiredAttributes: ["statement"], requireEvidence: true }],
+  },
+  {
+    id: "theorem",
+    name: "Theorem",
+    pluralName: "Theorems",
+    description: "A proved mathematical result. Verification requires a complete argument, machine-checked proof, computation with a justified certificate, or explicit expert review evidence.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Established results",
+    icon: "badge-check",
+    color: "green",
+    order: 50,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+    sessionHeat: { plausible: "high", verified: "critical" },
+    contextWeight: 10,
+    attributes: {
+      statement: { type: "string", description: "Exact proved statement with assumptions and quantifiers." },
+      novelty: { type: "string", description: "Relationship to known results and the claimed new contribution." },
+    },
+    requirements: [{ statuses: ["verified"], requiredAttributes: ["statement"], requireEvidence: true }],
+  },
+  {
+    id: "counterexample",
+    name: "Counterexample",
+    pluralName: "Counterexamples",
+    description: "A concrete object or family that falsifies a stated conjecture or proposed lemma. Record the target statement and verify every required property.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Established results",
+    icon: "circle-x",
+    color: "red",
+    order: 60,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+    sessionHeat: { plausible: "high", verified: "critical" },
+    contextWeight: 10,
+    attributes: {
+      targetStatement: { type: "string", description: "The exact claim falsified by this object or family." },
+      construction: { type: "string", description: "Concrete definition of the counterexample or family." },
+    },
+    requirements: [{ statuses: ["verified"], requiredAttributes: ["targetStatement", "construction"], requireEvidence: true }],
+  },
+  {
+    id: "construction",
+    name: "Construction",
+    pluralName: "Constructions",
+    description: "A reusable mathematical object, example, family, reduction, or parameterized construction with its defining properties and constraints.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Methods and objects",
+    icon: "blocks",
+    color: "amber",
+    order: 70,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+    sessionHeat: { plausible: "medium", verified: "high" },
+    attributes: {
+      construction: { type: "string", description: "Definition or generative description of the object or family." },
+    },
+    requirements: [{ statuses: ["verified"], requiredAttributes: ["construction"], requireEvidence: true }],
+  },
+  {
+    id: "technique",
+    name: "Technique",
+    pluralName: "Techniques",
+    description: "A reusable proof idea, transformation, reduction, estimate, invariant, or cross-domain connection, including when it applies and where it fails.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Methods and objects",
+    icon: "wand-sparkles",
+    color: "teal",
+    order: 80,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+  },
+  {
+    id: "proof-attempt",
+    name: "Proof Attempt",
+    pluralName: "Proof Attempts",
+    description: "A concrete incomplete or candidate proof path. Preserve its key reductions, unresolved gaps, and failure point; reclassify durable proved content as lemmas or theorems.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Investigation state",
+    icon: "route",
+    color: "indigo",
+    order: 90,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "refuted", "superseded"],
+    sessionHeat: { plausible: "medium" },
+    contextWeight: 7,
+    attributes: {
+      gap: { type: "string", description: "Most important unresolved step, hidden assumption, or failure point." },
+    },
+  },
+  {
+    id: "obstruction",
+    name: "Obstruction",
+    pluralName: "Obstructions",
+    description: "A proved or strongly supported barrier showing why a proof strategy, construction, bound, or generalization cannot work under stated conditions.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Investigation state",
+    icon: "octagon-alert",
+    color: "orange",
+    order: 100,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+    sessionHeat: { plausible: "medium", verified: "high" },
+    requirements: [{ statuses: ["verified"], requireEvidence: true }],
+  },
+  {
+    id: "formalization",
+    name: "Formalization",
+    pluralName: "Formalizations",
+    description: "A theorem-prover encoding, proof certificate, or machine-checkable verification target, with toolchain, source location, dependencies, and verification status.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Verification",
+    icon: "file-check-2",
+    color: "emerald",
+    order: 110,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+    sessionHeat: { plausible: "low", verified: "medium" },
+    attributes: {
+      prover: { type: "string", description: "Formal system or verifier, such as Lean 4, Isabelle, Coq, or a certificate checker." },
+      target: { type: "string", description: "Statement or result being formalized or checked." },
+    },
+    requirements: [{ statuses: ["verified"], requiredAttributes: ["prover", "target"], requireEvidence: true }],
+  },
+  {
+    id: "computation",
+    name: "Computation",
+    pluralName: "Computations",
+    description: "A reproducible symbolic, numeric, exhaustive, or experimental calculation, including code, parameters, precision, bounds, and whether it constitutes proof or only evidence.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Verification",
+    icon: "calculator",
+    color: "sky",
+    order: 120,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+    sessionHeat: { plausible: "low", verified: "medium" },
+    requirements: [{ statuses: ["verified"], requireEvidence: true }],
+  },
+  {
+    id: "reference",
+    name: "Reference Result",
+    pluralName: "Reference Results",
+    description: "A result, definition, technique, or limitation from the literature, recorded with enough bibliographic and statement detail to retrieve and apply it correctly.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Literature",
+    icon: "book-open",
+    color: "violet",
+    order: 130,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "verified", "superseded"],
+    attributes: {
+      citation: { type: "string", description: "Stable bibliographic reference, DOI, arXiv identifier, or URL." },
+    },
+    requirements: [{ statuses: ["verified"], requiredAttributes: ["citation"], requireEvidence: true }],
+  },
+  {
+    id: "trajectory",
+    name: "Research Trajectory",
+    pluralName: "Research Trajectories",
+    description: "A reusable sequence of mathematical choices, reductions, checks, and pivots that explains how progress was made or why a direction failed.",
+    lifecycle: "active",
+    creatable: true,
+    group: "Reusable methods",
+    icon: "milestone",
+    color: "pink",
+    order: 140,
+    defaultStatus: "draft",
+    allowedStatuses: ["draft", "plausible", "verified", "refuted", "superseded"],
+  },
+];
+
+export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
+  schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
+  id: "mathematics",
+  version: "1.1.0",
+  name: "Mathematics",
+  description: "Open-ended mathematical research through conjecture exploration, proof construction, counterexample search, computation, literature synthesis, and rigorous verification.",
+  agent: {
+    role: "You are a world-class research mathematician with broad technical range, excellent conjecture-forming judgment, and the persistence to build, test, revise, and verify long mathematical arguments.",
+    posture: [
+      "State assumptions and quantifiers precisely, distinguish experimental evidence from proof, and treat every candidate argument as provisional until its gaps and edge cases have been checked.",
+      "Explore both proof and disproof. Use computations, small cases, extremal examples, literature retrieval, cross-domain reductions, and formal verification to generate and discriminate between approaches.",
+      "Prefer useful intermediate lemmas, constructions, obstructions, and counterexamples over forcing a premature final theorem.",
+    ],
+    style: [
+      "Write concise but complete mathematical prose with explicit dependencies and no appeals to plausibility where a proof obligation remains.",
+      "Separate definitions, claims, proofs, computations, and unresolved gaps so another mathematician can audit the work.",
+    ],
+    memoryInstructions: [
+      "Search memory and literature before committing to a proof route, especially for equivalent formulations, known bounds, standard counterexamples, and techniques from adjacent fields.",
+      "Before saving, search for the same normalized statement or construction and refine it instead of creating a differently worded duplicate.",
+      "A verified theorem, lemma, counterexample, formalization, or computation requires a durable evidence reference. Candidate proof attempts remain plausible or refuted until their durable content is extracted and verified.",
+    ],
+    runbookInstructions: [
+      "Create or extend a runbook for reproducible formalization builds, symbolic computations, exhaustive searches, literature queries, or repeated verification pipelines.",
+      "Record exact commands, package or theorem-prover versions, parameters, seeds, precision, assumptions, decisive outputs, and interpretation.",
+      "Use shell.run for execution; a runbook never executes itself.",
+    ],
+  },
+  memory: {
+    types: MATHEMATICS_MEMORY_TYPES,
+    statuses: [
+      { id: "draft", name: "Draft", description: "Recorded but not yet seriously checked.", order: 10, polarity: "neutral" },
+      { id: "plausible", name: "Plausible", description: "Survives current checks but still has proof or verification obligations.", order: 20, polarity: "neutral" },
+      { id: "verified", name: "Verified", description: "Supported by the checkable evidence required for its type.", order: 30, polarity: "positive" },
+      { id: "refuted", name: "Refuted", description: "Disproved, invalidated, or shown to contain a decisive gap.", order: 40, terminal: true, polarity: "negative" },
+      { id: "superseded", name: "Superseded", description: "Replaced by a stronger, corrected, or more useful formulation.", order: 50, terminal: true, polarity: "negative" },
+    ],
+    evidenceKinds: [
+      { id: "manuscript", name: "Manuscript", description: "A durable natural-language proof, derivation, or exposition.", allowsPath: true },
+      { id: "formal_proof", name: "Formal Proof", description: "Machine-checkable theorem-prover source or certificate.", allowsPath: true },
+      { id: "computation", name: "Computation", description: "A reproducible symbolic, numeric, or exhaustive calculation and its bounded output.", allowsPath: true },
+      { id: "literature", name: "Literature", description: "A paper, book, preprint, database entry, or other citable source.", allowsPath: true },
+      { id: "expert_review", name: "Expert Review", description: "An explicit review or verification note from a qualified human mathematician.", allowsPath: false },
+      { id: "human_note", name: "Human Note", description: "An explicit researcher-provided note that does not by itself establish a theorem.", allowsPath: false },
+    ],
+    evidencePathBases: [
+      { id: "workspace", name: "Workspace", description: "Relative to the active mathematical workspace.", pathFormat: "relative" },
+      { id: "repository", name: "Repository", description: "Relative to a recorded repository or formalization project.", pathFormat: "relative" },
+      { id: "artifact_root", name: "Artifact Root", description: "Relative to durable generated research artifacts.", pathFormat: "relative" },
+      { id: "external", name: "External", description: "A stable external paper, database, or review reference.", pathFormat: "either" },
+    ],
+    relations: [
+      { id: "depends-on", name: "Depends On", description: "The source argument or result uses the target." },
+      { id: "proves", name: "Proves", description: "The source establishes the target statement." },
+      { id: "refutes", name: "Refutes", description: "The source falsifies the target statement." },
+      { id: "generalizes", name: "Generalizes", description: "The source strictly extends the target result or construction." },
+      { id: "specializes", name: "Specializes", description: "The source is a constrained instance of the target." },
+      { id: "equivalent-to", name: "Equivalent To", description: "The source and target are established equivalent formulations." },
+      { id: "verifies", name: "Verifies", description: "The source independently checks the target." },
+      { id: "motivates", name: "Motivates", description: "The source provides evidence or structure motivating the target." },
+    ],
+    defaultNodeLimit: 16,
+    defaultCharacterBudget: 32_000,
+  },
+  workflows: [
+    {
+      id: "exploration",
+      name: "Exploration",
+      description: "Map a problem, generate conjectures, test examples, and identify promising structures without presuming the answer.",
+      goalSuggestionCount: 4,
+      default: true,
+      goalSuggestionInstructions: [
+        "Pair a precise mathematical object or problem family with a genuinely discriminating exploratory direction.",
+        "Favor small cases, counterexample search, equivalent formulations, known boundary cases, and cross-domain connections over generic requests to solve the whole problem.",
+      ],
+      promptInstructions: ["Explore broadly while keeping statements, computations, and open proof obligations explicit."],
+      outputRequirements: ["Promising conjectures or obstructions, reproducible checks, and the next highest-value mathematical questions."],
+    },
+    {
+      id: "proof",
+      name: "Proof",
+      description: "Develop a rigorous proof or disproof from a precise target statement.",
+      goalSuggestionCount: 4,
+      goalSuggestionInstructions: ["Choose targets with enough established structure to support a long-horizon proof, disproof, reduction, or construction attempt."],
+      promptInstructions: ["Track every dependency and gap; actively search for counterexamples and hidden assumptions while constructing the argument."],
+      outputRequirements: ["A complete proof or counterexample when achieved, otherwise the strongest verified lemmas and an exact account of remaining gaps."],
+    },
+    {
+      id: "verification",
+      name: "Verification",
+      description: "Audit a mathematical claim through independent derivation, formalization, computation, and literature comparison.",
+      goalSuggestionCount: 4,
+      goalSuggestionInstructions: ["Select claims whose correctness, novelty, edge cases, or proof dependencies can be tested independently."],
+      promptInstructions: ["Do not repair the target silently; identify the first unsupported step, then verify a corrected statement separately if useful."],
+      outputRequirements: ["An auditable verdict with evidence, explicit proof obligations, and reproducible formal or computational checks where practical."],
+    },
+    {
+      id: "synthesis",
+      name: "Synthesis",
+      description: "Turn established results into a coherent manuscript, formal development, or reusable research map.",
+      goalSuggestionCount: 4,
+      goalSuggestionInstructions: ["Organize verified results and clearly separate new contributions, known literature, conjectural extensions, and unresolved limitations."],
+      promptInstructions: ["Preserve exact statements, dependencies, citations, and verification provenance."],
+      outputRequirements: ["A self-contained research artifact whose claims are traceable to proofs, computations, formalizations, or cited literature."],
+    },
+  ],
+  capabilities: {
+    defaultToolFamilies: ["shell"],
+    disabledToolFamilies: [],
+    allowedSideEffects: ["none", "read", "write", "process"],
+    selectedSkillIds: [],
+    disabledSkillIds: [],
+    allowedMcpServerIds: [],
+    memoryEnabled: true,
+    runbooksEnabled: true,
+    collaborationEnabled: true,
+  },
+  workspace: {
+    workspaceNoun: "Mathematics workspace",
+    subjectNoun: "Problem domain",
+    boundaryNoun: "Research scope",
+    authorizationMode: "optional",
+    boundaryInstructions: [
+      "Treat the recorded scope as a relevance boundary for files, formalizations, datasets, and literature rather than as evidence that a mathematical claim is true.",
+      "External sources and user-provided claims are inputs to verify, not authoritative proof steps.",
+    ],
+    materialKinds: ["repo", "path", "documentation"],
+  },
+  modelJobs: {},
+  presentation: {
+    newResearchLabel: "New Mathematics Research",
+    memoryLabel: "Memory",
+    runbookLabel: "Runbooks",
+    sessionLabel: "Mathematics Session",
+    sessionHeatPalette: {
+      low: "#45b8d8",
+      medium: "#4f87e8",
+      high: "#7768e8",
+      critical: "#b14ee8",
+    },
+  },
+};
+
+export const BUNDLED_RESEARCH_PROFILE_IDS = ["security-research", "mathematics"] as const;
+export type BundledResearchProfileId = typeof BUNDLED_RESEARCH_PROFILE_IDS[number];
+
+export function bundledResearchProfile(profileId: BundledResearchProfileId): ResearchProfile {
+  return profileId === "mathematics"
+    ? DEFAULT_MATHEMATICS_RESEARCH_PROFILE
+    : DEFAULT_SECURITY_RESEARCH_PROFILE;
+}
 
 export function getDefaultResearchProfilePath(workspaceRoot: string = process.cwd()): string {
   return resolve(workspaceRoot, DEFAULT_RESEARCH_PROFILE_RELATIVE_PATH);
@@ -510,6 +936,7 @@ export async function resolveResearchProfile(options: {
   workspaceRoot?: string;
   profilePath?: string;
   profile?: unknown;
+  bundledProfileId?: BundledResearchProfileId;
 } = {}): Promise<ResolvedResearchProfile> {
   if (options.profile !== undefined) {
     const profile = normalizeResearchProfile(options.profile);
@@ -519,6 +946,10 @@ export async function resolveResearchProfile(options: {
     const path = resolve(options.profilePath);
     const profile = await loadResearchProfile(path);
     return { profile, hash: researchProfileHash(profile), source: "explicit", path };
+  }
+  if (options.bundledProfileId) {
+    const profile = normalizeResearchProfile(bundledResearchProfile(options.bundledProfileId));
+    return { profile, hash: researchProfileHash(profile), source: "bundled-default" };
   }
   const path = getDefaultResearchProfilePath(options.workspaceRoot);
   if (await pathExists(path)) {
@@ -705,7 +1136,7 @@ function normalizeMemoryType(
   const id = identifier(input.id, `memory type ${index} id`);
   assertKnownKeys(input, [
     "id", "name", "pluralName", "description", "lifecycle", "creatable", "replacedBy", "requiresExplicitStatus", "aliases",
-    "group", "icon", "color", "order", "defaultStatus", "allowedStatuses", "contextWeight", "attributes", "requirements",
+    "group", "icon", "color", "order", "defaultStatus", "allowedStatuses", "sessionHeat", "contextWeight", "attributes", "requirements",
   ], `memory type ${id}`);
   const allowedStatuses = stringArray(input.allowedStatuses, `memory type ${id} allowedStatuses`).map((status) => identifier(status, `memory type ${id} status`));
   if (allowedStatuses.length === 0) throw new Error(`Memory type ${id} must allow at least one status.`);
@@ -714,6 +1145,12 @@ function normalizeMemoryType(
   }
   const defaultStatus = identifier(input.defaultStatus, `memory type ${id} defaultStatus`);
   if (!allowedStatuses.includes(defaultStatus)) throw new Error(`Memory type ${id} defaultStatus must be allowed.`);
+  const sessionHeat = input.sessionHeat === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(record(input.sessionHeat, `memory type ${id} sessionHeat`)).map(([status, heat]) => {
+        if (!allowedStatuses.includes(status)) throw new Error(`Memory type ${id} sessionHeat uses disallowed status ${status}.`);
+        return [status, sessionHeatLevel(heat, `memory type ${id} sessionHeat ${status}`)];
+      }));
   const lifecycle = input.lifecycle === undefined ? "active" : input.lifecycle;
   if (lifecycle !== "active" && lifecycle !== "retired") {
     throw new Error(`Memory type ${id} has invalid lifecycle.`);
@@ -773,6 +1210,7 @@ function normalizeMemoryType(
     order: finiteNumber(input.order, `memory type ${id} order`),
     defaultStatus,
     allowedStatuses,
+    ...(sessionHeat ? { sessionHeat } : {}),
     ...(input.contextWeight === undefined ? {} : { contextWeight: finiteNumber(input.contextWeight, `memory type ${id} contextWeight`) }),
     ...(attributes ? { attributes } : {}),
     ...(requirements ? { requirements } : {}),
@@ -918,13 +1356,38 @@ function normalizeModelJobs(value: unknown): ResearchProfileModelJobs {
 
 function normalizePresentation(value: unknown): ResearchProfilePresentation {
   const input = record(value, "Research profile presentation");
-  assertKnownKeys(input, ["newResearchLabel", "memoryLabel", "runbookLabel", "sessionLabel"], "Research profile presentation");
+  assertKnownKeys(input, ["newResearchLabel", "memoryLabel", "runbookLabel", "sessionLabel", "sessionHeatPalette"], "Research profile presentation");
+  const palette = input.sessionHeatPalette === undefined
+    ? undefined
+    : record(input.sessionHeatPalette, "session heat palette");
+  if (palette) assertKnownKeys(palette, ["low", "medium", "high", "critical"], "session heat palette");
   return {
     newResearchLabel: nonEmptyString(input.newResearchLabel, "new research label"),
     memoryLabel: nonEmptyString(input.memoryLabel, "memory label"),
     runbookLabel: nonEmptyString(input.runbookLabel, "runbook label"),
     sessionLabel: nonEmptyString(input.sessionLabel, "session label"),
+    ...(palette ? {
+      sessionHeatPalette: {
+        low: hexColor(palette.low, "session heat low color"),
+        medium: hexColor(palette.medium, "session heat medium color"),
+        high: hexColor(palette.high, "session heat high color"),
+        critical: hexColor(palette.critical, "session heat critical color"),
+      },
+    } : {}),
   };
+}
+
+function sessionHeatLevel(value: unknown, label: string): ResearchProfileSessionHeat {
+  if (value !== "none" && value !== "low" && value !== "medium" && value !== "high" && value !== "critical") {
+    throw new Error(`${label} is invalid.`);
+  }
+  return value;
+}
+
+function hexColor(value: unknown, label: string): string {
+  const color = nonEmptyString(value, label);
+  if (!/^#[a-f\d]{6}$/iu.test(color)) throw new Error(`${label} must be a six-digit hex color.`);
+  return color.toLowerCase();
 }
 
 function stableJson(value: unknown): string {

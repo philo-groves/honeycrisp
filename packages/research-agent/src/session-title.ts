@@ -1,10 +1,17 @@
-import type {
-  AssistantMessage,
-  Models,
-  ThinkingLevel,
+import {
+  isRetryableAssistantError,
+  type AssistantMessage,
+  type Models,
+  type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
 import type { ResearchProfile } from "./research-profile.js";
+
+/*
+ * Title generation is deliberately independent from the main agent turn. Keep
+ * its retry budget small so a provider incident cannot delay session startup.
+ */
+const TITLE_RETRY_DELAYS_MS = [250, 750] as const;
 
 export interface GenerateResearchSessionTitleOptions {
   provider: string;
@@ -53,28 +60,57 @@ export async function generateResearchSessionTitle(
           `Do not use quotes, markdown, a trailing period, or generic wording such as ${options.researchProfile.name}.`,
         ].join(" ")
       : SECURITY_TITLE_SYSTEM_PROMPT;
-    const response = await models.completeSimple(
-      model,
-      {
-        systemPrompt,
-        messages: [
+    const signal = options.signal
+      ? AbortSignal.any([controller.signal, options.signal])
+      : controller.signal;
+    let response: AssistantMessage | undefined;
+    for (let attempt = 0; attempt <= TITLE_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        response = await models.completeSimple(
+          model,
           {
-            role: "user",
-            content: boundedPrompt(options.prompt),
-            timestamp: Date.now(),
+            systemPrompt,
+            messages: [
+              {
+                role: "user",
+                content: boundedPrompt(options.prompt),
+                timestamp: Date.now(),
+              },
+            ],
           },
-        ],
-      },
-      {
-        reasoning: options.effort ?? "medium",
-        maxTokens: 128,
-        signal: options.signal
-          ? AbortSignal.any([controller.signal, options.signal])
-          : controller.signal,
-      },
-    );
-    if (response.stopReason === "error" || response.stopReason === "aborted") {
-      throw new Error(response.errorMessage ?? "Title model did not return a title.");
+          {
+            reasoning: options.effort ?? "medium",
+            maxTokens: 128,
+            signal,
+          },
+        );
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (
+          attempt >= TITLE_RETRY_DELAYS_MS.length
+          || signal.aborted
+          || !isRetryableTitleErrorMessage(errorMessage)
+          || !(await retryDelay(TITLE_RETRY_DELAYS_MS[attempt] ?? 0, signal))
+        ) {
+          throw error;
+        }
+        continue;
+      }
+
+      if (response.stopReason === "aborted") {
+        throw new Error(response.errorMessage ?? "Title generation was aborted.");
+      }
+      if (response.stopReason !== "error") break;
+      if (
+        attempt >= TITLE_RETRY_DELAYS_MS.length
+        || !isRetryableTitleError(response)
+        || !(await retryDelay(TITLE_RETRY_DELAYS_MS[attempt] ?? 0, signal))
+      ) {
+        throw new Error(response.errorMessage ?? "Title model did not return a title.");
+      }
+    }
+    if (!response || response.stopReason === "error") {
+      throw new Error(response?.errorMessage ?? "Title model did not return a title.");
     }
     const title = normalizeResearchSessionTitle(assistantText(response));
     if (!title) throw new Error("Title model returned an empty title.");
@@ -82,6 +118,40 @@ export async function generateResearchSessionTitle(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isRetryableTitleError(message: AssistantMessage): boolean {
+  return isRetryableAssistantError(message)
+    || isRetryableTitleErrorMessage(message.errorMessage ?? "");
+}
+
+function isRetryableTitleErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("overloaded")
+    || normalized.includes("temporarily unavailable")
+    || normalized.includes("unexpected server error")
+    || normalized.includes("internal server error")
+    || normalized.includes("server_error")
+    || normalized.includes("rate limit")
+    || normalized.includes("too many requests")
+    || normalized.includes("timeout")
+    || normalized.includes("timed out")
+    || normalized.includes("connection reset");
+}
+
+function retryDelay(delayMs: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve(true);
+    }, delayMs);
+    const abort = () => {
+      clearTimeout(timeout);
+      resolve(false);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export function normalizeResearchSessionTitle(value: string): string {

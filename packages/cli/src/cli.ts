@@ -24,6 +24,7 @@ import {
   createResearchToolRegistry,
   createShellTool,
   createShellSafetyAuthorizer,
+  BUNDLED_RESEARCH_PROFILE_IDS,
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   DEFAULT_SHELL_REVIEW_MODELS,
   createResearchWorkspaceContext,
@@ -98,6 +99,7 @@ import type {
   ShellNetworkAuthorization,
   ShellReviewerSelection,
   ShellSafetyMode,
+  BundledResearchProfileId,
 } from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
@@ -257,6 +259,7 @@ interface ParsedProfileArgs {
   command: string | undefined;
   workspaceRoot: string;
   profilePath: string | undefined;
+  profileId: BundledResearchProfileId | undefined;
   json: boolean;
   help: boolean;
 }
@@ -653,6 +656,7 @@ function parseProfileArgs(argv: readonly string[]): ParsedProfileArgs {
   const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
   let workspaceRoot = process.cwd();
   let profilePath: string | undefined;
+  let profileId: BundledResearchProfileId | undefined;
   let json = false;
   let help = false;
   const positionals: string[] = [];
@@ -664,6 +668,13 @@ function parseProfileArgs(argv: readonly string[]): ParsedProfileArgs {
       index += 1;
     } else if (arg === "--profile") {
       profilePath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--profile-id") {
+      const value = readOptionValue(argv, index, arg);
+      if (!BUNDLED_RESEARCH_PROFILE_IDS.includes(value as BundledResearchProfileId)) {
+        throw new Error(`--profile-id must be one of: ${BUNDLED_RESEARCH_PROFILE_IDS.join(", ")}.`);
+      }
+      profileId = value as BundledResearchProfileId;
       index += 1;
     } else if (arg === "--json") {
       json = true;
@@ -679,11 +690,15 @@ function parseProfileArgs(argv: readonly string[]): ParsedProfileArgs {
   if (positionals.length > 0) {
     throw new Error(`Unexpected profile argument(s): ${positionals.join(" ")}`);
   }
+  if (profilePath && profileId) {
+    throw new Error("--profile and --profile-id cannot be used together.");
+  }
 
   return {
     command,
     workspaceRoot,
     profilePath,
+    profileId,
     json,
     help,
   };
@@ -1453,9 +1468,9 @@ function usage(): string {
 
 function profileUsage(): string {
   return [
-    "Usage: honeycrisp profile resolve --workspace-root <path> [--profile <path>] --json",
+    "Usage: honeycrisp profile resolve --workspace-root <path> [--profile <path> | --profile-id <security-research|mathematics>] --json",
     "",
-    "Resolves an explicit profile first, then .honeycrisp/profile.json, then the bundled security profile.",
+    "Resolves an explicit profile or selected bundled profile, then .honeycrisp/profile.json, then the bundled security profile.",
   ].join("\n");
 }
 
@@ -1472,6 +1487,7 @@ async function handleProfileCommand(argv: readonly string[]): Promise<void> {
   const resolvedProfile = await resolveResearchProfile({
     workspaceRoot: args.workspaceRoot,
     ...(args.profilePath ? { profilePath: args.profilePath } : {}),
+    ...(args.profileId ? { bundledProfileId: args.profileId } : {}),
   });
   const envelope = {
     catalogProtocolVersion: PROFILE_CATALOG_PROTOCOL_VERSION,

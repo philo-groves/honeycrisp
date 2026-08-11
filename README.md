@@ -46,7 +46,7 @@ Runbooks are workspace-scoped, revisioned Jupyter `nbformat 4` artifacts for reu
 
 ## Research profiles
 
-Honeycrisp is a general research harness with a bundled security-research profile as its default. A research profile controls the agent role and posture, workflows, durable-memory vocabulary and validation, capability requests and feature switches, workspace language, auxiliary model jobs, and presentation labels. It does not replace host safety policy or grant authority.
+Honeycrisp is a general research harness with bundled `security-research` and `mathematics` profiles; security research remains the default. A research profile controls the agent role and posture, workflows, durable-memory vocabulary and validation, capability requests and feature switches, workspace language, auxiliary model jobs, and presentation labels. It does not replace host safety policy or grant authority.
 
 Honeycrisp resolves one profile before a run, in this order:
 
@@ -58,6 +58,7 @@ The normalized profile and its domain-separated SHA-256 hash are captured with t
 
 ```sh
 pnpm start profile resolve --workspace-root . --json
+pnpm start profile resolve --workspace-root . --profile-id mathematics --json
 pnpm start profile resolve --workspace-root . --profile ./profile.json --json
 ```
 

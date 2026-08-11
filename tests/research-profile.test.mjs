@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  DEFAULT_MATHEMATICS_RESEARCH_PROFILE,
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   createDeterministicAgentExecutor,
   createResearchSystemPrompt,
@@ -28,6 +29,27 @@ test("research profiles normalize to immutable, deterministic snapshots", () => 
   assert.notEqual(researchProfileHash(profile), researchProfileHash(normalizeResearchProfile(changed)));
 });
 
+test("bundled profiles own their session heat palettes and memory-status defaults", () => {
+  const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
+
+  assert.deepEqual(security.presentation.sessionHeatPalette, {
+    low: "#cdaa32",
+    medium: "#e8842c",
+    high: "#ff4a54",
+    critical: "#b4121c",
+  });
+  assert.equal(security.memory.types.find((type) => type.id === "chain")?.sessionHeat.confirmed, "critical");
+  assert.deepEqual(mathematics.presentation.sessionHeatPalette, {
+    low: "#45b8d8",
+    medium: "#4f87e8",
+    high: "#7768e8",
+    critical: "#b14ee8",
+  });
+  assert.equal(mathematics.memory.types.find((type) => type.id === "theorem")?.sessionHeat.verified, "critical");
+  assert.equal(mathematics.memory.types.find((type) => type.id === "formalization")?.sessionHeat.verified, "medium");
+});
+
 test("research profile validation rejects silent schema drift", () => {
   const unknownRootField = { ...structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE), typoedWorkflows: [] };
   assert.throws(() => normalizeResearchProfile(unknownRootField), /unknown field: typoedWorkflows/);
@@ -41,6 +63,14 @@ test("research profile validation rejects silent schema drift", () => {
     score: { type: "number", description: "A bounded score.", enum: [Number.NaN] },
   };
   assert.throws(() => normalizeResearchProfile(invalidEnum), /enum does not match/);
+
+  const invalidHeatStatus = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  invalidHeatStatus.memory.types[0].sessionHeat = { unrecorded: "high" };
+  assert.throws(() => normalizeResearchProfile(invalidHeatStatus), /sessionHeat uses disallowed status unrecorded/);
+
+  const invalidHeatColor = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  invalidHeatColor.presentation.sessionHeatPalette.low = "red";
+  assert.throws(() => normalizeResearchProfile(invalidHeatColor), /must be a six-digit hex color/);
 
   const emptyEnabledMemory = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
   emptyEnabledMemory.memory.types = [];
@@ -283,8 +313,8 @@ function generalResearchProfile() {
     modelJobs: {},
     presentation: {
       newResearchLabel: "New Study",
-      memoryLabel: "Knowledge",
-      runbookLabel: "Methods",
+      memoryLabel: "Memory",
+      runbookLabel: "Runbooks",
       sessionLabel: "Study Session",
     },
   };

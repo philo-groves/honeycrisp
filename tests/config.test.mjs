@@ -14,12 +14,28 @@ import {
   writeResearchModelConfig,
 } from "../packages/research-agent/dist/index.js";
 
-test("built-in Codex model catalog includes GPT-5.6 Sol", () => {
+test("authenticated model catalog includes current supplemental models", () => {
   const models = createAuthenticatedModels();
-  const model = models.getModel("openai-codex", "gpt-5.6-sol");
+  const opus = models.getModel("anthropic", "claude-opus-5");
+  const daybreak = models.getModel("openai-codex", "gpt-daybreak-blue-latest");
 
-  assert.equal(model?.id, "gpt-5.6-sol");
-  assert.equal(model?.provider, "openai-codex");
+  assert.equal(opus?.name, "Claude Opus 5");
+  assert.equal(opus?.provider, "anthropic");
+  assert.equal(opus?.contextWindow, 1_000_000);
+  assert.equal(daybreak?.name, "Daybreak Blue");
+  assert.equal(daybreak?.provider, "openai-codex");
+  assert.equal(daybreak?.contextWindow, 272_000);
+});
+
+test("provider catalogs expose current supplemental models to frontends", () => {
+  const [anthropic] = getProviderModelCatalog("anthropic");
+  const [openai] = getProviderModelCatalog("openai-codex");
+
+  assert.ok(anthropic?.models.some((model) => model.id === "claude-opus-5"));
+  const daybreak = openai?.models.find(
+    (model) => model.id === "gpt-daybreak-blue-latest",
+  );
+  assert.deepEqual(daybreak?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
 });
 
 test("provider catalog reports Pi model names and model-specific effort levels", () => {

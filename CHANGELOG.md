@@ -4,12 +4,16 @@
 
 ### Added
 
+- Added a bundled Mathematics research profile with domain-specific memory types, evidence rules, relations, and exploration, proof, verification, and synthesis workflows; `profile resolve --profile-id mathematics` exposes it to host frontends.
 - Added a narrow `@honeycrisp/research-agent/workspace-tools` compatibility surface and stored workspace resolvers for external local agents, including deterministic workspace identity, Beale research-subject precedence, external session membership, recorded authorization projection, and hash-validated active research-profile snapshots with workspace-profile fallback.
 - Added strict schema-v1 research profiles with a bundled security default, workspace and explicit resolution, deterministic hashed snapshots, arbitrary workflows, domain-specific agent and workspace language, dynamic memory catalogs, capability defaults, auxiliary model-job routes, presentation labels, a resolver CLI envelope, and a complete general-research example.
 - Added Manual Approval, provider-small-model Auto-Review, and Danger Mode authorization for host shell commands, including live mode changes and correlated concurrent approval responses.
 
 ### Changed
 
+- Research profiles can now define a session-heat palette and status-specific heat for each memory type; the bundled Security Research and Mathematics profiles include distinct defaults.
+- Standardized the bundled Mathematics profile presentation labels on Memory and Runbooks.
+- Extended the built-in provider catalog with Claude Opus 5 and the OpenAI Codex `gpt-daybreak-blue-latest` model for runtime selection and host frontends.
 - Made durable memory type and status IDs open profile-defined strings, with renameable display names, aliases, retirement and replacement metadata, typed attributes, conditional evidence/asset/neighbor requirements, status polarity and context weighting, profile-aware tool schemas and model context, and readable grandfathered rows whose stored IDs are retired or unknown.
 - Added bounded JSON attribute and evidence inputs to standalone memory save and correction commands so profile-required schemas can be satisfied outside an agent run.
 - Added immutable, separately hashed memory-catalog provenance so workflow-only profile changes share compatible nodes, incompatible catalogs do not silently merge identities, and legacy rows remain explicitly unrecorded.
@@ -30,6 +34,7 @@
 
 ### Fixed
 
+- Retried transient provider and transport failures during background session-title generation before reporting the title job as failed.
 - Aligned memory tool schemas and research-agent guidance on lowercase-hyphenated root-cause keys while treating source, sink, and asset links as recommended rather than required for confirmed chains.
 - Prevented long research turns from retaining full-context deep copies for ordinary and parallel tool calls; spawn inheritance uses bounded structural snapshots, while model-visible tool details omit full outputs that remain available in canonical observed events and artifacts.
 - Aborted the underlying tool execution when its runtime budget expires so a late shell approval cannot spawn a process after the command was reported blocked.

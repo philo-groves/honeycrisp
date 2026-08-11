@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
+  DEFAULT_MATHEMATICS_RESEARCH_PROFILE,
   researchProfileHash,
 } from "../packages/research-agent/dist/index.js";
 
@@ -32,6 +33,35 @@ test("profile resolve returns the versioned bundled-default catalog envelope", a
     assert.equal(envelope.profile.id, "security-research");
     assert.equal(envelope.hash, researchProfileHash(envelope.profile));
     assert.equal("path" in envelope, false);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("profile resolve selects the bundled mathematics research catalog", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-profile-mathematics-"));
+  try {
+    const result = runCli([
+      "profile",
+      "resolve",
+      "--workspace-root",
+      workspaceRoot,
+      "--profile-id",
+      "mathematics",
+      "--json",
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const envelope = JSON.parse(result.stdout);
+
+    assert.equal(envelope.source, "bundled-default");
+    assert.equal(envelope.profile.id, "mathematics");
+    assert.equal(envelope.hash, researchProfileHash(envelope.profile));
+    assert.deepEqual(
+      envelope.profile.memory.types.map((type) => type.id),
+      DEFAULT_MATHEMATICS_RESEARCH_PROFILE.memory.types.map((type) => type.id),
+    );
+    assert.ok(envelope.profile.memory.types.some((type) => type.id === "formalization"));
+    assert.ok(envelope.profile.memory.types.some((type) => type.id === "counterexample"));
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

@@ -54,6 +54,47 @@ test("research session title normalization removes response decoration and bound
   );
 });
 
+test("research session titles retry transient provider failures", async () => {
+  let attempts = 0;
+  const title = await generateResearchSessionTitle({
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+    prompt: "Investigate the Erdős-Straus conjecture.",
+    models: {
+      getModel() { return { provider: "openai-codex", id: "gpt-5.6-luna" }; },
+      async completeSimple() {
+        attempts += 1;
+        if (attempts === 1) {
+          return {
+            role: "assistant",
+            content: [],
+            api: "fixture",
+            provider: "openai-codex",
+            model: "gpt-5.6-luna",
+            usage: {},
+            stopReason: "error",
+            errorMessage: "Our servers are currently overloaded. Please try again later.",
+            timestamp: Date.now(),
+          };
+        }
+        return {
+          role: "assistant",
+          content: [{ type: "text", text: "Erdős-Straus Conjecture Investigation" }],
+          api: "fixture",
+          provider: "openai-codex",
+          model: "gpt-5.6-luna",
+          usage: {},
+          stopReason: "stop",
+          timestamp: Date.now(),
+        };
+      },
+    },
+  });
+
+  assert.equal(title, "Erdős-Straus Conjecture Investigation");
+  assert.equal(attempts, 2);
+});
+
 test("research session titles use profile vocabulary", async () => {
   let systemPrompt = "";
   await generateResearchSessionTitle({

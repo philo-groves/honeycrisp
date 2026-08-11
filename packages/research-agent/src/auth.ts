@@ -3,11 +3,14 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type {
+  Api,
   AuthInteraction,
   Credential,
   CredentialInfo,
   CredentialStore,
+  Model,
   Models,
+  MutableModels,
   OAuthCredential,
 } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -66,6 +69,73 @@ export interface ProviderModelCatalog {
 }
 
 type CredentialFile = Record<string, Credential>;
+
+const ADDITIONAL_PROVIDER_MODELS: Readonly<Record<string, readonly Model<Api>[]>> = {
+  anthropic: [
+    {
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      compat: {
+        forceAdaptiveThinking: true,
+        supportsTemperature: false,
+      },
+      reasoning: true,
+      thinkingLevelMap: {
+        xhigh: "xhigh",
+        max: "max",
+      },
+      input: ["text", "image"],
+      cost: {
+        input: 5,
+        output: 25,
+        cacheRead: 0.5,
+        cacheWrite: 6.25,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+  ],
+  "openai-codex": [
+    {
+      id: "gpt-daybreak-blue-latest",
+      name: "Daybreak Blue",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+      compat: {
+        supportsToolSearch: true,
+      },
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        xhigh: "xhigh",
+        max: "max",
+      },
+      input: ["text", "image"],
+      cost: {
+        input: 5,
+        output: 30,
+        cacheRead: 0.5,
+        cacheWrite: 0,
+        tiers: [
+          {
+            inputTokensAbove: 272_000,
+            input: 10,
+            output: 45,
+            cacheRead: 1,
+            cacheWrite: 0,
+          },
+        ],
+      },
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+    },
+  ],
+};
 
 export class FileCredentialStore implements CredentialStore {
   readonly #authFile: string;
@@ -219,13 +289,13 @@ export function createCredentialStore(
 export function createAuthenticatedModels(
   options: FileCredentialStoreOptions = {},
 ): Models {
-  return builtinModels({
+  return honeycrispModels({
     credentials: createCredentialStore(options),
   });
 }
 
 export function listAuthProviders(): AuthProviderSummary[] {
-  return builtinModels()
+  return honeycrispModels()
     .getProviders()
     .map((provider) => ({
       id: provider.id,
@@ -237,7 +307,7 @@ export function listAuthProviders(): AuthProviderSummary[] {
 }
 
 export function getProviderModelCatalog(providerId?: string): ProviderModelCatalog[] {
-  const models = builtinModels();
+  const models = honeycrispModels();
   return models
     .getProviders()
     .filter((provider) => !providerId || provider.id === providerId)
@@ -286,7 +356,7 @@ export async function loginAuthProvider(
   options: FileCredentialStoreOptions = {},
 ): Promise<AuthLoginResult> {
   const store = createCredentialStore(options);
-  const models = builtinModels();
+  const models = honeycrispModels();
   const provider = models.getProvider(providerId);
 
   if (!provider) {
@@ -325,7 +395,7 @@ export async function verifyProviderAuth(
   options: FileCredentialStoreOptions = {},
 ): Promise<AuthVerifyResult> {
   const store = createCredentialStore(options);
-  const models = builtinModels({
+  const models = honeycrispModels({
     credentials: store,
   });
   const provider = models.getProvider(providerId);
@@ -429,6 +499,45 @@ function getProviderAuthMethods(
   }
 
   return methods;
+}
+
+function honeycrispModels(
+  options?: Parameters<typeof builtinModels>[0],
+): MutableModels {
+  const models = builtinModels(options);
+
+  for (const [providerId, additionalModels] of Object.entries(
+    ADDITIONAL_PROVIDER_MODELS,
+  )) {
+    const provider = models.getProvider(providerId);
+    if (!provider) continue;
+
+    const augmentedProvider = new Proxy(provider, {
+      get(target, property, receiver) {
+        if (property === "getModels") {
+          return () => mergeProviderModels(target.getModels(), additionalModels);
+        }
+
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    models.setProvider(augmentedProvider);
+  }
+
+  return models;
+}
+
+function mergeProviderModels(
+  builtInModels: readonly Model<Api>[],
+  additionalModels: readonly Model<Api>[],
+): Model<Api>[] {
+  const additionsById = new Map(additionalModels.map((model) => [model.id, model]));
+  return [
+    ...builtInModels.filter((model) => !additionsById.has(model.id)),
+    ...additionalModels,
+  ].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function isNotFoundError(error: unknown): boolean {
