@@ -15,6 +15,7 @@ import type {
   ResolvedResearchProfile,
 } from "./research-profile.js";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
+import { resolveStoredResearchWorkspaceBinding } from "./workspace-binding.js";
 
 const require = createRequire(import.meta.url);
 const NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE = normalizeResearchProfile(
@@ -274,7 +275,16 @@ export class MemoryGraphStore {
     this.databasePath = options.databasePath ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     mkdirSync(dirname(this.databasePath), { recursive: true });
     const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSync };
-    const context = normalizeMemoryContext(options.context ?? readStoredMemoryContext(DatabaseSync, this.databasePath, workspaceRoot), workspaceRoot);
+    const storedBinding = options.context
+      ? undefined
+      : resolveStoredResearchWorkspaceBinding({
+          workspaceRoot,
+          databasePath: this.databasePath,
+        });
+    const context = normalizeMemoryContext(
+      options.context ?? storedBinding?.memoryContext,
+      workspaceRoot,
+    );
     this.local = this.openBinding(DatabaseSync, this.databasePath, context);
   }
 
@@ -1819,38 +1829,6 @@ function validateNodeShape(input: {
   if (input.confidence !== undefined && (typeof input.confidence !== "number" || input.confidence < 0 || input.confidence > 1)) throw new Error("Memory confidence must be between 0 and 1.");
   if (input.attributes !== undefined && !isRecord(input.attributes)) throw new Error("Memory node attributes must be an object.");
   if (input.links !== undefined && !Array.isArray(input.links)) throw new Error("Memory node links must be an array.");
-}
-
-function readStoredMemoryContext(
-  Database: new (path: string) => DatabaseSync,
-  databasePath: string,
-  workspaceRoot: string,
-): MemoryContext | undefined {
-  const database = new Database(databasePath);
-  try {
-    const tables = new Set(
-      (database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name?: unknown }>)
-        .flatMap((row) => typeof row.name === "string" ? [row.name] : []),
-    );
-    if (!tables.has("workspaces") || !tables.has("scope_versions")) return undefined;
-    const workspaceRow = database.prepare("SELECT id FROM workspaces WHERE workspace_path = ?").get(resolve(workspaceRoot)) as { id?: unknown } | undefined;
-    const workspaceId = typeof workspaceRow?.id === "string" ? workspaceRow.id.trim() : "";
-    if (!workspaceId) return undefined;
-    const scopeRow = database
-      .prepare("SELECT workspace_name, scope_owner FROM scope_versions WHERE workspace_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1")
-      .get(workspaceId) as Record<string, unknown> | undefined;
-    const workspaceName = typeof scopeRow?.workspace_name === "string" && scopeRow.workspace_name.trim() ? scopeRow.workspace_name.trim() : "Workspace";
-    const recordedSubjectName = typeof scopeRow?.scope_owner === "string" && scopeRow.scope_owner.trim() ? scopeRow.scope_owner.trim() : undefined;
-    const subjectName = recordedSubjectName ?? workspaceName;
-    return {
-      workspaceId,
-      workspaceName,
-      subjectId: recordedSubjectName ? stableSubjectId(recordedSubjectName) : fallbackSubjectId(workspaceId),
-      subjectName,
-    };
-  } finally {
-    database.close();
-  }
 }
 
 function normalizeMemoryContext(context: MemoryContext | undefined, workspaceRoot: string): MemoryContext {

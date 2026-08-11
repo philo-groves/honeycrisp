@@ -17,6 +17,7 @@ export * from "./tool-policy.js";
 export * from "./ids.js";
 export * from "./flow-capture.js";
 export * from "./workspace-context.js";
+export * from "./workspace-binding.js";
 export * from "./storage.js";
 export * from "./local-inspection.js";
 export * from "./tool-registry.js";
