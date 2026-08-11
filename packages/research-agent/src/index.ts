@@ -2,7 +2,6 @@ export * from "./memory-graph.js";
 export * from "./memory-taxonomy.js";
 export * from "./database-migrations.js";
 export * from "./memory-graph-tools.js";
-export * from "./memory-curator.js";
 export * from "./runbooks.js";
 export * from "./runbook-tools.js";
 export * from "./model-context.js";

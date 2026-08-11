@@ -13,7 +13,7 @@ import {
   createLocalInspectionObservationEvent,
   createLocalInspectionTool,
   createDeterministicAgentExecutor,
-  createCuratedMemoryTools,
+  createMemoryGraphTools,
   createRunbookTools,
   compileMemoryModelContext,
   createPiAgentExecutor,
@@ -171,8 +171,6 @@ interface ParsedArgs {
   shellSafetyMode: ShellSafetyMode;
   shellReviewModels: Readonly<Record<string, string>>;
   shellReviewEffort: ResearchModelEffort;
-  memoryModels: Readonly<Record<string, string>>;
-  memoryEffort: ResearchModelEffort;
   memoryTypeDescriptions: MemoryTypeDescriptions;
   maxTokens: number | undefined;
   reasoning: ResearchModelEffort | undefined;
@@ -250,8 +248,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let shellSafetyMode: ShellSafetyMode = "auto_review";
   let shellReviewModels: Readonly<Record<string, string>> = DEFAULT_SHELL_REVIEW_MODELS;
   let shellReviewEffort: ResearchModelEffort = "medium";
-  let memoryModels: Readonly<Record<string, string>> = DEFAULT_SHELL_REVIEW_MODELS;
-  let memoryEffort: ResearchModelEffort = "medium";
   let memoryTypeDescriptions: MemoryTypeDescriptions = DEFAULT_MEMORY_TYPE_DESCRIPTIONS;
   let executor: CliExecutorKind = "agent";
   let toolExecution: CliToolExecutionMode | undefined;
@@ -452,12 +448,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--shell-review-effort") {
       shellReviewEffort = parseShellReviewEffort(readOptionValue(argv, index, arg));
       index += 1;
-    } else if (arg === "--memory-models") {
-      memoryModels = parseProviderModelMap(readOptionValue(argv, index, arg), "--memory-models");
-      index += 1;
-    } else if (arg === "--memory-effort") {
-      memoryEffort = parseAuxiliaryModelEffort(readOptionValue(argv, index, arg), "--memory-effort");
-      index += 1;
     } else if (arg === "--memory-type-descriptions") {
       memoryTypeDescriptions = parseMemoryTypeDescriptionsOption(
         readOptionValue(argv, index, arg),
@@ -524,8 +514,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     shellSafetyMode,
     shellReviewModels,
     shellReviewEffort,
-    memoryModels,
-    memoryEffort,
     memoryTypeDescriptions,
     maxTokens,
     reasoning,
@@ -1132,10 +1120,7 @@ function usage(): string {
     "  --shell-review-models <json> Provider-to-small-reviewer-model JSON object",
     "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3",
     "  --shell-review-effort <level> Small-model review effort (default: medium)",
-    "  --memory-models <json> Provider-to-small-memory-model JSON object",
-    "                         Defaults to the provider-associated small review models",
-    "  --memory-effort <level> Background memory-curator effort (default: medium)",
-    "  --memory-type-descriptions <json> Per-memory-type description overrides used by the agent and curator",
+    "  --memory-type-descriptions <json> Per-memory-type description overrides used by active agents",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --tool-config <path>   Runtime tool preference config (default: .honeycrisp/tools.json)",
     "  --no-default-tool-config Ignore .honeycrisp/tools.json unless --tool-config is provided",
@@ -1300,7 +1285,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         : createRealAgentExecutor(
             args,
             runtimeConfig.toolRegistry,
-            runtimeConfig.memoryGraph,
             (modelConfig = await resolveResearchModelConfig({
               workspaceRoot: args.workspaceRoot,
               ...(args.configPath ? { configPath: args.configPath } : {}),
@@ -1447,7 +1431,6 @@ async function loadCompatibleResumeState(
 function createRealAgentExecutor(
   args: ParsedArgs,
   toolRegistry: ResearchToolRegistry | undefined,
-  memoryGraph: MemoryGraphStore,
   modelConfig: ResolvedResearchModelConfig,
   dispositionRecorder: ResearchDispositionRecorder,
   controlStream: HoneycrispControlStream | undefined,
@@ -1481,23 +1464,6 @@ function createRealAgentExecutor(
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
     memoryTypeDescriptions: args.memoryTypeDescriptions,
     ...(resumableState ? { resumableState } : {}),
-    memoryCurator: {
-      store: memoryGraph,
-      ...(controlStream ? { signal: controlStream.signal } : {}),
-      getModelSelection: (curatorInput) => {
-        const provider = curatorInput.agentPath === "/root"
-          ? controlStream?.getModelSelection()?.provider ?? modelConfig.provider
-          : modelConfig.provider;
-        const memoryModel = args.memoryModels[provider];
-        return memoryModel
-          ? {
-              provider,
-              model: memoryModel,
-              reasoningEffort: args.memoryEffort,
-            }
-          : undefined;
-      },
-    },
     ...(controlStream
       ? {
           getModelSelection: () => controlStream.getModelSelection(),
@@ -2430,7 +2396,7 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   });
-  const memoryTools = createCuratedMemoryTools(memoryGraph);
+  const memoryTools = createMemoryGraphTools(memoryGraph);
   executableTools.push(...memoryTools);
   toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));
   cleanupCallbacks.push(async () => memoryGraph.close());

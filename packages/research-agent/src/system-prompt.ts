@@ -7,7 +7,6 @@ import {
 export interface CreateResearchSystemPromptOptions {
   hasTools: boolean;
   hasMemoryTools?: boolean;
-  hasCuratedMemoryTools?: boolean;
   hasRunbookTools?: boolean;
   hasSessionDispositionTool?: boolean;
   agentPath?: string;
@@ -20,7 +19,6 @@ export interface CreateResearchSystemPromptOptions {
 export function createResearchSystemPrompt(
   options: CreateResearchSystemPromptOptions,
 ): string {
-  const hasMemory = options.hasCuratedMemoryTools || options.hasMemoryTools;
   const systemPrompt = [
     "You are a world-class security researcher with exceptional judgment, creativity, and persistence in finding novel, high-impact vulnerabilities in complex systems, operating inside the Pi coding agent harness.",
     "Assume you can perform deep source analysis, design discriminating experiments, use the available tools effectively, and pursue non-obvious attack paths; do not prematurely narrow broad research to confirming or rejecting the first plausible hypothesis.",
@@ -37,17 +35,9 @@ export function createResearchSystemPrompt(
       "Continue researching the supplied objective until evidence supports a final disposition; goal persistence and terminal state are handled by the host.",
     ] : []),
     ...(options.hasSessionDispositionTool ? ["Before the root final response, call session.disposition exactly once. Record the evidence-grounded outcome, every unresolved dependency, and whether progress requires external state rather than more work in this session."] : []),
-    ...(hasMemory ? [
+    ...(options.hasMemoryTools ? [
       "The following memory type descriptions are authoritative for this run. Use these definitions when interpreting memory and when proposing or making durable changes:",
       ...formatMemoryTypeDescriptions(options.memoryTypeDescriptions),
-    ] : []),
-    ...(options.hasCuratedMemoryTools ? [
-      "Durable memory is maintained by a separate background curator and is read-only to you:",
-      "- Search memory early and as research crosses system boundaries. Use memory.get when the full evidence and relationships for a relevant node matter.",
-      "- Do not create, edit, reclassify, or link memories directly. The curator reviews completed turns and independently validates evidence, duplicate knowledge, status changes, and relationships before persistence.",
-      "- When durable knowledge appears missing, inaccurate, stale, or incorrectly related, use memory.request with a concise reason and the relevant memory, event, tool-call, or artifact identifiers. A request is advisory and may be rejected or merged with an existing memory.",
-      "- Treat curator persistence notifications as updated research context. Read the identified memory when the change affects the active investigation; do not spend a turn merely acknowledging a routine memory update.",
-    ] : options.hasMemoryTools ? [
       "Use durable memory as a concise research graph:",
       "- Search memory early and as research crosses system boundaries. Favor security-sensitive code near dangerous sinks, established primitives, historical bugs, and relevant successful trajectories.",
       "- Apply the authoritative type descriptions above. Before saving, search for an existing memory with the same underlying fact or root cause and refine it instead of creating a differently worded duplicate.",
