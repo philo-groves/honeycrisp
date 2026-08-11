@@ -177,6 +177,13 @@ test("memory context retrieves an older relevant node beyond the recent context 
       summary: "A negative ZFTP length reaches allocation.",
       status: "confirmed",
       tags: ["zftp"],
+      evidence: [{
+        kind: "code",
+        pathBase: "repository",
+        path: "src/zftp.c",
+        locator: { line: 42 },
+        summary: "Signed length reaches the allocation size.",
+      }],
     });
     for (let index = 0; index < 100; index += 1) {
       store.save({
@@ -199,6 +206,68 @@ test("memory context retrieves an older relevant node beyond the recent context 
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });
   }
+});
+
+test("memory context honors profile type weights and default budgets", () => {
+  const profileMemory = {
+    types: [
+      {
+        id: "background",
+        name: "Background",
+        pluralName: "Background",
+        description: "Low-priority background context.",
+        lifecycle: "active",
+        creatable: true,
+        order: 10,
+        defaultStatus: "draft",
+        allowedStatuses: ["draft", "accepted", "dismissed"],
+        contextWeight: 1,
+      },
+      {
+        id: "decision",
+        name: "Decision",
+        pluralName: "Decisions",
+        description: "High-priority research decisions.",
+        lifecycle: "active",
+        creatable: true,
+        order: 20,
+        defaultStatus: "draft",
+        allowedStatuses: ["draft", "accepted", "dismissed"],
+        contextWeight: 200,
+      },
+    ],
+    statuses: [
+      { id: "draft", name: "Draft", description: "In progress.", order: 10, polarity: "neutral" },
+      { id: "accepted", name: "Accepted", description: "Accepted result.", order: 20, polarity: "positive" },
+      { id: "dismissed", name: "Dismissed", description: "Dismissed result.", order: 30, polarity: "negative" },
+    ],
+    evidenceKinds: [],
+    evidencePathBases: [],
+    defaultNodeLimit: 1,
+    defaultCharacterBudget: 4_000,
+  };
+  const selected = selectMemoryModelContext({
+    nodes: [
+      memoryNode({ id: "mem_background", type: "background", status: "draft" }),
+      memoryNode({ id: "mem_decision", type: "decision", status: "draft" }),
+    ],
+    edges: [],
+    prompt: "",
+    profileMemory,
+  });
+
+  assert.deepEqual(selected.map((node) => node.id), ["mem_decision"]);
+
+  const selectedByStatus = selectMemoryModelContext({
+    nodes: [
+      memoryNode({ id: "mem_dismissed", type: "background", status: "dismissed" }),
+      memoryNode({ id: "mem_accepted", type: "background", status: "accepted" }),
+    ],
+    edges: [],
+    prompt: "",
+    profileMemory,
+  });
+  assert.deepEqual(selectedByStatus.map((node) => node.id), ["mem_accepted"]);
 });
 
 function memoryNode(overrides) {

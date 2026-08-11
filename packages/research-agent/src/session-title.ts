@@ -4,6 +4,7 @@ import type {
   ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
+import type { ResearchProfile } from "./research-profile.js";
 
 export interface GenerateResearchSessionTitleOptions {
   provider: string;
@@ -13,9 +14,10 @@ export interface GenerateResearchSessionTitleOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   models?: Pick<Models, "getModel" | "completeSimple">;
+  researchProfile?: Pick<ResearchProfile, "name" | "workspace" | "presentation">;
 }
 
-const TITLE_SYSTEM_PROMPT = [
+const SECURITY_TITLE_SYSTEM_PROMPT = [
   "Create a short title for an authorized security research session from the user's research prompt.",
   "Return only a plain-text title of 3 to 6 words.",
   "Preserve important target, component, and feature names.",
@@ -43,10 +45,18 @@ export async function generateResearchSessionTitle(
   timeout.unref();
 
   try {
+    const systemPrompt = options.researchProfile
+      ? [
+          `Create a short title for a ${options.researchProfile.name} ${options.researchProfile.presentation.sessionLabel.toLowerCase()} from the user's research prompt.`,
+          "Return only a plain-text title of 3 to 6 words.",
+          `Preserve important ${options.researchProfile.workspace.subjectNoun.toLowerCase()}, component, topic, and feature names.`,
+          `Do not use quotes, markdown, a trailing period, or generic wording such as ${options.researchProfile.name}.`,
+        ].join(" ")
+      : SECURITY_TITLE_SYSTEM_PROMPT;
     const response = await models.completeSimple(
       model,
       {
-        systemPrompt: TITLE_SYSTEM_PROMPT,
+        systemPrompt,
         messages: [
           {
             role: "user",

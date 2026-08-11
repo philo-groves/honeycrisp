@@ -44,6 +44,57 @@ Every durable graph node belongs to exactly one subject and records lists of the
 
 Runbooks are workspace-scoped, revisioned Jupyter `nbformat 4` artifacts for reusable proof sequences, environment setup, diagnostics, and investigation procedures. `runbook.list`, `runbook.get`, `runbook.create`, and `runbook.append` preserve ordered markdown/code cells and bounded decisive outputs. Honeycrisp does not require Jupyter and never executes a notebook directly; commands remain subject to the normal `shell.run` broker and its utility controls.
 
+## Research profiles
+
+Honeycrisp is a general research harness with a bundled security-research profile as its default. A research profile controls the agent role and posture, workflows, durable-memory vocabulary and validation, capability requests and feature switches, workspace language, auxiliary model jobs, and presentation labels. It does not replace host safety policy or grant authority.
+
+Honeycrisp resolves one profile before a run, in this order:
+
+1. `--profile <path>` or a host-supplied resolved snapshot.
+2. `.honeycrisp/profile.json` under `--workspace-root`.
+3. The bundled `security-research` profile.
+
+The normalized profile and its domain-separated SHA-256 hash are captured with the run. Resumes must use the same hash. Hosts can resolve and validate the exact wire contract without starting research:
+
+```sh
+pnpm start profile resolve --workspace-root . --json
+pnpm start profile resolve --workspace-root . --profile ./profile.json --json
+```
+
+[`examples/general-research.profile.json`](examples/general-research.profile.json) is a complete non-security example. Copy it to `.honeycrisp/profile.json`, then change its durable IDs, labels, workflows, and requirements for the domain:
+
+```sh
+mkdir -p .honeycrisp
+cp examples/general-research.profile.json .honeycrisp/profile.json
+pnpm start profile resolve --workspace-root . --json
+```
+
+Profile schema version 1 is strict: misspelled or unknown fields fail resolution instead of being silently discarded. The main sections are:
+
+- `agent`: role, posture, style, memory guidance, and runbook guidance.
+- `memory`: types, statuses, evidence kinds and path bases, advisory relation vocabulary, context budgets, typed attributes, and conditional requirements.
+- `workflows`: any number of named research modes with goal-suggestion, prompt, and output guidance.
+- `capabilities`: requested tool-family defaults, restrictions, and feature switches for memory, runbooks, and collaboration.
+- `workspace`: domain nouns, material kinds, boundary guidance, and whether authorization is required for live network use.
+- `modelJobs`: optional provider/model/effort routes for session titles, prompt generation, goal suggestions, memory curation, and shell review.
+- `presentation`: user-facing labels for research, memory, runbooks, and sessions.
+
+Treat every catalog `id` as durable data and model-contract identity. `name`, `pluralName`, descriptions, ordering, icons, and colors may change without rewriting stored nodes. Renaming an ID is a migration or reclassification, not a presentation rename. To remove a memory type, retain its ID with `lifecycle: "retired"` and `creatable: false`; an optional `replacedBy` points at its active successor. Stored retired or unknown IDs stay readable and can be repaired or reclassified, while new writes and relevant state transitions are checked against the active profile. Aliases canonicalize new inputs to the durable ID.
+
+Requirements may be unconditional or limited to named statuses, and can require attributes, evidence, asset links, or neighboring memory types. `memory.save` and `memory.correct` accept outgoing `links` atomically with the node write so a required neighbor can be satisfied without creating an invalid intermediate revision. Attribute schemas are selected by node type, including when two types give the same attribute key different definitions. The bundled security profile requires evidence when a primitive or chain becomes `confirmed`; older rows are grandfathered for reads and unrelated corrections. Relationships remain open strings even when a profile supplies a recommended relation catalog.
+
+Honeycrisp hashes the normalized memory catalog separately from the full research profile and records that immutable catalog provenance on new nodes and validated revisions. That exact hash is provenance, not a blanket compatibility boundary: recall compares each stored node's type, status, attributes, requirements, and referenced evidence/path semantics with the active catalog. Presentation changes and unrelated additive catalog entries therefore preserve compatible knowledge and stable identities, while materially incompatible nodes remain discoverable only for explicit migration or reclassification. Pre-provenance rows remain readable as `legacy_unrecorded`, are never falsely backfilled, and are admitted to ordinary recall only for the bundled security-compatible lineage rather than leaking into arbitrary general profiles. Profiles with memory disabled may use an empty memory catalog without constructing unusable memory tools.
+
+Standalone `memory save` and `memory correct` commands accept profile-defined node data through `--attributes-json <object>` and repeatable `--evidence-json <object-or-array>`. Attribute input is limited to 64,000 JSON characters. Evidence input is limited to 64,000 characters per option, 256,000 characters total, and 64 items; each item has `kind`, `locator`, `summary`, and optional `pathBase` and `path` fields. The active profile remains authoritative for attribute types, required fields, evidence kinds, and path rules.
+
+Capability entries remain inside host authority. Only the code-owned `bundled-default` source contributes its deliberate local `shell` and `none`/`read`/`write`/`process` defaults without another host declaration. A workspace profile, `--profile`, or `--resolved-research-profile` has no executable authority by itself. A host may grant a family or side effect directly with `--tool-family` and `--allowed-side-effect`, or let the profile choose requested defaults within repeatable `--profile-tool-family-ceiling` and `--profile-side-effect-ceiling` bounds. Profile family disables act as defaults, an explicit host family grant can override them, and an explicit host disable always wins. Network cannot be delegated through a profile ceiling; network effects, MCP configuration and server allowlists, skill directories, and skill selection are always explicit host-only inputs. `capabilities.allowedMcpServerIds` is only an additional restriction on that host allowlist: a non-empty list intersects it, while an empty list applies no additional profile restriction. It never configures or authorizes an MCP server.
+
+Host workbenches should pass `--no-default-tool-config` when `.honeycrisp/tools.json` is not part of their trusted configuration boundary, then provide every granted family, side effect, MCP server, and skill explicitly. Fixed protections for authorization boundaries, host credentials, global storage, and protected paths remain in force for every profile.
+
+Profile feature switches choose harness topology inside that boundary: memory and runbook tools still require the effective host side effects, and collaboration agents inherit the root tool registry and governance unchanged. A profile can therefore request collaboration or durable-research features, but neither a root agent nor a subagent can use them to expand the host-granted capability set.
+
+Recognized network-intent shell commands have an additional fail-closed host gate before Danger Mode, Manual Approval, or Auto-Review. The host must explicitly allow both `process` and `network`, and the structured `--workspace-context` authorization must be recorded, active, unexpired, and use `scoped` or `elevated` networking. Scoped networking also requires every detected destination to match `authorization.allowedNetworkDestinations`; commands whose destination cannot be determined are denied. This command broker covers recognized utilities, package-manager network subcommands, explicit network locators, and common script network APIs. It is not OS-level network isolation: arbitrary target binaries run with the current user's host privileges and can open sockets, so use an externally launched VM/container or host firewall when isolation is required.
+
 Run with stored auth. If no config is provided, Honeycrisp first checks `.honeycrisp/config.json` under `--workspace-root`, then falls back to the first authorized provider/model from the CLI auth store. A config file is only a model preference file; credentials still come from `honeycrisp auth login`.
 
 ```sh
@@ -112,7 +163,7 @@ Subagent identity, lifecycle, model calls, result text, and errors are retained 
 
 Long-running root and child sessions keep their active model context bounded independently of the stored trace. Each root sends one stable Pi `sessionId` on every model call, while each subagent derives its own stable affinity key so parallel provider caches and WebSocket state do not collide. OpenAI Responses models request provider-native compaction before Honeycrisp's local context fallback and replay the returned opaque compaction item on later turns. Other providers, and context-window retries, retain the local policy that preserves the task and recent turns while compacting older bulky tool results. Honeycrisp restores exactly one bounded checkpoint of recent distinct evidence actions after each compaction as a distinct host-data assistant record followed by a constant continuation notice, leaving real tool results unchanged. The checkpoint includes the decisive bounded result rather than only a success label. Honeycrisp temporarily blocks a third unchanged memory or runbook recall, permits a later state probe, leaves collaboration polling available, and steers sustained tool-only no-progress loops back to target research or disposition. Full tool observations remain available in the research event stream and durable memory remains the source for reusable research state.
 
-Durable knowledge uses typed nodes (`asset`, `bug`, `invariant`, `mitigation`, `source`, `sink`, `hypothesis`, `primitive`, `chain`, `procedure`, and `trajectory`), directed relationships, tags, asset links, and lightweight evidence references. A `hypothesis` is a specific, testable but unproven proposition: keep it suspected while active, reject it when disproven, and reclassify it as a primitive or chain when proven. `evidence` and `finding` are not node types; evidence remains attached references and proven flaws are primitives or chains. Saves are additive; exact corrections require the current node revision. Transcripts, task narration, and bulk tool output do not belong in the graph.
+Under the bundled security profile, durable knowledge uses `asset`, `bug`, `invariant`, `mitigation`, `source`, `sink`, `hypothesis`, `primitive`, `chain`, `procedure`, and `trajectory` nodes, plus directed relationships, tags, asset links, and lightweight evidence references. A `hypothesis` is a specific, testable but unproven proposition: keep it draft or suspected while active, reject it when disproven, and reclassify it as a primitive or chain when proven. `evidence` and `finding` are not node types in that profile; evidence remains attached references and proven flaws are primitives or chains. Other profiles may define entirely different stable IDs and display names. Saves are additive; exact corrections require the current node revision. Transcripts, task narration, and bulk tool output do not belong in the graph.
 
 Large raw outputs and generated artifacts remain files under `~/.honeycrisp/artifacts/`; runbooks live under its `runbooks/<workspace-id>/` family, while graph evidence stores relative pointers and locators rather than copying file contents into SQLite. Host interfaces such as Beale use the same SQLite file for compatible headless and desktop operation. Honeycrisp owns this database contract; interface-specific visualization and disclosure/export flows can add operational tables without creating a second database.
 

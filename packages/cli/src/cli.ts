@@ -24,8 +24,8 @@ import {
   createResearchToolRegistry,
   createShellTool,
   createShellSafetyAuthorizer,
+  DEFAULT_SECURITY_RESEARCH_PROFILE,
   DEFAULT_SHELL_REVIEW_MODELS,
-  DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
   createResearchWorkspaceContext,
   createMcpResearchTools,
   MemoryGraphStore,
@@ -52,6 +52,11 @@ import {
   mergeResearchWorkspaceContexts,
   resolveResearchModelConfig,
   resolveMemoryTypeDescriptions,
+  overrideResearchProfileMemoryDescriptions,
+  RESEARCH_PROFILE_SCHEMA_VERSION,
+  researchProfileHash,
+  researchProfileWorkflow,
+  resolveResearchProfile,
   verifyProviderAuth,
   workspaceContextFileReadHints,
   writeResearchModelConfig,
@@ -72,11 +77,16 @@ import type {
   ResearchAgentExecutor,
   ResearchModelConfigPreference,
   PiAgentResumableState,
+  MemoryEvidenceRef,
   MemoryNodeStatus,
   MemoryNodeType,
   MemoryTypeDescriptions,
   MemoryTypeDescriptionsInput,
   ResearchModelMemoryContextNode,
+  ResearchProfile,
+  ResearchProfileModelJob,
+  ResolvedResearchProfile,
+  ResearchProfileWorkflow,
   ResearchToolConfigPreference,
   ResolvedResearchModelConfig,
   ResearchSkillDescriptor,
@@ -85,12 +95,23 @@ import type {
   ResearchToolRegistry,
   ResearchWorkspaceContext,
   ShellCommandAuthorizer,
+  ShellNetworkAuthorization,
   ShellReviewerSelection,
   ShellSafetyMode,
 } from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
 const LIVE_EVENT_PREFIX = "HONEYCRISP_EVENT ";
+const PROFILE_CATALOG_PROTOCOL_VERSION = 1 as const;
+const MAX_MEMORY_ATTRIBUTES_JSON_CHARACTERS = 64_000;
+const MAX_MEMORY_EVIDENCE_JSON_CHARACTERS = 64_000;
+const MAX_MEMORY_EVIDENCE_JSON_TOTAL_CHARACTERS = 256_000;
+const MAX_MEMORY_EVIDENCE_ITEMS = 64;
+const BUNDLED_IMPLICIT_ALLOWED_SIDE_EFFECTS = new Set<ResearchToolSideEffect>(
+  DEFAULT_SECURITY_RESEARCH_PROFILE.capabilities.allowedSideEffects.filter(
+    (effect) => effect !== "network",
+  ),
+);
 
 type ToolFamily =
   | "shell"
@@ -109,13 +130,16 @@ type CliToolExecutionMode = "sequential" | "parallel";
 interface RuntimeToolConfig {
   toolFamilies: readonly ToolFamily[];
   disabledToolFamilies: readonly ToolFamily[];
+  profileToolFamilyCeiling: readonly ToolFamily[];
   repoRoots: readonly string[];
   fileReadRoots: readonly string[];
   sourcePaths: readonly string[];
   projectNotes: readonly string[];
   workspaceContextPath?: string;
   allowedSideEffects: readonly ResearchToolSideEffect[];
+  profileSideEffectCeiling: readonly ResearchToolSideEffect[];
   allowedMcpServers: readonly string[];
+  profileMcpServerRestriction: readonly string[];
   mcpConfigPath?: string;
   mcpTimeoutMs?: number;
   experimentConfigPath?: string;
@@ -169,9 +193,13 @@ interface ParsedArgs {
   titleModel: string | undefined;
   titleEffort: ResearchModelEffort | undefined;
   shellSafetyMode: ShellSafetyMode;
-  shellReviewModels: Readonly<Record<string, string>>;
-  shellReviewEffort: ResearchModelEffort;
-  memoryTypeDescriptions: MemoryTypeDescriptions;
+  shellReviewModels: Readonly<Record<string, string>> | undefined;
+  shellReviewEffort: ResearchModelEffort | undefined;
+  memoryTypeDescriptions: MemoryTypeDescriptions | undefined;
+  profilePath: string | undefined;
+  resolvedResearchProfilePath: string | undefined;
+  researchProfileHash: string | undefined;
+  workflowId: string | undefined;
   maxTokens: number | undefined;
   reasoning: ResearchModelEffort | undefined;
   executor: CliExecutorKind;
@@ -208,6 +236,7 @@ interface ParsedToolsArgs {
 interface ParsedMemoryArgs {
   command: string | undefined;
   workspaceRoot: string;
+  profilePath: string | undefined;
   positionals: string[];
   limit: number | undefined;
   summary: string | undefined;
@@ -215,11 +244,32 @@ interface ParsedMemoryArgs {
   types: MemoryNodeType[];
   tags: string[];
   assetIds: string[];
+  attributes: Record<string, unknown> | undefined;
+  evidence: Array<Omit<MemoryEvidenceRef, "id" | "createdAt">> | undefined;
   expectedRevision: number | undefined;
   status: string | undefined;
   confidence: number | undefined;
   json: boolean;
   help: boolean;
+}
+
+interface ParsedProfileArgs {
+  command: string | undefined;
+  workspaceRoot: string;
+  profilePath: string | undefined;
+  json: boolean;
+  help: boolean;
+}
+
+interface ResolvedCliResearchProfile {
+  resolvedResearchProfile: ResolvedResearchProfile;
+  workflow: ResearchProfileWorkflow;
+}
+
+interface ResolvedSessionTitleRoute {
+  provider: string;
+  model: string;
+  effort: ResearchModelEffort;
 }
 
 interface ParsedConfigArgs {
@@ -246,9 +296,13 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let titleModel: string | undefined;
   let titleEffort: ResearchModelEffort | undefined;
   let shellSafetyMode: ShellSafetyMode = "auto_review";
-  let shellReviewModels: Readonly<Record<string, string>> = DEFAULT_SHELL_REVIEW_MODELS;
-  let shellReviewEffort: ResearchModelEffort = "medium";
-  let memoryTypeDescriptions: MemoryTypeDescriptions = DEFAULT_MEMORY_TYPE_DESCRIPTIONS;
+  let shellReviewModels: Readonly<Record<string, string>> | undefined;
+  let shellReviewEffort: ResearchModelEffort | undefined;
+  let memoryTypeDescriptions: MemoryTypeDescriptions | undefined;
+  let profilePath: string | undefined;
+  let resolvedResearchProfilePath: string | undefined;
+  let researchProfileHash: string | undefined;
+  let workflowId: string | undefined;
   let executor: CliExecutorKind = "agent";
   let toolExecution: CliToolExecutionMode | undefined;
   let maxTokens: number | undefined;
@@ -264,12 +318,14 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let workspaceRoot = process.cwd();
   const toolFamilies: ToolFamily[] = [];
   const disabledToolFamilies: ToolFamily[] = [];
+  const profileToolFamilyCeiling: ToolFamily[] = [];
   const repoRoots: string[] = [];
   const fileReadRoots: string[] = [];
   const sourcePaths: string[] = [];
   const projectNotes: string[] = [];
   let workspaceContextPath: string | undefined;
   const allowedSideEffects: ResearchToolSideEffect[] = [];
+  const profileSideEffectCeiling: ResearchToolSideEffect[] = [];
   const allowedMcpServers: string[] = [];
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
@@ -391,6 +447,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--disable-tool-family") {
       disabledToolFamilies.push(parseToolFamily(readOptionValue(argv, index, arg)));
       index += 1;
+    } else if (arg === "--profile-tool-family-ceiling") {
+      profileToolFamilyCeiling.push(parseToolFamily(readOptionValue(argv, index, arg)));
+      index += 1;
     } else if (arg === "--repo-root") {
       repoRoots.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -408,6 +467,13 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
     } else if (arg === "--allowed-side-effect") {
       allowedSideEffects.push(parseToolSideEffect(readOptionValue(argv, index, arg)));
+      index += 1;
+    } else if (arg === "--profile-side-effect-ceiling") {
+      const effect = parseToolSideEffect(readOptionValue(argv, index, arg));
+      if (effect === "network") {
+        throw new Error("--profile-side-effect-ceiling cannot delegate network authority; use --allowed-side-effect network.");
+      }
+      profileSideEffectCeiling.push(effect);
       index += 1;
     } else if (arg === "--tool-max-calls") {
       toolMaxCalls = parsePositiveIntegerOption(argv, index, arg);
@@ -453,6 +519,18 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
         readOptionValue(argv, index, arg),
       );
       index += 1;
+    } else if (arg === "--profile") {
+      profilePath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--resolved-research-profile") {
+      resolvedResearchProfilePath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--research-profile-hash") {
+      researchProfileHash = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--workflow") {
+      workflowId = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -494,6 +572,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   if (!prompt && positionals.length > 0) {
     prompt = positionals.join(" ");
   }
+  if (profilePath && resolvedResearchProfilePath) {
+    throw new Error("--profile and --resolved-research-profile are mutually exclusive.");
+  }
 
   return {
     prompt,
@@ -515,6 +596,10 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     shellReviewModels,
     shellReviewEffort,
     memoryTypeDescriptions,
+    profilePath,
+    resolvedResearchProfilePath,
+    researchProfileHash,
+    workflowId,
     maxTokens,
     reasoning,
     executor,
@@ -526,13 +611,16 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     runtimeTools: {
       toolFamilies,
       disabledToolFamilies,
+      profileToolFamilyCeiling,
       repoRoots,
       fileReadRoots,
       sourcePaths,
       projectNotes,
       ...(workspaceContextPath ? { workspaceContextPath } : {}),
       allowedSideEffects,
+      profileSideEffectCeiling,
       allowedMcpServers,
+      profileMcpServerRestriction: [],
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
       ...(experimentConfigPath ? { experimentConfigPath } : {}),
@@ -560,13 +648,58 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   };
 }
 
+function parseProfileArgs(argv: readonly string[]): ParsedProfileArgs {
+  const firstArg = argv[0];
+  const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
+  let workspaceRoot = process.cwd();
+  let profilePath: string | undefined;
+  let json = false;
+  let help = false;
+  const positionals: string[] = [];
+
+  for (let index = command ? 1 : 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--workspace-root") {
+      workspaceRoot = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--profile") {
+      profilePath = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg === "-h" || arg === "--help") {
+      help = true;
+    } else if (arg?.startsWith("-")) {
+      throw new Error(`Unknown profile option: ${arg}`);
+    } else if (arg) {
+      positionals.push(arg);
+    }
+  }
+
+  if (positionals.length > 0) {
+    throw new Error(`Unexpected profile argument(s): ${positionals.join(" ")}`);
+  }
+
+  return {
+    command,
+    workspaceRoot,
+    profilePath,
+    json,
+    help,
+  };
+}
+
 function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
   const firstArg = argv[0];
   const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
   let workspaceRoot = process.cwd();
+  let profilePath: string | undefined;
   let limit: number | undefined;
   let summary: string | undefined;
   let body: string | undefined;
+  let attributes: Record<string, unknown> | undefined;
+  let evidence: Array<Omit<MemoryEvidenceRef, "id" | "createdAt">> | undefined;
+  let evidenceJsonCharacters = 0;
   let expectedRevision: number | undefined;
   let status: string | undefined;
   let confidence: number | undefined;
@@ -583,6 +716,9 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
     if (arg === "--workspace-root") {
       workspaceRoot = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--profile") {
+      profilePath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--limit") {
       const value = Number.parseInt(readOptionValue(argv, index, arg), 10);
       if (!Number.isFinite(value) || value <= 0) throw new Error("--limit requires a positive integer.");
@@ -593,6 +729,22 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
       index += 1;
     } else if (arg === "--body") {
       body = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--attributes-json") {
+      if (attributes !== undefined) throw new Error("--attributes-json may be provided only once.");
+      attributes = parseMemoryAttributesJson(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--evidence-json") {
+      const value = readOptionValue(argv, index, arg);
+      evidenceJsonCharacters += value.length;
+      if (evidenceJsonCharacters > MAX_MEMORY_EVIDENCE_JSON_TOTAL_CHARACTERS) {
+        throw new Error(`--evidence-json values exceed the ${MAX_MEMORY_EVIDENCE_JSON_TOTAL_CHARACTERS}-character total limit.`);
+      }
+      const items = parseMemoryEvidenceJson(value);
+      evidence = [...(evidence ?? []), ...items];
+      if (evidence.length > MAX_MEMORY_EVIDENCE_ITEMS) {
+        throw new Error(`--evidence-json accepts at most ${MAX_MEMORY_EVIDENCE_ITEMS} evidence items.`);
+      }
       index += 1;
     } else if (arg === "--type") {
       types.push(readOptionValue(argv, index, arg) as MemoryNodeType);
@@ -626,7 +778,85 @@ function parseMemoryArgs(argv: readonly string[]): ParsedMemoryArgs {
     }
   }
 
-  return { command, workspaceRoot, positionals, limit, summary, body, types, tags, assetIds, expectedRevision, status, confidence, json, help };
+  return {
+    command,
+    workspaceRoot,
+    profilePath,
+    positionals,
+    limit,
+    summary,
+    body,
+    types,
+    tags,
+    assetIds,
+    attributes,
+    evidence,
+    expectedRevision,
+    status,
+    confidence,
+    json,
+    help,
+  };
+}
+
+function parseMemoryAttributesJson(value: string): Record<string, unknown> {
+  if (value.length > MAX_MEMORY_ATTRIBUTES_JSON_CHARACTERS) {
+    throw new Error(`--attributes-json exceeds the ${MAX_MEMORY_ATTRIBUTES_JSON_CHARACTERS}-character limit.`);
+  }
+  const parsed = parseMemoryJson(value, "--attributes-json");
+  if (!isRecord(parsed)) throw new Error("--attributes-json must be a JSON object.");
+  return parsed;
+}
+
+function parseMemoryEvidenceJson(
+  value: string,
+): Array<Omit<MemoryEvidenceRef, "id" | "createdAt">> {
+  if (value.length > MAX_MEMORY_EVIDENCE_JSON_CHARACTERS) {
+    throw new Error(`Each --evidence-json value must not exceed ${MAX_MEMORY_EVIDENCE_JSON_CHARACTERS} characters.`);
+  }
+  const parsed = parseMemoryJson(value, "--evidence-json");
+  const values = Array.isArray(parsed) ? parsed : [parsed];
+  return values.map((item, index) => parseMemoryEvidenceItem(item, index));
+}
+
+function parseMemoryJson(value: string, option: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new Error(`${option} must contain valid JSON.`);
+  }
+}
+
+function parseMemoryEvidenceItem(
+  value: unknown,
+  index: number,
+): Omit<MemoryEvidenceRef, "id" | "createdAt"> {
+  const label = `--evidence-json item ${index + 1}`;
+  if (!isRecord(value)) throw new Error(`${label} must be a JSON object.`);
+  const knownKeys = new Set(["kind", "pathBase", "path", "locator", "summary"]);
+  const unknownKey = Object.keys(value).find((key) => !knownKeys.has(key));
+  if (unknownKey) throw new Error(`${label} has unknown field: ${unknownKey}.`);
+  const kind = requiredMemoryEvidenceString(value.kind, `${label}.kind`);
+  if (!isRecord(value.locator)) throw new Error(`${label}.locator must be a JSON object.`);
+  if (typeof value.summary !== "string") throw new Error(`${label}.summary must be a string.`);
+  const pathBase = optionalMemoryEvidenceString(value.pathBase, `${label}.pathBase`);
+  const path = optionalMemoryEvidenceString(value.path, `${label}.path`);
+  return {
+    kind,
+    ...(pathBase ? { pathBase } : {}),
+    ...(path ? { path } : {}),
+    locator: value.locator,
+    summary: value.summary.trim(),
+  };
+}
+
+function requiredMemoryEvidenceString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string.`);
+  return value.trim();
+}
+
+function optionalMemoryEvidenceString(value: unknown, label: string): string | undefined {
+  return value === undefined ? undefined : requiredMemoryEvidenceString(value, label);
 }
 
 function parseConfigArgs(argv: readonly string[]): ParsedConfigArgs {
@@ -685,12 +915,14 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   const inspectPaths: string[] = [];
   const toolFamilies: ToolFamily[] = [];
   const disabledToolFamilies: ToolFamily[] = [];
+  const profileToolFamilyCeiling: ToolFamily[] = [];
   const repoRoots: string[] = [];
   const fileReadRoots: string[] = [];
   const sourcePaths: string[] = [];
   const projectNotes: string[] = [];
   let workspaceContextPath: string | undefined;
   const allowedSideEffects: ResearchToolSideEffect[] = [];
+  const profileSideEffectCeiling: ResearchToolSideEffect[] = [];
   const allowedMcpServers: string[] = [];
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
@@ -735,6 +967,9 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
     } else if (arg === "--disable-tool-family") {
       disabledToolFamilies.push(parseToolFamily(readOptionValue(argv, index, arg)));
       index += 1;
+    } else if (arg === "--profile-tool-family-ceiling") {
+      profileToolFamilyCeiling.push(parseToolFamily(readOptionValue(argv, index, arg)));
+      index += 1;
     } else if (arg === "--repo-root") {
       repoRoots.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -752,6 +987,13 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       index += 1;
     } else if (arg === "--allowed-side-effect") {
       allowedSideEffects.push(parseToolSideEffect(readOptionValue(argv, index, arg)));
+      index += 1;
+    } else if (arg === "--profile-side-effect-ceiling") {
+      const effect = parseToolSideEffect(readOptionValue(argv, index, arg));
+      if (effect === "network") {
+        throw new Error("--profile-side-effect-ceiling cannot delegate network authority; use --allowed-side-effect network.");
+      }
+      profileSideEffectCeiling.push(effect);
       index += 1;
     } else if (arg === "--tool-max-calls") {
       toolMaxCalls = parsePositiveIntegerOption(argv, index, arg);
@@ -805,13 +1047,16 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
     runtimeTools: {
       toolFamilies,
       disabledToolFamilies,
+      profileToolFamilyCeiling,
       repoRoots,
       fileReadRoots,
       sourcePaths,
       projectNotes,
       ...(workspaceContextPath ? { workspaceContextPath } : {}),
       allowedSideEffects,
+      profileSideEffectCeiling,
       allowedMcpServers,
+      profileMcpServerRestriction: [],
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
       ...(experimentConfigPath ? { experimentConfigPath } : {}),
@@ -966,7 +1211,13 @@ function parseMemoryTypeDescriptionsOption(value: string): MemoryTypeDescription
     throw new Error("--memory-type-descriptions must be a JSON object mapping memory types to descriptions.");
   }
   try {
-    return resolveMemoryTypeDescriptions(parsed as MemoryTypeDescriptionsInput);
+    const resolved = resolveMemoryTypeDescriptions(parsed as MemoryTypeDescriptionsInput);
+    const overlay: Record<string, string> = {};
+    for (const type of Object.keys(parsed)) {
+      const description = resolved[type];
+      if (description !== undefined) overlay[type] = description;
+    }
+    return Object.freeze(overlay);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`--memory-type-descriptions is invalid: ${message}`);
@@ -1087,6 +1338,7 @@ function usage(): string {
     "Usage: honeycrisp -p <prompt> [--json]",
     "       honeycrisp tools list [options]",
     "       honeycrisp memory <command> [options]",
+    "       honeycrisp profile resolve --workspace-root <path> [--profile <path>] --json",
     "",
     "Options:",
     "  -p, --prompt <prompt>  Research request for the agent",
@@ -1121,7 +1373,12 @@ function usage(): string {
     "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3",
     "  --shell-review-effort <level> Small-model review effort (default: medium)",
     "  --memory-type-descriptions <json> Per-memory-type description overrides used by active agents",
+    "  --profile <path>       Explicit research profile JSON (overrides the workspace default)",
+    "  --resolved-research-profile <path> Exact normalized research profile JSON supplied by a host",
+    "  --research-profile-hash <hash> Require the resolved profile to match this SHA-256 hash",
+    "  --workflow <id>        Select a workflow from the resolved research profile",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
+    "  --profile-tool-family-ceiling <name> Let the active profile request this family within a host ceiling",
     "  --tool-config <path>   Runtime tool preference config (default: .honeycrisp/tools.json)",
     "  --no-default-tool-config Ignore .honeycrisp/tools.json unless --tool-config is provided",
     "  --repo-root <path>     Add a known repository context hint and enable repository.search unless disabled",
@@ -1130,6 +1387,7 @@ function usage(): string {
     "  --project-note <text>  Add a project/workspace note to compiled context",
     "  --workspace-context <p> JSON workspace context file to merge with CLI hints",
     "  --allowed-side-effect <s> Allow tool side effect: none, read, write, network, process",
+    "  --profile-side-effect-ceiling <s> Let the profile request none, read, write, or process within a host ceiling",
     "  --tool-max-calls <n>   Max tool calls for governance",
     "  --tool-runtime-ms <n>  Max runtime per tool call in milliseconds",
     "  --tool-max-files <n>   Max files for file-oriented tools",
@@ -1174,6 +1432,14 @@ function usage(): string {
     "  --limit <n>             Limit returned nodes",
     "  --json                  Print JSON",
     "",
+    "Profile commands:",
+    "  profile resolve                  Resolve and normalize the active research profile",
+    "",
+    "Profile options:",
+    "  --workspace-root <path>  Workspace root used for .honeycrisp/profile.json discovery",
+    "  --profile <path>         Explicit research profile JSON (highest precedence)",
+    "  --json                   Print the versioned profile catalog envelope",
+    "",
     "Model commands:",
     "  models list [provider]          List Pi models and supported effort levels",
     "",
@@ -1183,6 +1449,205 @@ function usage(): string {
     "  config show                      Show project model preference and authorization status",
     "  config set <field> <value>       Set provider, model, or effort preference",
   ].join("\n");
+}
+
+function profileUsage(): string {
+  return [
+    "Usage: honeycrisp profile resolve --workspace-root <path> [--profile <path>] --json",
+    "",
+    "Resolves an explicit profile first, then .honeycrisp/profile.json, then the bundled security profile.",
+  ].join("\n");
+}
+
+async function handleProfileCommand(argv: readonly string[]): Promise<void> {
+  const args = parseProfileArgs(argv);
+  if (!args.command || args.help) {
+    console.log(profileUsage());
+    return;
+  }
+  if (args.command !== "resolve") {
+    throw new Error(`Unknown profile command: ${args.command}`);
+  }
+
+  const resolvedProfile = await resolveResearchProfile({
+    workspaceRoot: args.workspaceRoot,
+    ...(args.profilePath ? { profilePath: args.profilePath } : {}),
+  });
+  const envelope = {
+    catalogProtocolVersion: PROFILE_CATALOG_PROTOCOL_VERSION,
+    supportedResearchProfileSchemaVersions: [RESEARCH_PROFILE_SCHEMA_VERSION],
+    profile: resolvedProfile.profile,
+    hash: resolvedProfile.hash,
+    source: resolvedProfile.source,
+    ...(resolvedProfile.path ? { path: resolvedProfile.path } : {}),
+  };
+
+  if (args.json) {
+    console.log(JSON.stringify(envelope, null, 2));
+    return;
+  }
+  console.log(`${envelope.profile.id}@${envelope.profile.version}\t${envelope.hash}\t${envelope.source}`);
+}
+
+async function resolveCliResearchProfile(args: Pick<
+  ParsedArgs,
+  | "workspaceRoot"
+  | "profilePath"
+  | "resolvedResearchProfilePath"
+  | "researchProfileHash"
+  | "workflowId"
+  | "memoryTypeDescriptions"
+>): Promise<ResolvedCliResearchProfile> {
+  const profilePath = args.resolvedResearchProfilePath ?? args.profilePath;
+  let resolvedResearchProfile = await resolveResearchProfile({
+    workspaceRoot: args.workspaceRoot,
+    ...(profilePath ? { profilePath } : {}),
+  });
+
+  if (args.memoryTypeDescriptions !== undefined) {
+    const profile = overrideResearchProfileMemoryDescriptions(
+      resolvedResearchProfile.profile,
+      args.memoryTypeDescriptions,
+    );
+    resolvedResearchProfile = {
+      ...resolvedResearchProfile,
+      profile,
+      hash: researchProfileHash(profile),
+    };
+  }
+
+  if (
+    args.researchProfileHash !== undefined &&
+    !/^[a-f0-9]{64}$/u.test(args.researchProfileHash)
+  ) {
+    throw new Error("--research-profile-hash must be a lowercase SHA-256 hash.");
+  }
+  if (
+    args.researchProfileHash !== undefined &&
+    args.researchProfileHash !== resolvedResearchProfile.hash
+  ) {
+    throw new Error(
+      `Research profile hash mismatch: expected ${args.researchProfileHash}, resolved ${resolvedResearchProfile.hash}.`,
+    );
+  }
+  validateResearchProfileModelJobs(resolvedResearchProfile.profile);
+
+  return {
+    resolvedResearchProfile,
+    workflow: researchProfileWorkflow(
+      resolvedResearchProfile.profile,
+      args.workflowId,
+    ),
+  };
+}
+
+function validateResearchProfileModelJobs(profile: ResearchProfile): void {
+  for (const [name, job] of [
+    ["sessionTitle", profile.modelJobs.sessionTitle],
+    ["shellReview", profile.modelJobs.shellReview],
+  ] as const) {
+    const effort = parseResearchProfileModelJobEffort(job, name);
+    if (job?.provider && job.model) {
+      validateModelRoute(`Research profile ${name}`, {
+        provider: job.provider,
+        model: job.model,
+        effort: effort ?? "medium",
+      });
+    }
+  }
+}
+
+function resolveSessionTitleRoute(
+  args: ParsedArgs,
+  resolvedResearchProfile: ResolvedResearchProfile,
+  modelConfig: ResolvedResearchModelConfig | undefined,
+): ResolvedSessionTitleRoute | undefined {
+  const job = resolvedResearchProfile.profile.modelJobs.sessionTitle;
+  const activeProvider = modelConfig?.provider;
+  const profileRouteApplies =
+    !job?.provider || !activeProvider || job.provider === activeProvider;
+  const model =
+    args.titleModel ?? (profileRouteApplies ? job?.model : undefined);
+  if (!model) return undefined;
+  const provider = activeProvider ?? job?.provider;
+  if (!provider) {
+    throw new Error(
+      "Session title model routing requires a provider from the active model config or research profile.",
+    );
+  }
+  const route = {
+    provider,
+    model,
+    effort:
+      args.titleEffort ??
+      (profileRouteApplies
+        ? parseResearchProfileModelJobEffort(job, "sessionTitle")
+        : undefined) ??
+      "medium",
+  };
+  validateModelRoute("Session title", route);
+  return route;
+}
+
+function resolveShellReviewerSelection(
+  args: ParsedArgs,
+  resolvedResearchProfile: ResolvedResearchProfile,
+  provider: string | undefined,
+): ShellReviewerSelection | undefined {
+  if (!provider) return undefined;
+  const job = resolvedResearchProfile.profile.modelJobs.shellReview;
+  const profileRouteApplies = !job?.provider || job.provider === provider;
+  const model =
+    args.shellReviewModels?.[provider] ??
+    (profileRouteApplies ? job?.model : undefined) ??
+    DEFAULT_SHELL_REVIEW_MODELS[provider];
+  if (!model) return undefined;
+  const selection: ShellReviewerSelection = {
+    provider,
+    model,
+    reasoningEffort:
+      args.shellReviewEffort ??
+      (profileRouteApplies
+        ? parseResearchProfileModelJobEffort(job, "shellReview")
+        : undefined) ??
+      "medium",
+  };
+  validateModelRoute("Shell review", {
+    provider: selection.provider,
+    model: selection.model,
+    effort: selection.reasoningEffort,
+  });
+  return selection;
+}
+
+function parseResearchProfileModelJobEffort(
+  job: ResearchProfileModelJob | undefined,
+  name: string,
+): ResearchModelEffort | undefined {
+  if (!job?.effort) return undefined;
+  try {
+    return parseReasoning(job.effort);
+  } catch {
+    throw new Error(
+      `Research profile ${name} effort is unsupported: ${job.effort}.`,
+    );
+  }
+}
+
+function validateModelRoute(
+  label: string,
+  route: ResolvedSessionTitleRoute,
+): void {
+  const provider = getProviderModelCatalog(route.provider)[0];
+  const model = provider?.models.find((entry) => entry.id === route.model);
+  if (!provider || !model) {
+    throw new Error(`${label} model is unavailable: ${route.provider}/${route.model}.`);
+  }
+  if (!model.effortLevels.includes(route.effort)) {
+    throw new Error(
+      `${label} effort ${route.effort} is unavailable for ${route.provider}/${route.model}.`,
+    );
+  }
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)) {
@@ -1199,6 +1664,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 
     if (argv[0] === "memory") {
       await handleMemoryCommand(argv.slice(1));
+      return;
+    }
+
+    if (argv[0] === "profile") {
+      await handleProfileCommand(argv.slice(1));
       return;
     }
 
@@ -1233,6 +1703,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       throw new Error("--goal requires the Pi agent executor and cannot be combined with --mock.");
     }
 
+    const { resolvedResearchProfile, workflow } = await resolveCliResearchProfile(args);
+
     const liveEventSink = args.eventStream ? createCliLiveEventSink() : undefined;
     const controlStream = args.controlStream
       ? new HoneycrispControlStream(input, (event) => {
@@ -1248,21 +1720,21 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     let runtimeConfig: Awaited<ReturnType<typeof createRuntimeConfig>> | undefined;
     try {
       let modelConfig: ResolvedResearchModelConfig | undefined;
+      let shellNetworkAuthorization = defaultCliShellNetworkAuthorization();
       const shellAuthorizer = createShellSafetyAuthorizer({
+        researchProfileName: resolvedResearchProfile.profile.name,
         getMode: () => controlStream?.getShellSafetyMode() ?? args.shellSafetyMode,
+        getNetworkAuthorization: () => shellNetworkAuthorization,
         getReviewerSelection: (): ShellReviewerSelection | undefined => {
           const provider =
             controlStream?.getModelSelection()?.provider ??
             modelConfig?.provider ??
             args.provider;
-          const model = provider ? args.shellReviewModels[provider] : undefined;
-          return provider && model
-            ? {
-                provider,
-                model,
-                reasoningEffort: args.shellReviewEffort,
-              }
-            : undefined;
+          return resolveShellReviewerSelection(
+            args,
+            resolvedResearchProfile,
+            provider,
+          );
         },
         requestManualApproval: (request, signal) => {
           if (!controlStream || !liveEventSink) {
@@ -1276,7 +1748,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         onRequested: (event) => emitShellSafetyEvent(liveEventSink, event),
         onResolved: (event) => emitShellSafetyEvent(liveEventSink, event),
       });
-      runtimeConfig = await createRuntimeConfig({ ...args, shellAuthorizer });
+      runtimeConfig = await createRuntimeConfig({
+        ...args,
+        shellAuthorizer,
+        resolvedResearchProfile,
+      });
+      shellNetworkAuthorization = runtimeConfig.shellNetworkAuthorization;
       const dispositionRecorder = runtimeConfig.dispositionRecorder;
       let resumableState: PiAgentResumableState | undefined;
       let effectivePrompt = args.resumeFallbackPrompt ?? args.prompt;
@@ -1284,6 +1761,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         ? createDeterministicAgentExecutor()
         : createRealAgentExecutor(
             args,
+            resolvedResearchProfile,
+            workflow.id,
             runtimeConfig.toolRegistry,
             (modelConfig = await resolveResearchModelConfig({
               workspaceRoot: args.workspaceRoot,
@@ -1295,13 +1774,22 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
             runtimeConfig.dispositionRecorder,
             controlStream,
             (resumableState = args.resumeCapturePath
-              ? await loadCompatibleResumeState(args.resumeCapturePath, modelConfig)
+              ? await loadCompatibleResumeState(
+                  args.resumeCapturePath,
+                  modelConfig,
+                  resolvedResearchProfile.hash,
+                  workflow.id,
+                )
               : undefined),
           );
       if (resumableState) effectivePrompt = args.prompt;
+      const sessionTitleRoute = args.mock
+        ? undefined
+        : resolveSessionTitleRoute(args, resolvedResearchProfile, modelConfig);
       const sessionTitle = startSessionTitleGeneration(
         { ...args, prompt: effectivePrompt },
-        modelConfig,
+        sessionTitleRoute,
+        resolvedResearchProfile,
         liveEventSink,
         controlStream?.signal,
       );
@@ -1319,10 +1807,20 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
         ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
-        ...(runtimeConfig.runtimeTools.selectedSkillIds.length > 0
-          ? { selectedSkillIds: runtimeConfig.runtimeTools.selectedSkillIds }
-          : {}),
+        // Passing an explicit (possibly empty) host selection makes the CLI's
+        // skill authority visible at the runResearchAgent boundary.
+        selectedSkillIds: runtimeConfig.runtimeTools.selectedSkillIds,
         ...(runtimeConfig.governance ? { governance: runtimeConfig.governance } : {}),
+        resolvedResearchProfile,
+        workflowId: workflow.id,
+        researchIntent: {
+          successGates: args.successGates,
+          failureOrStopGates: args.failureOrStopGates,
+          scopeConstraints: args.scopeConstraints,
+          evidenceRequirements: args.evidenceRequirements,
+          initialRiskFlags: args.initialRiskFlags,
+          userPreferences: args.userPreferences,
+        },
         executor: agentExecutor,
         finalDispositionProvider: () => dispositionRecorder.get(),
         ...(liveEventSink ? { eventSink: liveEventSink } : {}),
@@ -1365,18 +1863,20 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
 
 function startSessionTitleGeneration(
   args: ParsedArgs,
-  modelConfig: ResolvedResearchModelConfig | undefined,
+  route: ResolvedSessionTitleRoute | undefined,
+  resolvedResearchProfile: ResolvedResearchProfile,
   liveEventSink: ResearchLiveEventSink | undefined,
   signal: AbortSignal | undefined,
 ): Promise<void> {
-  if (args.mock || !args.titleModel || !modelConfig || !liveEventSink || !args.prompt) {
+  if (args.mock || !route || !liveEventSink || !args.prompt) {
     return Promise.resolve();
   }
   return generateResearchSessionTitle({
-    provider: modelConfig.provider,
-    model: args.titleModel,
+    provider: route.provider,
+    model: route.model,
     prompt: args.prompt,
-    effort: args.titleEffort ?? "medium",
+    effort: route.effort,
+    researchProfile: resolvedResearchProfile.profile,
     ...(signal ? { signal } : {}),
   })
     .then((title) =>
@@ -1387,9 +1887,9 @@ function startSessionTitleGeneration(
         payload: {
           status: "generated",
           title,
-          provider: modelConfig.provider,
-          model: args.titleModel,
-          effort: args.titleEffort ?? "medium",
+          provider: route.provider,
+          model: route.model,
+          effort: route.effort,
         },
       }),
     )
@@ -1400,9 +1900,9 @@ function startSessionTitleGeneration(
         timestamp: new Date().toISOString(),
         payload: {
           status: "error",
-          provider: modelConfig.provider,
-          model: args.titleModel,
-          effort: args.titleEffort ?? "medium",
+          provider: route.provider,
+          model: route.model,
+          effort: route.effort,
           errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 500),
         },
       }),
@@ -1414,6 +1914,8 @@ function startSessionTitleGeneration(
 async function loadCompatibleResumeState(
   capturePath: string,
   modelConfig: ResolvedResearchModelConfig,
+  researchProfileHash: string,
+  workflowId: string,
 ): Promise<PiAgentResumableState | undefined> {
   try {
     const capture = JSON.parse(await readFile(resolve(capturePath), "utf8")) as unknown;
@@ -1422,6 +1924,7 @@ async function loadCompatibleResumeState(
       capture.agent.raw,
       modelConfig.provider,
       modelConfig.model,
+      { researchProfileHash, workflowId },
     );
   } catch {
     return undefined;
@@ -1430,6 +1933,8 @@ async function loadCompatibleResumeState(
 
 function createRealAgentExecutor(
   args: ParsedArgs,
+  resolvedResearchProfile: ResolvedResearchProfile,
+  workflowId: string,
   toolRegistry: ResearchToolRegistry | undefined,
   modelConfig: ResolvedResearchModelConfig,
   dispositionRecorder: ResearchDispositionRecorder,
@@ -1462,7 +1967,11 @@ function createRealAgentExecutor(
         }
       : {}),
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
-    memoryTypeDescriptions: args.memoryTypeDescriptions,
+    researchProfile: resolvedResearchProfile.profile,
+    workflowId,
+    ...(resolvedResearchProfile.profile.capabilities.collaborationEnabled
+      ? {}
+      : { subagents: false as const }),
     ...(resumableState ? { resumableState } : {}),
     ...(controlStream
       ? {
@@ -1520,7 +2029,14 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
     console.log(memoryUsage());
     return;
   }
-  const store = new MemoryGraphStore({ workspaceRoot: args.workspaceRoot });
+  const resolvedProfile = await resolveResearchProfile({
+    workspaceRoot: args.workspaceRoot,
+    ...(args.profilePath ? { profilePath: args.profilePath } : {}),
+  });
+  const store = new MemoryGraphStore({
+    workspaceRoot: args.workspaceRoot,
+    resolvedProfile,
+  });
   try {
     if (args.command === "list" || args.command === "search") {
       const query = args.command === "search" ? args.positionals.join(" ") : "";
@@ -1554,6 +2070,8 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
         ...(args.confidence !== undefined ? { confidence: args.confidence } : {}),
         ...(args.assetIds.length ? { assetIds: args.assetIds } : {}),
         ...(args.tags.length ? { tags: args.tags } : {}),
+        ...(args.attributes !== undefined ? { attributes: args.attributes } : {}),
+        ...(args.evidence !== undefined ? { evidence: args.evidence } : {}),
       });
       printMemoryOutput(args, node, (value) => `${value.id}\t${value.type}\t${value.status}\t${value.title}`);
       return;
@@ -1570,6 +2088,8 @@ async function handleMemoryCommand(argv: readonly string[]): Promise<void> {
         ...(args.confidence !== undefined ? { confidence: args.confidence } : {}),
         ...(args.assetIds.length ? { assetIds: args.assetIds } : {}),
         ...(args.tags.length ? { tags: args.tags } : {}),
+        ...(args.attributes !== undefined ? { attributes: args.attributes } : {}),
+        ...(args.evidence !== undefined ? { evidence: args.evidence } : {}),
       });
       printMemoryOutput(args, node, (value) => `${value.id}\trevision ${value.revision}\t${value.status}\t${value.title}`);
       return;
@@ -2240,6 +2760,8 @@ function toolsUsage(): string {
     "  --workspace-context <path>  JSON workspace context file to merge with CLI hints",
     "  --inspect-root <path>       Enable local.inspection for this root unless disabled",
     "  --allowed-side-effect <s>   Allow side effect: none, read, write, network, process",
+    "  --profile-tool-family-ceiling <name> Let the active profile request this family within a host ceiling",
+    "  --profile-side-effect-ceiling <s> Let the profile request none, read, write, or process within a host ceiling",
     "  --tool-max-calls <n>        Max tool calls",
     "  --tool-runtime-ms <n>       Max runtime per tool call in milliseconds",
     "  --tool-max-files <n>        Max file count",
@@ -2301,12 +2823,15 @@ function memoryUsage(): string {
     "",
     "Options:",
     "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
+    "  --profile <path>         Explicit research profile (otherwise use the workspace default)",
     "  --type <type>           Filter nodes; with correct, reclassify one node",
     "  --status <status>       Filter or set node status",
     "  --tag <tag>             Filter or add a tag (repeatable)",
     "  --asset <asset-id>      Filter or add an asset link (repeatable)",
     "  --summary <text>        Set a concise summary or relationship note",
     "  --body <text>           Set supporting detail",
+    "  --attributes-json <obj> Set profile-defined attributes (save/correct; 64,000 characters)",
+    "  --evidence-json <json>  Set evidence object/array (save/correct; repeatable, 64 items)",
     "  --confidence <0..1>     Set confidence",
     "  --expected-revision <n> Required for exact correction",
     "  --limit <n>             Limit returned nodes",
@@ -2334,6 +2859,7 @@ async function createRuntimeConfig(args: {
   runtimeTools: RuntimeToolConfig;
   workspaceRoot?: string;
   shellAuthorizer?: ShellCommandAuthorizer;
+  resolvedResearchProfile?: ResolvedResearchProfile;
 }): Promise<{
   events: ResearchEvent[];
   tools: ResearchToolDescriptor[];
@@ -2346,20 +2872,35 @@ async function createRuntimeConfig(args: {
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
   memoryGraph: MemoryGraphStore;
+  shellNetworkAuthorization: ShellNetworkAuthorization;
   cleanup?: () => Promise<void>;
 }> {
   const workspaceRoot = args.workspaceRoot ?? process.cwd();
+  const resolvedResearchProfile = args.resolvedResearchProfile ?? await resolveResearchProfile({
+    workspaceRoot,
+  });
   const resolvedRuntimeTools = await resolveRuntimeToolConfig({
     runtimeTools: args.runtimeTools,
     workspaceRoot,
   });
-  const runtimeTools = resolvedRuntimeTools.runtimeTools;
+  const runtimeTools = applyResearchProfileCapabilityDefaults(
+    resolvedRuntimeTools.runtimeTools,
+    resolvedResearchProfile,
+  );
   const runtimeArgs = { ...args, runtimeTools };
   const families = resolveEnabledToolFamilies(runtimeArgs);
   const executableTools: ResearchExecutableTool[] = [];
   const toolDescriptors: ResearchToolDescriptor[] = [];
   const events: ResearchEvent[] = [];
-  const skills = loadCliSkills(runtimeTools.skillDirs);
+  const profileDisabledSkillIds = new Set(
+    resolvedResearchProfile.profile.capabilities.disabledSkillIds,
+  );
+  const explicitlySelectedSkillIds = new Set(runtimeTools.selectedSkillIds);
+  const skills = loadCliSkills(runtimeTools.skillDirs).filter(
+    (skill) =>
+      !profileDisabledSkillIds.has(skill.id) ||
+      explicitlySelectedSkillIds.has(skill.id),
+  );
   const governance = createCliGovernance(runtimeTools);
   const cleanupCallbacks: (() => Promise<void>)[] = [];
   const dispositionRecorder = new ResearchDispositionRecorder();
@@ -2388,24 +2929,37 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   });
+  const shellNetworkAuthorization = resolveCliShellNetworkAuthorization(
+    workspaceContext,
+    runtimeTools,
+  );
   const memoryGraph = new MemoryGraphStore({
     workspaceRoot,
+    resolvedProfile: resolvedResearchProfile,
     ...(workspaceContext.memoryContext
       ? {
           context: workspaceContext.memoryContext,
         }
       : {}),
   });
-  const memoryTools = createMemoryGraphTools(memoryGraph);
+  const memoryTools = resolvedResearchProfile.profile.capabilities.memoryEnabled
+    ? createMemoryGraphTools(memoryGraph)
+    : [];
   executableTools.push(...memoryTools);
   toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));
   cleanupCallbacks.push(async () => memoryGraph.close());
-  const runbooks = new RunbookStore(memoryGraph.databasePath, storageLayout, memoryGraph.getContext());
-  const runbookTools = createRunbookTools(runbooks);
-  executableTools.push(...runbookTools);
-  toolDescriptors.push(...runbookTools.map((tool) => tool.descriptor));
-  cleanupCallbacks.push(async () => runbooks.close());
-  const memoryContext = args.prompt
+  if (resolvedResearchProfile.profile.capabilities.runbooksEnabled) {
+    const runbooks = new RunbookStore(
+      memoryGraph.databasePath,
+      storageLayout,
+      memoryGraph.getContext(),
+    );
+    const runbookTools = createRunbookTools(runbooks);
+    executableTools.push(...runbookTools);
+    toolDescriptors.push(...runbookTools.map((tool) => tool.descriptor));
+    cleanupCallbacks.push(async () => runbooks.close());
+  }
+  const memoryContext = args.prompt && resolvedResearchProfile.profile.capabilities.memoryEnabled
     ? compileMemoryModelContext(memoryGraph, args.prompt)
     : [];
   const mcpCapture = await configureRuntimeMcpTools({
@@ -2540,6 +3094,7 @@ async function createRuntimeConfig(args: {
     runtimeTools,
     dispositionRecorder,
     memoryGraph,
+    shellNetworkAuthorization,
     capture: createRuntimeCapture({
       families,
       args: runtimeArgs,
@@ -2547,6 +3102,7 @@ async function createRuntimeConfig(args: {
       skills,
       governance,
       workspaceContext,
+      shellNetworkAuthorization,
       toolConfigCapture: resolvedRuntimeTools.capture,
       ...(mcpCapture ? { mcpCapture } : {}),
     }),
@@ -2601,6 +3157,7 @@ function runtimeToolConfigFromPreference(
   return {
     toolFamilies: (preference.toolFamilies ?? []).map(parseToolFamily),
     disabledToolFamilies: (preference.disabledToolFamilies ?? []).map(parseToolFamily),
+    profileToolFamilyCeiling: [],
     repoRoots: preference.repoRoots ?? [],
     fileReadRoots: preference.fileReadRoots ?? [],
     sourcePaths: preference.sourcePaths ?? [],
@@ -2609,7 +3166,9 @@ function runtimeToolConfigFromPreference(
       ? { workspaceContextPath: preference.workspaceContextPath }
       : {}),
     allowedSideEffects: (preference.allowedSideEffects ?? []).map(parseToolSideEffect),
+    profileSideEffectCeiling: [],
     allowedMcpServers: preference.allowedMcpServers ?? [],
+    profileMcpServerRestriction: [],
     ...(preference.mcpConfigPath ? { mcpConfigPath: preference.mcpConfigPath } : {}),
     ...(preference.mcpTimeoutMs ? { mcpTimeoutMs: preference.mcpTimeoutMs } : {}),
     ...(preference.experimentConfigPath
@@ -2643,6 +3202,10 @@ function mergeRuntimeToolConfig(
       ...persisted.disabledToolFamilies,
       ...cli.disabledToolFamilies,
     ]) as ToolFamily[],
+    profileToolFamilyCeiling: uniqueRuntimeStrings([
+      ...persisted.profileToolFamilyCeiling,
+      ...cli.profileToolFamilyCeiling,
+    ]) as ToolFamily[],
     repoRoots: uniqueRuntimeStrings([...persisted.repoRoots, ...cli.repoRoots]),
     fileReadRoots: uniqueRuntimeStrings([
       ...persisted.fileReadRoots,
@@ -2663,9 +3226,17 @@ function mergeRuntimeToolConfig(
       ...persisted.allowedSideEffects,
       ...cli.allowedSideEffects,
     ]) as ResearchToolSideEffect[],
+    profileSideEffectCeiling: uniqueRuntimeStrings([
+      ...persisted.profileSideEffectCeiling,
+      ...cli.profileSideEffectCeiling,
+    ]) as ResearchToolSideEffect[],
     allowedMcpServers: uniqueRuntimeStrings([
       ...persisted.allowedMcpServers,
       ...cli.allowedMcpServers,
+    ]),
+    profileMcpServerRestriction: uniqueRuntimeStrings([
+      ...persisted.profileMcpServerRestriction,
+      ...cli.profileMcpServerRestriction,
     ]),
     ...(cli.mcpConfigPath || persisted.mcpConfigPath
       ? { mcpConfigPath: cli.mcpConfigPath ?? persisted.mcpConfigPath }
@@ -2707,6 +3278,83 @@ function mergeRuntimeToolConfig(
   };
 }
 
+function applyResearchProfileCapabilityDefaults(
+  runtimeTools: RuntimeToolConfig,
+  resolvedResearchProfile: ResolvedResearchProfile,
+): RuntimeToolConfig {
+  const capabilities = resolvedResearchProfile.profile.capabilities;
+  const hostRequestedFamilies = new Set(runtimeTools.toolFamilies);
+  const trustedBundledDefaults = resolvedResearchProfile.source === "bundled-default";
+  const hostFamilyCeiling = new Set(runtimeTools.profileToolFamilyCeiling);
+  const hostSideEffectCeiling = new Set(runtimeTools.profileSideEffectCeiling);
+  const profileDefaultFamilies = trustedBundledDefaults
+    ? capabilities.defaultToolFamilies.map(parseToolFamily)
+    : capabilities.defaultToolFamilies
+        .map(parseToolFamily)
+        .filter((family) => hostFamilyCeiling.has(family));
+  const profileDisabledFamilies = capabilities.disabledToolFamilies.map(parseToolFamily);
+  const profileHostBoundedSideEffects = trustedBundledDefaults
+    ? capabilities.allowedSideEffects.filter(
+        (effect) => BUNDLED_IMPLICIT_ALLOWED_SIDE_EFFECTS.has(effect),
+      )
+    : capabilities.allowedSideEffects.filter(
+        (effect) => effect !== "network" && hostSideEffectCeiling.has(effect),
+      );
+  const allowedSideEffects = trustedBundledDefaults && runtimeTools.allowedSideEffects.length > 0
+    ? runtimeTools.allowedSideEffects
+    : uniqueRuntimeStrings([
+        ...profileHostBoundedSideEffects,
+        ...runtimeTools.allowedSideEffects,
+      ]) as ResearchToolSideEffect[];
+
+  return {
+    ...runtimeTools,
+    toolFamilies: uniqueRuntimeStrings([
+      ...profileDefaultFamilies,
+      ...runtimeTools.toolFamilies,
+    ]) as ToolFamily[],
+    disabledToolFamilies: uniqueRuntimeStrings([
+      ...profileDisabledFamilies.filter(
+        (family) => !hostRequestedFamilies.has(family),
+      ),
+      ...runtimeTools.disabledToolFamilies,
+    ]) as ToolFamily[],
+    allowedSideEffects: allowedSideEffects.length > 0 ? allowedSideEffects : ["none"],
+    profileMcpServerRestriction: capabilities.allowedMcpServerIds,
+    selectedSkillIds: runtimeTools.selectedSkillIds,
+  };
+}
+
+function defaultCliShellNetworkAuthorization(): ShellNetworkAuthorization {
+  return {
+    sideEffectAllowed: false,
+    authorizationRecorded: false,
+    profile: "offline",
+    allowedDestinations: [],
+  };
+}
+
+function resolveCliShellNetworkAuthorization(
+  workspaceContext: ResearchWorkspaceContext,
+  runtimeTools: RuntimeToolConfig,
+): ShellNetworkAuthorization {
+  const authorization = workspaceContext.authorization;
+  const profile = authorization?.networkProfile === "scoped" || authorization?.networkProfile === "elevated"
+    ? authorization.networkProfile
+    : "offline";
+  return {
+    sideEffectAllowed: runtimeTools.allowedSideEffects.includes("network"),
+    authorizationRecorded: authorization?.recorded === true,
+    profile,
+    allowedDestinations: authorization?.allowedNetworkDestinations ?? [],
+    ...(authorization?.source ? { source: authorization.source } : {}),
+    ...(authorization?.scopeId ? { scopeId: authorization.scopeId } : {}),
+    ...(authorization?.scopeName ? { scopeName: authorization.scopeName } : {}),
+    ...(authorization?.activeFrom ? { activeFrom: authorization.activeFrom } : {}),
+    ...(authorization?.expiresAt ? { expiresAt: authorization.expiresAt } : {}),
+  };
+}
+
 async function configureRuntimeMcpTools(input: {
   runtimeTools: RuntimeToolConfig;
   executableTools: ResearchExecutableTool[];
@@ -2719,11 +3367,11 @@ async function configureRuntimeMcpTools(input: {
 
   const config = loadResearchMcpClientConfig(input.runtimeTools.mcpConfigPath);
   const configuredServers = config.servers.map((server) => server.name);
-  const allowedServers =
+  const hostAuthorizedServers =
     input.runtimeTools.allowedMcpServers.length > 0
       ? input.runtimeTools.allowedMcpServers
       : config.allowedServers;
-  const missingAllowedServers = allowedServers.filter(
+  const missingAllowedServers = hostAuthorizedServers.filter(
     (serverName) => !configuredServers.includes(serverName),
   );
   if (missingAllowedServers.length > 0) {
@@ -2731,6 +3379,10 @@ async function configureRuntimeMcpTools(input: {
       `Allowed MCP server(s) are not defined in ${input.runtimeTools.mcpConfigPath}: ${missingAllowedServers.join(", ")}`,
     );
   }
+  const allowedServers = restrictMcpServersToProfile(
+    hostAuthorizedServers,
+    input.runtimeTools.profileMcpServerRestriction,
+  );
 
   const timeoutMs = input.runtimeTools.mcpTimeoutMs ?? config.timeoutMs;
   const client = createConfiguredResearchMcpClient({
@@ -2752,6 +3404,8 @@ async function configureRuntimeMcpTools(input: {
       status: "configured",
       configPath: input.runtimeTools.mcpConfigPath,
       configuredServers,
+      hostAuthorizedServers,
+      profileRestriction: input.runtimeTools.profileMcpServerRestriction,
       allowedServers,
       timeoutMs: timeoutMs ?? null,
       discoveredCapabilities: discovery.descriptors.map((descriptor) => ({
@@ -2771,6 +3425,16 @@ async function configureRuntimeMcpTools(input: {
       `MCP discovery failed for ${input.runtimeTools.mcpConfigPath}: ${message}`,
     );
   }
+}
+
+function restrictMcpServersToProfile(
+  hostAuthorizedServers: readonly string[],
+  profileRestriction: readonly string[],
+): string[] {
+  const hostAuthorized = uniqueRuntimeStrings(hostAuthorizedServers);
+  if (profileRestriction.length === 0) return hostAuthorized;
+  const profileAllowed = new Set(profileRestriction);
+  return hostAuthorized.filter((serverId) => profileAllowed.has(serverId));
 }
 
 function resolveEnabledToolFamilies(args: {
@@ -2874,9 +3538,15 @@ function createRuntimeCapture(input: {
   skills: readonly ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
+  shellNetworkAuthorization: ShellNetworkAuthorization;
   toolConfigCapture: ResolvedRuntimeToolConfig["capture"];
   mcpCapture?: Record<string, unknown>;
 }): Record<string, unknown> {
+  const hostAuthorizedMcpServers = input.args.runtimeTools.allowedMcpServers;
+  const allowedMcpServers = restrictMcpServersToProfile(
+    hostAuthorizedMcpServers,
+    input.args.runtimeTools.profileMcpServerRestriction,
+  );
   return {
     toolConfig: input.toolConfigCapture,
     workspaceContext: input.workspaceContext,
@@ -2893,15 +3563,20 @@ function createRuntimeCapture(input: {
       enabled: [...input.families],
       requested: input.args.runtimeTools.toolFamilies,
       disabled: input.args.runtimeTools.disabledToolFamilies,
+      profileCeiling: input.args.runtimeTools.profileToolFamilyCeiling,
     },
+    profileSideEffectCeiling: input.args.runtimeTools.profileSideEffectCeiling,
     governance: input.governance ?? null,
+    shellNetworkAuthorization: input.shellNetworkAuthorization,
     mcp:
       input.mcpCapture ??
       {
-        allowedServers: input.args.runtimeTools.allowedMcpServers,
+        hostAuthorizedServers: hostAuthorizedMcpServers,
+        profileRestriction: input.args.runtimeTools.profileMcpServerRestriction,
+        allowedServers: allowedMcpServers,
         discoveredCapabilities: [],
         status:
-          input.args.runtimeTools.allowedMcpServers.length > 0
+          allowedMcpServers.length > 0
             ? "no_mcp_client_configured"
             : "not_configured",
       },

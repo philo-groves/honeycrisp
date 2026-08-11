@@ -35,6 +35,16 @@ export interface ResearchAgentFlowCapture {
   schemaVersion: 5;
   capturedAt: string;
   request: { prompt: string };
+  researchProfile?: {
+    schemaVersion: number;
+    id: string;
+    version: string;
+    hash: string;
+    source: RunResearchAgentResult["resolvedResearchProfile"]["source"];
+    path?: string;
+    workflowId: string;
+    snapshot: RunResearchAgentResult["resolvedResearchProfile"]["profile"];
+  };
   agent: {
     id: string;
     status: "complete" | "error";
@@ -83,6 +93,18 @@ export function createResearchAgentFlowCapture(
     schemaVersion: 5,
     capturedAt,
     request: { prompt: result.prompt },
+    ...(result.resolvedResearchProfile && result.researchWorkflow ? {
+      researchProfile: {
+        schemaVersion: result.resolvedResearchProfile.profile.schemaVersion,
+        id: result.resolvedResearchProfile.profile.id,
+        version: result.resolvedResearchProfile.profile.version,
+        hash: result.resolvedResearchProfile.hash,
+        source: result.resolvedResearchProfile.source,
+        ...(result.resolvedResearchProfile.path ? { path: result.resolvedResearchProfile.path } : {}),
+        workflowId: result.researchWorkflow.id,
+        snapshot: result.resolvedResearchProfile.profile,
+      },
+    } : {}),
     agent: {
       id: result.agentRun.id,
       status: result.agentRun.status,

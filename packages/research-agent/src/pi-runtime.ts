@@ -11,6 +11,7 @@ import {
   createResearchSystemPrompt,
 } from "./system-prompt.js";
 import type { ResearchAgentInstructions } from "./types.js";
+import type { ResearchProfile } from "./research-profile.js";
 
 export interface CreateResearchPiAgentOptions {
   model: Model<any>;
@@ -20,6 +21,8 @@ export interface CreateResearchPiAgentOptions {
   thinkingLevel?: ThinkingLevel;
   agentOptions?: Omit<AgentOptions, "initialState" | "streamFn">;
   agentInstructions?: ResearchAgentInstructions;
+  researchProfile?: ResearchProfile;
+  workflowId?: string;
 }
 
 export function createResearchPiAgent(
@@ -35,6 +38,8 @@ export function createResearchPiAgent(
         ? appendResearchAgentInstructions(options.systemPrompt, options.agentInstructions)
         : createResearchSystemPrompt({
             hasTools: (options.tools?.length ?? 0) > 0,
+            ...(options.researchProfile ? { researchProfile: options.researchProfile } : {}),
+            ...(options.workflowId ? { workflowId: options.workflowId } : {}),
             ...(options.agentInstructions ? { agentInstructions: options.agentInstructions } : {}),
           }),
       thinkingLevel: options.thinkingLevel ?? "medium",

@@ -5,6 +5,7 @@ import {
   applyNativeOpenAiCompaction,
   compactAgentContext,
   DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
+  DEFAULT_SECURITY_RESEARCH_PROFILE,
   createPiAgentExecutor,
   ResearchDispositionRecorder,
   createResearchPiAgent,
@@ -13,6 +14,8 @@ import {
   createSessionDispositionTool,
   extractCompatiblePiAgentResumableState,
   modelRetryDelayMs,
+  normalizeResearchProfile,
+  researchProfileHash,
   runResearchAgent,
 } from "../packages/research-agent/dist/index.js";
 import {
@@ -210,13 +213,28 @@ test("Pi executor restores compatible captured messages and persists the next re
   const raw = result.agentRun.output.raw;
   const resumed = extractCompatiblePiAgentResumableState(raw, "faux", "faux-model");
   assert.ok(resumed);
-  assert.equal(resumed.schemaVersion, 2);
+  assert.equal(resumed.schemaVersion, 3);
+  assert.match(resumed.researchProfileHash ?? "", /^[a-f0-9]{64}$/);
+  assert.equal(resumed.workflowId, "discovery");
   assert.equal(resumed.providerSessionId, "run_resume_fixture");
   assert.equal(resumed.researchFocus.schemaVersion, 1);
   assert.equal("agentInstructions" in raw.resumableState, false);
   assert.equal(resumed.messages[0].content, "Prior research context");
   assert.match(JSON.stringify(resumed.messages), /Continue with this instruction only/);
   assert.equal(extractCompatiblePiAgentResumableState(raw, "faux", "other-model"), undefined);
+
+  const legacyRaw = structuredClone(raw);
+  legacyRaw.resumableState.schemaVersion = 2;
+  delete legacyRaw.resumableState.researchProfileHash;
+  delete legacyRaw.resumableState.workflowId;
+  assert.ok(extractCompatiblePiAgentResumableState(legacyRaw, "faux", "faux-model", {
+    researchProfileHash: resumed.researchProfileHash,
+    workflowId: "discovery",
+  }));
+  assert.equal(extractCompatiblePiAgentResumableState(legacyRaw, "faux", "faux-model", {
+    researchProfileHash: resumed.researchProfileHash,
+    workflowId: "chaining",
+  }), undefined);
 
   const continuationContexts = [];
   const continuationInstructions = agentInstructions(
@@ -281,6 +299,8 @@ test("direct Pi Agent and executor use the shared research system prompt", async
       hasTools: true,
       hasMemoryTools: false,
       hasCollaborationTools: true,
+      researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE,
+      workflowId: "discovery",
       agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
     }),
   );
@@ -791,7 +811,9 @@ test("Pi Agent resumes a native-compacted checkpoint exactly once", async () => 
     "faux",
     "faux-model",
   );
-  assert.equal(resumeState?.schemaVersion, 2);
+  assert.equal(resumeState?.schemaVersion, 3);
+  assert.match(resumeState?.researchProfileHash ?? "", /^[a-f0-9]{64}$/);
+  assert.equal(resumeState?.workflowId, "discovery");
 
   const resumedContexts = [];
   const resumedTool = createFixtureInspectTool([]);
@@ -1177,6 +1199,53 @@ test("Pi Agent treats an authorized safety guardrail as a likely false positive 
   );
   assert.equal(retry?.payload.recoveryKind, "safety_guardrail");
   assert.equal(retry?.payload.safetyDisposition, "likely_false_positive");
+});
+
+test("non-security profile safety recovery uses the resolved research boundary without cyber-specific steering", async () => {
+  const inputProfile = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  inputProfile.id = "historical-research";
+  inputProfile.version = "1.0.0";
+  inputProfile.name = "Historical Research";
+  inputProfile.description = "Evidence-driven historical research.";
+  inputProfile.agent.role = "You are a careful historical researcher.";
+  inputProfile.workspace.boundaryNoun = "Archive collection boundary";
+  inputProfile.workspace.authorizationMode = "optional";
+  const profile = normalizeResearchProfile(inputProfile);
+  const resolvedResearchProfile = {
+    profile,
+    hash: researchProfileHash(profile),
+    source: "explicit",
+  };
+  const contexts = [];
+  const liveEvents = [];
+  const result = await runResearchAgent({
+    prompt: "Compare primary sources about the historical use of malware and persistence terminology.",
+    workspaceContext: authorizedWorkspaceContext(),
+    resolvedResearchProfile,
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      researchProfile: profile,
+      models: createScriptedModels([
+        assistantError("Provider safety guardrail interrupted this response."),
+        assistant("## Result\nContinued with bounded archive analysis."),
+      ], contexts),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  const recovery = contexts[1].messageContents.at(-1);
+  assert.match(recovery, /Historical Research profile/);
+  assert.match(recovery, /Archive collection boundary \(Authorized fixture\)/);
+  assert.match(recovery, /bounded, reversible, evidence-producing methods/);
+  assert.doesNotMatch(recovery, /safety\/cyber|credential abuse|red-team rhetoric|live-target authorization/);
+  const retry = liveEvents.find((event) =>
+    event.kind === "agent.event" && event.payload.type === "model_retry"
+  );
+  assert.equal(retry?.payload.safetyDisposition, "safety_adjustment");
 });
 
 test("Pi Agent waits for live steering after one automatic safeguard retry", async () => {
@@ -1804,6 +1873,40 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
     && event.payload.event.kind === "tool.observed"
     && event.payload.event.payload.toolName === "spawn_agent"
   ));
+});
+
+test("Pi Agent subagents inherit the root host governance boundary", async () => {
+  const calls = [];
+  const contexts = [];
+  const tool = createFixtureInspectTool(calls);
+  const result = await runResearchAgent({
+    prompt: "Delegate a parser inspection without expanding the host capability boundary.",
+    tools: [tool.descriptor],
+    governance: {
+      allowedActionClasses: ["inspect"],
+      allowedSideEffects: ["none"],
+      allowedPermissions: ["filesystem:read"],
+      maxToolCalls: 2,
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createSubagentModels(contexts),
+      toolRegistry: createResearchToolRegistry([tool]),
+    }),
+  });
+
+  const child = result.agentRun.output.raw.subagents.agents[0];
+  const observed = result.agentRun.output.toolEvents.find((event) =>
+    event.kind === "tool.observed"
+    && event.agentPath === "/root/parser_review"
+    && event.payload.toolName === "fixture.inspect"
+  );
+  assert.equal(child.status, "completed");
+  assert.equal(child.toolCallCount, 1);
+  assert.deepEqual(calls, []);
+  assert.equal(observed?.payload.status, "blocked");
+  assert.match(observed?.payload.summary ?? "", /side effect read is not allowed/);
 });
 
 test("Pi Agent interrupts and settles active children after an irrecoverable root failure", async () => {

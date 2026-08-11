@@ -284,7 +284,12 @@ test("main CLI injects relevant graph memory without storage or tool-policy prom
   const contextEvent = payload.events.find((event) => event.kind === "context.compiled");
 
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(sectionLabels, ["workspace", "memory", "selected_skills"]);
+  assert.deepEqual(sectionLabels, [
+    "workspace",
+    "memory",
+    "selected_skills",
+    "research_profile",
+  ]);
   assert.equal(memorySection.content[0].id, memory.id);
   assert.equal(memorySection.content[0].evidence[0].path, "Src/Modules/zftp.c");
   assert.equal("storage" in contextEvent.payload, false);
@@ -485,6 +490,7 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
       "runbook.get",
       "runbook.list",
       "session.disposition",
+      "shell.run",
       "storage.list",
     ],
   );
@@ -651,6 +657,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
     "runbook.get",
     "runbook.create",
     "runbook.append",
+    "shell.run",
   ]);
   assert.deepEqual(disabledPayload.toolFamilies.disabled, [
     "repository-search",
@@ -660,7 +667,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
   assert.equal(workspaceDefault.status, 0, workspaceDefault.stderr);
   assert.deepEqual(
     workspaceDefaultPayload.tools.map((tool) => tool.name),
-    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "repository.search"],
+    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "shell.run", "repository.search"],
   );
   assert.equal(
     workspaceDefaultPayload.workspaceContext.workspaceRoot,
@@ -694,7 +701,7 @@ test("tools CLI requires experiment config and lists configured experiments", as
     assert.match(missingConfig.stderr, /requires --experiment-config/);
     assert.equal(listed.status, 0, listed.stderr);
     assert.ok(payload.tools.some((tool) => tool.name === "experiment.run"));
-    assert.deepEqual(payload.toolFamilies.enabled, ["experiment"]);
+    assert.deepEqual(payload.toolFamilies.enabled, ["shell", "experiment"]);
     assert.equal(
       payload.tools.find((tool) => tool.name === "experiment.run").metadata.experiments[0].name,
       "echo",

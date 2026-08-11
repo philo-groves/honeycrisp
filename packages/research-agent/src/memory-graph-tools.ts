@@ -1,124 +1,312 @@
 import { nowIso } from "./ids.js";
 import {
-  MEMORY_EVIDENCE_KINDS,
-  MEMORY_EVIDENCE_PATH_BASES,
-  MEMORY_NODE_STATUSES,
-  MEMORY_NODE_TYPES,
   MemoryGraphStore,
   type MemoryEvidenceRef,
+  type MemoryNodeLinkInput,
   type MemoryNodeStatus,
   type MemoryNodeType,
   type MemoryScope,
   type SaveMemoryNodeInput,
 } from "./memory-graph.js";
+import { formatResearchProfileMemoryTypes } from "./memory-taxonomy.js";
+import type {
+  ResearchProfileAttributeDefinition,
+  ResearchProfileMemory,
+  ResearchProfileMemoryRequirement,
+  ResearchProfileMemoryType,
+} from "./research-profile.js";
 import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
 import type { ResearchToolAction } from "./types.js";
 
-const ROOT_CAUSE_KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
-const SEARCH_PARAMETERS = {
-  type: "object",
-  properties: {
-    query: { type: "string" },
-    scope: { type: "string", description: "Defaults to workspace. Use session for the current research session or subject for all knowledge associated with the current subject.", enum: ["session", "workspace", "subject"] },
-    types: { type: "array", items: { type: "string", enum: [...MEMORY_NODE_TYPES] } },
-    statuses: { type: "array", items: { type: "string", enum: [...MEMORY_NODE_STATUSES] } },
+const GET_PARAMETERS = { type: "object", required: ["id"], properties: { id: { type: "string" } } };
+
+interface MemoryToolSchemas {
+  search: Record<string, unknown>;
+  save: Record<string, unknown>;
+  correct: Record<string, unknown>;
+  link: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+}
+
+function createMemoryToolSchemas(memory: ResearchProfileMemory): MemoryToolSchemas {
+  const readableTypeIds = catalogIdsAndAliases(memory.types);
+  const creatableTypes = memory.types.filter(
+    (type) => type.lifecycle === "active" && type.creatable,
+  );
+  const creatableTypeIds = catalogIdsAndAliases(creatableTypes);
+  const statusIds = memory.statuses.map((status) => status.id);
+  const statusDescription = memory.statuses
+    .map((status) => `${status.id} (${status.name}): ${status.description}`)
+    .join("\n");
+  const evidence = createEvidenceSchema(memory);
+  const nodeLink = createNodeLinkSchema(memory);
+  const typeDescription = [
+    "Use a stable type ID or one of its aliases. Aliases are persisted as their canonical type ID.",
+    ...formatResearchProfileMemoryTypes(memory, { creatableOnly: true }),
+  ].join("\n");
+  const attributes = {
+    type: "object",
+    description: "Type-specific structured details defined by the active memory catalog.",
+  };
+  const sharedSaveProperties = {
+    id: { type: "string" },
+    type: { type: "string", enum: creatableTypeIds, description: typeDescription },
+    title: { type: "string" },
+    summary: { type: "string" },
+    body: { type: "string" },
+    status: { type: "string", enum: statusIds, description: statusDescription },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
     assetIds: { type: "array", items: { type: "string" } },
     tags: { type: "array", items: { type: "string" } },
-    limit: { type: "number" },
-  },
-};
-const EVIDENCE_ITEM_PARAMETERS = {
-  type: "object",
-  required: ["kind", "summary"],
-  properties: {
-    kind: { type: "string", enum: [...MEMORY_EVIDENCE_KINDS] },
-    pathBase: { type: "string", enum: [...MEMORY_EVIDENCE_PATH_BASES] },
-    path: { type: "string" },
-    locator: { type: "object" },
-    summary: { type: "string" },
-  },
-};
-const GET_PARAMETERS = { type: "object", required: ["id"], properties: { id: { type: "string" } } };
-const SAVE_PARAMETERS = {
-  type: "object",
-  required: ["type", "title"],
-  properties: {
-    id: { type: "string" }, type: { type: "string", enum: [...MEMORY_NODE_TYPES], description: "Use hypothesis for a specific testable but unproven proposition, bug only for confirmed historical precedent, primitive for a flaw proven during current research, and chain for end-to-end reachability and impact. Evidence and finding are not memory node types." }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
-    status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
-    tags: { type: "array", items: { type: "string" } },
-    attributes: {
+    attributes,
+    evidence: { type: "array", items: evidence },
+    links: {
+      type: "array",
+      description: "Outgoing links created atomically with this memory write.",
+      items: nodeLink,
+    },
+  };
+  return {
+    search: {
       type: "object",
-      description: "Type-specific structured details. Chain memories require non-empty impact and reachability strings.",
       properties: {
-        rootCause: { type: "string", description: "Concise underlying security mechanism." },
-        rootCauseKey: { type: "string", pattern: ROOT_CAUSE_KEY_PATTERN.source, description: "Stable lowercase-hyphenated identity for the underlying root cause." },
-        impact: { type: "string", description: "Security consequence if the chain succeeds." },
-        reachability: { type: "string", description: "Conditions and path by which the chain can be reached." },
+        query: { type: "string" },
+        scope: { type: "string", description: "Defaults to workspace. Use session for the current research session or subject for all knowledge associated with the current subject.", enum: ["session", "workspace", "subject"] },
+        types: { type: "array", items: { type: "string", enum: readableTypeIds } },
+        statuses: { type: "array", items: { type: "string", enum: statusIds } },
+        assetIds: { type: "array", items: { type: "string" } },
+        tags: { type: "array", items: { type: "string" } },
+        limit: { type: "number" },
       },
     },
-    evidence: { type: "array", items: EVIDENCE_ITEM_PARAMETERS },
-  },
-  allOf: [
-    {
-      if: { properties: { type: { const: "chain" } }, required: ["type"] },
-      then: {
-        required: ["attributes"],
-        properties: {
-          attributes: {
-            type: "object",
-            required: ["impact", "reachability"],
-            properties: {
-              impact: { type: "string", minLength: 1 },
-              reachability: { type: "string", minLength: 1 },
-            },
-          },
+    save: {
+      type: "object",
+      required: ["type", "title"],
+      properties: sharedSaveProperties,
+      allOf: creatableTypes.flatMap((type) => createTypeConditions(type, evidence, nodeLink)),
+    },
+    correct: {
+      type: "object",
+      required: ["id", "expectedRevision"],
+      properties: {
+        ...sharedSaveProperties,
+        id: { type: "string" },
+        expectedRevision: { type: "number" },
+        type: {
+          type: "string",
+          enum: creatableTypeIds,
+          description: "Reclassify a miscategorized node to a creatable type from the active memory catalog while preserving its evidence and relationships.",
         },
       },
     },
-    {
-      if: { properties: { type: { const: "bug" } }, required: ["type"] },
-      then: {
-        required: ["status", "assetIds", "attributes", "evidence"],
-        properties: {
-          status: { const: "confirmed" },
-          assetIds: { type: "array", minItems: 1, items: { type: "string" } },
-          attributes: {
-            type: "object",
-            required: ["historicalPrecedent"],
-            properties: { historicalPrecedent: { const: true } },
-          },
-          evidence: { type: "array", minItems: 1, items: EVIDENCE_ITEM_PARAMETERS },
-        },
+    link: createLinkSchema(memory),
+    evidence,
+  };
+}
+
+function catalogIdsAndAliases(types: readonly ResearchProfileMemoryType[]): string[] {
+  return [...new Set(types.flatMap((type) => [type.id, ...(type.aliases ?? [])]))];
+}
+
+function createEvidenceSchema(memory: ResearchProfileMemory): Record<string, unknown> {
+  const schema: Record<string, unknown> = {
+    type: "object",
+    required: ["kind", "summary"],
+    properties: {
+      kind: {
+        type: "string",
+        enum: memory.evidenceKinds.map((kind) => kind.id),
+        description: memory.evidenceKinds.map((kind) => `${kind.id} (${kind.name}): ${kind.description}`).join("\n"),
+      },
+      pathBase: {
+        type: "string",
+        enum: memory.evidencePathBases.map((base) => base.id),
+        description: memory.evidencePathBases
+          .map((base) => `${base.id} (${base.name}, ${base.pathFormat ?? "relative"}): ${base.description}`)
+          .join("\n"),
+      },
+      path: { type: "string" },
+      locator: { type: "object" },
+      summary: { type: "string" },
+    },
+  };
+  const pathlessKinds = memory.evidenceKinds.filter((kind) => !kind.allowsPath);
+  if (pathlessKinds.length > 0) {
+    schema.allOf = pathlessKinds.map((kind) => ({
+      if: { properties: { kind: { const: kind.id } }, required: ["kind"] },
+      then: { not: { required: ["path"] } },
+    }));
+  }
+  return schema;
+}
+
+function createLinkSchema(memory: ResearchProfileMemory): Record<string, unknown> {
+  const relationCatalog = memory.relations?.length
+    ? memory.relations.map((relation) => `${relation.id} (${relation.name}): ${relation.description}`).join("\n")
+    : "This profile does not suggest any relation IDs.";
+  return {
+    type: "object",
+    required: ["fromId", "toId", "relation"],
+    properties: {
+      fromId: { type: "string" },
+      toId: { type: "string" },
+      relation: {
+        type: "string",
+        description: `Relations are open strings. Prefer a profile relation when it fits:\n${relationCatalog}`,
+      },
+      note: { type: "string" },
+    },
+  };
+}
+
+function createNodeLinkSchema(memory: ResearchProfileMemory): Record<string, unknown> {
+  const relationCatalog = memory.relations?.length
+    ? memory.relations.map((relation) => `${relation.id} (${relation.name}): ${relation.description}`).join("\n")
+    : "This profile does not suggest any relation IDs.";
+  return {
+    type: "object",
+    required: ["nodeId", "relation"],
+    properties: {
+      nodeId: { type: "string", description: "Existing subject-visible memory node to link from the node being saved." },
+      relation: {
+        type: "string",
+        description: `Relations are open strings. Prefer a profile relation when it fits:\n${relationCatalog}`,
+      },
+      note: { type: "string" },
+    },
+  };
+}
+
+function createTypeConditions(
+  memoryType: ResearchProfileMemoryType,
+  evidenceSchema: Record<string, unknown>,
+  nodeLinkSchema: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const baseThen: Record<string, unknown> = {
+    properties: {
+      status: {
+        type: "string",
+        enum: [...memoryType.allowedStatuses],
+        default: memoryType.defaultStatus,
+      },
+      attributes: {
+        type: "object",
+        properties: Object.fromEntries(
+          Object.entries(memoryType.attributes ?? {}).map(([name, definition]) => [
+            name,
+            attributeSchema(definition, false),
+          ]),
+        ),
       },
     },
-    {
-      if: { properties: { type: { const: "hypothesis" } }, required: ["type"] },
-      then: {
-        properties: {
-          status: { type: "string", enum: ["draft", "suspected", "rejected", "stale"] },
-        },
+  };
+  if (memoryType.requiresExplicitStatus) baseThen.required = ["status"];
+  const conditions: Record<string, unknown>[] = [{
+    if: { properties: { type: { enum: [memoryType.id, ...(memoryType.aliases ?? [])] } }, required: ["type"] },
+    then: baseThen,
+  }];
+  for (const requirement of memoryType.requirements ?? []) {
+    conditions.push({
+      if: requirementCondition(memoryType, requirement),
+      then: requirementSchema(requirement, memoryType, evidenceSchema, nodeLinkSchema),
+    });
+  }
+  return conditions;
+}
+
+function requirementCondition(
+  memoryType: ResearchProfileMemoryType,
+  requirement: ResearchProfileMemoryRequirement,
+): Record<string, unknown> {
+  const typeCondition = {
+    properties: { type: { enum: [memoryType.id, ...(memoryType.aliases ?? [])] } },
+    required: ["type"],
+  };
+  if (!requirement.statuses?.length) return typeCondition;
+  const statusCondition = {
+    properties: { status: { enum: [...requirement.statuses] } },
+    required: ["status"],
+  };
+  if (!requirement.statuses.includes(memoryType.defaultStatus) || memoryType.requiresExplicitStatus) {
+    return {
+      properties: {
+        ...(typeCondition.properties as Record<string, unknown>),
+        ...(statusCondition.properties as Record<string, unknown>),
       },
-    },
-  ],
-};
-const CORRECT_PARAMETERS = {
-  type: "object",
-  required: ["id", "expectedRevision"],
-  properties: {
-    id: { type: "string" }, expectedRevision: { type: "number" }, type: { type: "string", enum: [...MEMORY_NODE_TYPES], description: "Reclassify a miscategorized node while preserving its evidence and relationships." }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" },
-    status: { type: "string", enum: [...MEMORY_NODE_STATUSES] }, confidence: { type: "number" }, assetIds: { type: "array", items: { type: "string" } },
-    tags: { type: "array", items: { type: "string" } }, attributes: { type: "object" }, evidence: { type: "array", items: EVIDENCE_ITEM_PARAMETERS },
-  },
-};
-const LINK_PARAMETERS = {
-  type: "object", required: ["fromId", "toId", "relation"],
-  properties: { fromId: { type: "string" }, toId: { type: "string" }, relation: { type: "string" }, note: { type: "string" } },
-};
+      required: ["type", "status"],
+    };
+  }
+  return {
+    ...typeCondition,
+    allOf: [{
+      anyOf: [statusCondition, { not: { required: ["status"] } }],
+    }],
+  };
+}
+
+function requirementSchema(
+  requirement: ResearchProfileMemoryRequirement,
+  memoryType: ResearchProfileMemoryType,
+  evidenceSchema: Record<string, unknown>,
+  nodeLinkSchema: Record<string, unknown>,
+): Record<string, unknown> {
+  const required: string[] = [];
+  const properties: Record<string, unknown> = {};
+  if (requirement.requiredAttributes?.length) {
+    required.push("attributes");
+    properties.attributes = {
+      type: "object",
+      required: [...requirement.requiredAttributes],
+      properties: Object.fromEntries(requirement.requiredAttributes.map((name) => [
+        name,
+        attributeSchema(memoryType.attributes![name]!, true),
+      ])),
+    };
+  }
+  if (requirement.requireAssetLinks) {
+    required.push("assetIds");
+    properties.assetIds = { type: "array", minItems: 1, items: { type: "string" } };
+  }
+  if (requirement.requireEvidence) {
+    required.push("evidence");
+    properties.evidence = { type: "array", minItems: 1, items: evidenceSchema };
+  }
+  if (requirement.requiredNeighborTypes?.length) {
+    required.push("links");
+    properties.links = {
+      type: "array",
+      minItems: 1,
+      items: nodeLinkSchema,
+      description: `Create atomic links to satisfy required neighbor types: ${requirement.requiredNeighborTypes.join(", ")}.`,
+    };
+  }
+  return {
+    ...(required.length ? { required } : {}),
+    ...(Object.keys(properties).length ? { properties } : {}),
+  };
+}
+
+function attributeSchema(
+  definition: ResearchProfileAttributeDefinition,
+  required: boolean,
+): Record<string, unknown> {
+  return {
+    type: definition.type,
+    description: definition.description,
+    ...(definition.pattern ? { pattern: definition.pattern } : {}),
+    ...(definition.enum ? { enum: [...definition.enum] } : {}),
+    ...(required && definition.type === "string" ? { minLength: 1 } : {}),
+  };
+}
+
 export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecutableTool[] {
+  const memory = store.getProfileMemory();
+  const schemas = createMemoryToolSchemas(memory);
+  const typeCatalog = formatResearchProfileMemoryTypes(memory, { creatableOnly: true }).join("\n");
   return [
-    createMemorySearchTool(store),
+    createMemorySearchTool(store, schemas.search),
     createMemoryGetTool(store),
-    tool("memory.save", "memory_save", "Create or additively refine concise reusable knowledge with asset links and evidence references. Saving automatically associates the memory with the current session, workspace, and subject; updating it from another session or workspace adds that association. Exact subject-visible type-and-title identities are refined in place. Use hypothesis for a testable unproven proposition, then reject it when disproven or reclassify it as a primitive or chain when proven. Use bug only for a confirmed historical flaw precedent with an affected asset and precedent evidence. Use primitive for a flaw established during current research, trajectories for reusable research sequences, and chains for reviewed end-to-end reachability and impact. Evidence and finding are not node types. Do not store transcripts, routine narration, or bulk output.", "write", SAVE_PARAMETERS, (input) => {
+    tool("memory.save", "memory_save", `Create or additively refine concise reusable knowledge with links and evidence references. Saving automatically associates the memory with the current session, workspace, and subject; updating it from another session or workspace adds that association. Exact subject-visible type-and-title identities are refined in place. Use the active memory catalog below and do not store transcripts, routine narration, or bulk output.\n${typeCatalog}`, "write", schemas.save, (input) => {
       const id = string(input.id);
       return store.save({
         ...(id ? { id } : {}),
@@ -132,9 +320,10 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
         ...(Array.isArray(input.tags) ? { tags: strings(input.tags) } : {}),
         ...(record(input.attributes) ? { attributes: record(input.attributes)! } : {}),
         ...(Array.isArray(input.evidence) ? { evidence: input.evidence.map(parseEvidence) } : {}),
+        ...(Array.isArray(input.links) ? { links: input.links.map(parseMemoryLink) } : {}),
       });
     }),
-    tool("memory.correct", "memory_correct", "Exactly correct supplied fields or reclassify a memory node using its current revision. Reclassification preserves evidence and relationships and returns a new type-derived id.", "write", CORRECT_PARAMETERS, (input) => {
+    tool("memory.correct", "memory_correct", "Exactly correct supplied fields or reclassify a memory node using its current revision. Reclassification preserves evidence and relationships and returns a new type-derived id. Retired and non-creatable types remain readable but cannot be reclassification targets.", "write", schemas.correct, (input) => {
       const patch: Partial<Omit<SaveMemoryNodeInput, "id">> = {};
       if ("type" in input) patch.type = requiredString(input.type, "type") as MemoryNodeType;
       if ("title" in input) patch.title = requiredString(input.title, "title");
@@ -146,15 +335,16 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
       if ("tags" in input) patch.tags = strings(input.tags);
       if ("attributes" in input) patch.attributes = requiredRecord(input.attributes, "attributes");
       if ("evidence" in input) patch.evidence = requiredArray(input.evidence, "evidence").map(parseEvidence);
+      if ("links" in input) patch.links = requiredArray(input.links, "links").map(parseMemoryLink);
       return store.correct(requiredString(input.id, "id"), requiredInteger(input.expectedRevision, "expectedRevision"), patch);
     }),
-    tool("memory.link", "memory_link", "Create or refine a directed relationship between durable memory nodes.", "write", LINK_PARAMETERS, (input) =>
+    tool("memory.link", "memory_link", "Create or refine a directed relationship between durable memory nodes. Profile relation IDs are advisory; other concise relation IDs remain valid.", "write", schemas.link, (input) =>
       store.link(requiredString(input.fromId, "fromId"), requiredString(input.toId, "toId"), requiredString(input.relation, "relation"), string(input.note) ?? "")),
   ];
 }
 
-function createMemorySearchTool(store: MemoryGraphStore): ResearchExecutableTool {
-  return tool("memory.search", "memory_search", "Search memories associated with the current workspace by default. Use session or subject scope when narrower or broader recall is needed. Use before repeating prior research.", "read", SEARCH_PARAMETERS, (input) => {
+function createMemorySearchTool(store: MemoryGraphStore, schema: Record<string, unknown>): ResearchExecutableTool {
+  return tool("memory.search", "memory_search", "Search memories associated with the current workspace by default. Use session or subject scope when narrower or broader recall is needed. Use before repeating prior research.", "read", schema, (input) => {
     const query = string(input.query);
     const scope = string(input.scope) as MemoryScope | null;
     const types = strings(input.types) as MemoryNodeType[];
@@ -220,4 +410,15 @@ function parseEvidence(value: unknown): Omit<MemoryEvidenceRef, "id" | "createdA
   if (input.pathBase !== undefined) result.pathBase = requiredString(input.pathBase, "evidence pathBase") as NonNullable<MemoryEvidenceRef["pathBase"]>;
   if (input.path !== undefined) result.path = requiredString(input.path, "evidence path");
   return result;
+}
+
+function parseMemoryLink(value: unknown): MemoryNodeLinkInput {
+  const input = requiredRecord(value, "memory link");
+  return {
+    nodeId: requiredString(input.nodeId, "memory link nodeId"),
+    relation: requiredString(input.relation, "memory link relation"),
+    ...(input.note === undefined
+      ? {}
+      : { note: requiredString(input.note, "memory link note", true) }),
+  };
 }

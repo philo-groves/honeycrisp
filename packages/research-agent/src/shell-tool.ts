@@ -92,7 +92,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       name: "shell.run",
       transportName: "shell_run",
       description:
-        "Run one host utility with explicit argv. Use it for repository inspection, builds, tests, debugging, and bounded proof work. Utility policy, shell safety authorization, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
+        "Run one host utility with explicit argv. Use it for repository inspection, builds, tests, debugging, and bounded proof work. Utility policy, shell safety authorization, recognized network-intent policy, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
       actionClasses: ["search", "inspect", "analyze", "experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],
@@ -100,6 +100,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       metadata: {
         provider: "honeycrisp.built_in",
         safetyProfile: "host-utility-policy",
+        networkPolicy: "host-recorded-command-intent",
         defaultBudget: { maxToolCalls: 1 },
       },
     },

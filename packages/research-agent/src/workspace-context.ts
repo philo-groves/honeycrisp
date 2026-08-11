@@ -172,9 +172,18 @@ function normalizeAuthorization(
     ...optionalStringProperty(value, "scopeName"),
     ...optionalStringProperty(value, "scopeOwner"),
     ...optionalStringProperty(value, "networkProfile"),
+    ...optionalStringArrayProperty(value, "allowedNetworkDestinations"),
     ...optionalStringProperty(value, "activeFrom"),
     ...optionalStringProperty(value, "expiresAt"),
   };
+}
+
+function optionalStringArrayProperty(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, readonly string[]> {
+  const candidates = uniqueStrings(readArray(value[key]));
+  return candidates.length > 0 ? { [key]: candidates } : {};
 }
 
 function optionalStringProperty(

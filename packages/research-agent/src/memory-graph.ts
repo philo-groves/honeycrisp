@@ -4,30 +4,49 @@ import { createRequire } from "node:module";
 import { basename, dirname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
+import {
+  DEFAULT_SECURITY_RESEARCH_PROFILE,
+  normalizeResearchProfile,
+  researchProfileHash,
+} from "./research-profile.js";
+import type {
+  ResearchProfileMemory,
+  ResearchProfileMemoryType,
+  ResolvedResearchProfile,
+} from "./research-profile.js";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
 
 const require = createRequire(import.meta.url);
+const NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE = normalizeResearchProfile(
+  DEFAULT_SECURITY_RESEARCH_PROFILE,
+);
 
-export const MEMORY_NODE_TYPES = [
-  "asset",
-  "bug",
-  "invariant",
-  "mitigation",
-  "source",
-  "sink",
-  "hypothesis",
-  "primitive",
-  "chain",
-  "procedure",
-  "trajectory",
-] as const;
-export const MEMORY_NODE_STATUSES = ["draft", "suspected", "confirmed", "rejected", "stale"] as const;
+export const MEMORY_CATALOG_HASH_DOMAIN = "honeycrisp:memory-catalog:v1\0";
+export const MEMORY_CATALOG_COMPATIBILITY_HASH_DOMAIN = "honeycrisp:memory-catalog-compatibility:v1\0";
+export const MEMORY_NODE_VALIDATION_HASH_DOMAIN = "honeycrisp:memory-node-validation:v1\0";
+export const DEFAULT_SECURITY_MEMORY_CATALOG_HASH = memoryCatalogHash(
+  DEFAULT_SECURITY_RESEARCH_PROFILE.memory,
+);
+export const DEFAULT_SECURITY_MEMORY_CATALOG_COMPATIBILITY_HASH = memoryCatalogCompatibilityHash(
+  DEFAULT_SECURITY_RESEARCH_PROFILE.memory,
+);
+
+export const MEMORY_NODE_TYPES: readonly string[] = Object.freeze(
+  DEFAULT_SECURITY_RESEARCH_PROFILE.memory.types.map((type) => type.id),
+);
+export const MEMORY_NODE_STATUSES: readonly string[] = Object.freeze(
+  DEFAULT_SECURITY_RESEARCH_PROFILE.memory.statuses.map((status) => status.id),
+);
 export const MEMORY_SCOPES = ["session", "workspace", "subject"] as const;
-export const MEMORY_EVIDENCE_KINDS = ["code", "artifact", "command", "url", "human_note"] as const;
-export const MEMORY_EVIDENCE_PATH_BASES = ["workspace", "repository", "asset_root", "external"] as const;
+export const MEMORY_EVIDENCE_KINDS: readonly string[] = Object.freeze(
+  DEFAULT_SECURITY_RESEARCH_PROFILE.memory.evidenceKinds.map((kind) => kind.id),
+);
+export const MEMORY_EVIDENCE_PATH_BASES: readonly string[] = Object.freeze(
+  DEFAULT_SECURITY_RESEARCH_PROFILE.memory.evidencePathBases.map((base) => base.id),
+);
 
-export type MemoryNodeType = (typeof MEMORY_NODE_TYPES)[number];
-export type MemoryNodeStatus = (typeof MEMORY_NODE_STATUSES)[number];
+export type MemoryNodeType = string;
+export type MemoryNodeStatus = string;
 export type MemoryScope = (typeof MEMORY_SCOPES)[number];
 
 export interface MemoryContext {
@@ -45,8 +64,8 @@ export interface MemoryWorkspaceMembership {
 
 export interface MemoryEvidenceRef {
   id: string;
-  kind: (typeof MEMORY_EVIDENCE_KINDS)[number];
-  pathBase?: (typeof MEMORY_EVIDENCE_PATH_BASES)[number];
+  kind: string;
+  pathBase?: string;
   path?: string;
   locator: Record<string, unknown>;
   summary: string;
@@ -61,6 +80,55 @@ export interface MemoryEdge {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface MemoryNodeLinkInput {
+  nodeId: string;
+  relation: string;
+  note?: string;
+}
+
+export type MemoryNodeValidationKind = "full" | "scoped" | "inherited";
+
+export interface MemoryNodeProfileIdentity {
+  hash: string;
+  id: string;
+  version: string;
+}
+
+export interface MemoryNodeCatalogValidation {
+  nodeRevision: number;
+  catalogHash: string;
+  contentHash: string;
+  kind: MemoryNodeValidationKind;
+  validatedAt: string;
+  researchProfile?: MemoryNodeProfileIdentity;
+}
+
+export type MemoryNodeProvenance =
+  | {
+      state: "legacy_unrecorded";
+      catalogHash: null;
+      activeCatalog: false;
+      validation: null;
+    }
+  | {
+      state: "catalog_unvalidated";
+      catalogHash: string;
+      activeCatalog: boolean;
+      validation: null;
+    }
+  | {
+      state: "active_validated";
+      catalogHash: string;
+      activeCatalog: true;
+      validation: MemoryNodeCatalogValidation;
+    }
+  | {
+      state: "foreign_validated";
+      catalogHash: string;
+      activeCatalog: false;
+      validation: MemoryNodeCatalogValidation;
+    };
 
 export interface MemoryNode {
   id: string;
@@ -81,6 +149,7 @@ export interface MemoryNode {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  provenance: MemoryNodeProvenance;
 }
 
 export interface SaveMemoryNodeInput {
@@ -95,6 +164,8 @@ export interface SaveMemoryNodeInput {
   tags?: readonly string[];
   attributes?: Record<string, unknown>;
   evidence?: readonly Omit<MemoryEvidenceRef, "id" | "createdAt">[];
+  /** Outgoing links created atomically with this node write. */
+  links?: readonly MemoryNodeLinkInput[];
 }
 
 export interface SearchMemoryNodesInput {
@@ -118,15 +189,87 @@ interface LocatedMemoryNode {
   node: MemoryNode;
 }
 
+interface ActiveMemoryCatalog {
+  memory: ResearchProfileMemory;
+  hash: string;
+  json: string;
+  profile?: MemoryNodeProfileIdentity;
+  preservesLegacyNodeIds: boolean;
+  typesById: ReadonlyMap<string, ResearchProfileMemoryType>;
+  typesByAlias: ReadonlyMap<string, ResearchProfileMemoryType>;
+  evidenceKinds: ReadonlyMap<string, ResearchProfileMemory["evidenceKinds"][number]>;
+  evidencePathBases: ReadonlyMap<string, ResearchProfileMemory["evidencePathBases"][number]>;
+  relationIds: ReadonlySet<string>;
+}
+
+interface MemoryNodeWriteProvenance {
+  catalogHash: string | null;
+  validation?: {
+    kind: MemoryNodeValidationKind;
+    profile?: MemoryNodeProfileIdentity;
+  };
+}
+
+interface MemoryConstraintValidationScope {
+  full: boolean;
+  status: boolean;
+  attributes: boolean;
+  assetIds: boolean;
+  evidence: boolean;
+  neighbors: boolean;
+}
+
+interface PreparedMemoryLink {
+  toId: string;
+  relation: string;
+  note: string;
+  neighborType: string;
+}
+
+export interface MemoryGraphStoreOptions {
+  workspaceRoot?: string;
+  databasePath?: string;
+  context?: MemoryContext;
+  resolvedProfile?: ResolvedResearchProfile;
+  profileMemory?: ResearchProfileMemory;
+}
+
 export class MemoryGraphStore {
   public readonly databasePath: string;
   private readonly local: MemoryDatabaseBinding;
+  private readonly catalog: ActiveMemoryCatalog;
 
-  public constructor(options: {
-    workspaceRoot?: string;
-    databasePath?: string;
-    context?: MemoryContext;
-  } = {}) {
+  public constructor(options: MemoryGraphStoreOptions = {}) {
+    if (options.resolvedProfile && options.profileMemory) {
+      throw new Error("Memory graph accepts either resolvedProfile or profileMemory, not both.");
+    }
+    if (options.resolvedProfile) {
+      const actualProfileHash = researchProfileHash(options.resolvedProfile.profile);
+      if (actualProfileHash !== options.resolvedProfile.hash) {
+        throw new Error(
+          `Resolved research profile hash mismatch: expected ${options.resolvedProfile.hash}, computed ${actualProfileHash}.`,
+        );
+      }
+    }
+    const profileIdentity = options.resolvedProfile
+      ? {
+          hash: options.resolvedProfile.hash,
+          id: options.resolvedProfile.profile.id,
+          version: options.resolvedProfile.profile.version,
+        }
+      : options.profileMemory
+        ? undefined
+        : {
+            hash: researchProfileHash(NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE),
+            id: NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE.id,
+            version: NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE.version,
+          };
+    this.catalog = createActiveMemoryCatalog(
+      options.resolvedProfile?.profile.memory
+        ?? options.profileMemory
+        ?? NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE.memory,
+      profileIdentity,
+    );
     const workspaceRoot = options.workspaceRoot ?? process.cwd();
     this.databasePath = options.databasePath ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     mkdirSync(dirname(this.databasePath), { recursive: true });
@@ -143,32 +286,64 @@ export class MemoryGraphStore {
     return { ...this.local.context };
   }
 
+  public getProfileMemory(): ResearchProfileMemory {
+    return this.catalog.memory;
+  }
+
+  public getMemoryCatalogHash(): string {
+    return this.catalog.hash;
+  }
+
   public save(input: SaveMemoryNodeInput): MemoryNode {
-    validateNodeInput(input);
+    validateNodeShape(input);
+    const memoryType = this.requireCreatableType(input.type);
+    const canonicalInput: SaveMemoryNodeInput = {
+      ...input,
+      type: memoryType.id,
+    };
     const title = input.title.trim();
     const titleNorm = normalizeTitle(title);
-    const existingLocation = this.findByIdentity(input.type, titleNorm);
+    const existingLocation = this.findByIdentity(memoryType.id, titleNorm);
+    this.validateExplicitNodeFields(canonicalInput, memoryType, !existingLocation);
     const existing = existingLocation?.node ?? null;
     const target = existingLocation?.binding ?? this.local;
     const now = new Date().toISOString();
-    const id = existing?.id ?? input.id ?? stableNodeId(this.local.context.subjectId, input.type, titleNorm);
-    if (!existing && input.id) {
-      const conflicting = this.get(input.id);
-      if (conflicting) throw new Error(`Memory node id already belongs to ${conflicting.type}: ${input.id}`);
+    let id = existing?.id
+      ?? canonicalInput.id
+      ?? stableNodeId(this.local.context.subjectId, memoryType.id, titleNorm, this.catalog);
+    if (!existing) {
+      const conflicting = this.getFromDatabase(this.local.database, id);
+      if (conflicting && canonicalInput.id) {
+        throw new Error(`Memory node id already belongs to ${conflicting.type}: ${canonicalInput.id}`);
+      }
+      if (conflicting) {
+        id = stableNodeId(
+          this.local.context.subjectId,
+          memoryType.id,
+          titleNorm,
+          this.catalog,
+          true,
+        );
+        const catalogConflict = this.getFromDatabase(this.local.database, id);
+        if (catalogConflict) {
+          throw new Error(`Memory node identity conflicts with existing ${catalogConflict.type}: ${id}`);
+        }
+      }
     }
+    const preparedLinks = this.prepareMemoryLinks([id], canonicalInput.links ?? []);
     const next: MemoryNode = existing
       ? {
           ...existing,
           sessionIds: mergeSessionMemberships(existing.sessionIds, this.local.context.sessionId),
           workspaces: mergeWorkspaceMemberships(existing.workspaces, this.local.context),
-          summary: input.summary?.trim() || existing.summary,
-          body: input.body?.trim() || existing.body,
-          status: input.status ?? existing.status,
-          confidence: input.confidence ?? existing.confidence,
-          assetIds: unique([...existing.assetIds, ...(input.assetIds ?? [])]),
-          tags: unique([...existing.tags, ...(input.tags ?? []).map(normalizeTag)]),
-          attributes: mergeObjects(existing.attributes, input.attributes ?? {}),
-          evidence: mergeEvidence(existing.evidence, input.evidence ?? [], id, now),
+          summary: canonicalInput.summary?.trim() || existing.summary,
+          body: canonicalInput.body?.trim() || existing.body,
+          status: canonicalInput.status ?? existing.status,
+          confidence: canonicalInput.confidence ?? existing.confidence,
+          assetIds: unique([...existing.assetIds, ...(canonicalInput.assetIds ?? [])]),
+          tags: unique([...existing.tags, ...(canonicalInput.tags ?? []).map(normalizeTag)]),
+          attributes: mergeObjects(existing.attributes, canonicalInput.attributes ?? {}),
+          evidence: mergeEvidence(existing.evidence, canonicalInput.evidence ?? [], id, now, this.catalog),
           updatedAt: now,
           revision: existing.revision + 1,
         }
@@ -178,22 +353,49 @@ export class MemoryGraphStore {
           workspaces: [{ id: this.local.context.workspaceId, name: this.local.context.workspaceName }],
           subjectId: this.local.context.subjectId,
           subjectName: this.local.context.subjectName,
-          type: input.type,
+          type: memoryType.id,
           title,
-          summary: input.summary?.trim() ?? "",
-          body: input.body?.trim() ?? "",
-          status: input.status ?? "draft",
-          confidence: input.confidence ?? 0.5,
-          assetIds: unique(input.assetIds ?? []),
-          tags: unique((input.tags ?? []).map(normalizeTag)),
-          attributes: input.attributes ?? {},
-          evidence: mergeEvidence([], input.evidence ?? [], id, now),
+          summary: canonicalInput.summary?.trim() ?? "",
+          body: canonicalInput.body?.trim() ?? "",
+          status: canonicalInput.status ?? memoryType.defaultStatus,
+          confidence: canonicalInput.confidence ?? 0.5,
+          assetIds: unique(canonicalInput.assetIds ?? []),
+          tags: unique((canonicalInput.tags ?? []).map(normalizeTag)),
+          attributes: canonicalInput.attributes ?? {},
+          evidence: mergeEvidence([], canonicalInput.evidence ?? [], id, now, this.catalog),
           createdAt: now,
           updatedAt: now,
           revision: 1,
+          provenance: {
+            state: "catalog_unvalidated",
+            catalogHash: this.catalog.hash,
+            activeCatalog: true,
+            validation: null,
+          },
         };
-    validateCompleteNode(next);
-    this.writeNode(target.database, next, titleNorm);
+    const existingIsActivelyValidated = existing?.provenance.state === "active_validated";
+    let validationKind: MemoryNodeValidationKind | null = null;
+    if (!existing || nodeConstraintFieldsWereProvided(canonicalInput)) {
+      const requiresFullValidation = !existing || !existingIsActivelyValidated;
+      this.validateCompleteNode(
+        next,
+        memoryType,
+        target.database,
+        id,
+        requiresFullValidation ? fullConstraintValidationScope() : constraintValidationScope(canonicalInput),
+        new Set(preparedLinks.map((link) => link.neighborType)),
+      );
+      validationKind = requiresFullValidation ? "full" : "scoped";
+    } else if (existingIsActivelyValidated) {
+      validationKind = "inherited";
+    }
+    this.writeNode(
+      target.database,
+      next,
+      titleNorm,
+      activeCatalogWriteProvenance(this.catalog, validationKind),
+      preparedLinks,
+    );
     return this.getFromDatabase(target.database, id)!;
   }
 
@@ -204,10 +406,36 @@ export class MemoryGraphStore {
     if (existing.revision !== expectedRevision) {
       throw new Error(`Memory node revision conflict for ${id}: expected ${expectedRevision}, found ${existing.revision}.`);
     }
+    validateNodeShape({ ...existing, ...patch });
     const now = new Date().toISOString();
-    const type = patch.type ?? existing.type;
+    const requestedType = patch.type === undefined ? undefined : this.requireCreatableType(patch.type);
+    const type = requestedType?.id ?? existing.type;
+    const memoryType = requestedType ?? this.catalog.typesById.get(existing.type);
+    const existingCatalogHash = existing.provenance.catalogHash;
+    const participatesInActiveCatalog = nodeCanParticipateInActiveCatalog(existing, this.catalog);
+    const targetsActiveCatalog = requestedType !== undefined
+      || (existingCatalogHash !== null && participatesInActiveCatalog);
+    const targetCatalogHash = requestedType !== undefined ? this.catalog.hash : existingCatalogHash;
+    if (!memoryType && correctionTouchesCatalogFields(patch)) {
+      throw new Error(`Cannot validate catalog fields for unknown stored memory node type: ${existing.type}`);
+    }
+    if (memoryType) this.validateExplicitNodeFields({ ...patch, type, title: patch.title ?? existing.title }, memoryType, false);
     const title = patch.title?.trim() ?? existing.title;
-    const nextId = type === existing.type ? id : stableNodeId(existing.subjectId, type, normalizeTitle(title));
+    const reidentifiesNode = requestedType !== undefined
+      && (type !== existing.type || !participatesInActiveCatalog);
+    const nextId = reidentifiesNode
+      ? stableNodeId(
+          existing.subjectId,
+          type,
+          normalizeTitle(title),
+          this.catalog,
+          type === existing.type && !participatesInActiveCatalog,
+        )
+      : id;
+    if (patch.links !== undefined && requestedType === undefined && !participatesInActiveCatalog) {
+      throw new Error("Memory nodes from another catalog must be explicitly reclassified before linking.");
+    }
+    const preparedLinks = this.prepareMemoryLinks([id, nextId], patch.links ?? []);
     const next: MemoryNode = {
       ...existing,
       id: nextId,
@@ -222,16 +450,60 @@ export class MemoryGraphStore {
       ...(patch.assetIds !== undefined ? { assetIds: unique(patch.assetIds) } : {}),
       ...(patch.tags !== undefined ? { tags: unique(patch.tags.map(normalizeTag)) } : {}),
       ...(patch.attributes !== undefined ? { attributes: patch.attributes } : {}),
-      ...(patch.evidence !== undefined ? { evidence: mergeEvidence([], patch.evidence, nextId, now) } : {}),
+      ...(patch.evidence !== undefined ? { evidence: mergeEvidence([], patch.evidence, nextId, now, this.catalog) } : {}),
       updatedAt: now,
       revision: existing.revision + 1,
     };
-    validateNodeInput(next);
-    validateCompleteNode(next);
+    const touchesCatalogFields = correctionTouchesCatalogFields(patch);
+    let activeValidationKind: MemoryNodeValidationKind | null = null;
+    if (memoryType && (requestedType !== undefined || touchesCatalogFields)) {
+      const requiresFullValidation = requestedType !== undefined
+        || (targetsActiveCatalog && existing.provenance.state !== "active_validated");
+      this.validateCompleteNode(
+        next,
+        memoryType,
+        located.binding.database,
+        id,
+        requiresFullValidation ? fullConstraintValidationScope() : constraintValidationScope(patch),
+        new Set(preparedLinks.map((link) => link.neighborType)),
+      );
+      if (targetsActiveCatalog) activeValidationKind = requiresFullValidation ? "full" : "scoped";
+    } else if (targetsActiveCatalog && existing.provenance.state === "active_validated") {
+      activeValidationKind = "inherited";
+    }
+    let writeProvenance = activeValidationKind
+      ? activeCatalogWriteProvenance(this.catalog, activeValidationKind)
+      : { catalogHash: targetCatalogHash } satisfies MemoryNodeWriteProvenance;
+    if (
+      !targetsActiveCatalog
+      && !touchesCatalogFields
+      && existing.provenance.state === "foreign_validated"
+    ) {
+      writeProvenance = catalogWriteProvenance(
+        existing.provenance.catalogHash,
+        "inherited",
+        existing.provenance.validation.researchProfile,
+      );
+    }
     if (nextId === id) {
-      this.writeNode(located.binding.database, next, normalizeTitle(next.title), expectedRevision);
+      this.writeNode(
+        located.binding.database,
+        next,
+        normalizeTitle(next.title),
+        writeProvenance,
+        preparedLinks,
+        expectedRevision,
+      );
     } else {
-      this.writeRetypedNode(located.binding.database, id, next, normalizeTitle(next.title), expectedRevision);
+      this.writeRetypedNode(
+        located.binding.database,
+        id,
+        next,
+        normalizeTitle(next.title),
+        writeProvenance,
+        preparedLinks,
+        expectedRevision,
+      );
     }
     return this.getFromDatabase(located.binding.database, nextId)!;
   }
@@ -243,7 +515,7 @@ export class MemoryGraphStore {
   private getFromDatabase(database: DatabaseSync, id: string): MemoryNode | null {
     const row = database.prepare("SELECT * FROM memory_nodes WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     if (!row) return null;
-    return {
+    const node: Omit<MemoryNode, "provenance"> = {
       id: text(row.id),
       sessionIds: this.strings(database, "SELECT session_id AS value FROM memory_node_sessions WHERE node_id = ? ORDER BY session_id", id),
       workspaces: (database
@@ -254,11 +526,11 @@ export class MemoryGraphStore {
         })),
       subjectId: text(row.subject_id),
       subjectName: text(row.subject_name),
-      type: nodeType(row.type),
+      type: text(row.type),
       title: text(row.title),
       summary: text(row.summary),
       body: text(row.body),
-      status: nodeStatus(row.status),
+      status: text(row.status),
       confidence: number(row.confidence),
       assetIds: this.strings(database, "SELECT asset_id AS value FROM memory_node_assets WHERE node_id = ? ORDER BY asset_id", id),
       tags: this.strings(database, "SELECT tag AS value FROM memory_node_tags WHERE node_id = ? ORDER BY tag", id),
@@ -270,11 +542,24 @@ export class MemoryGraphStore {
       updatedAt: text(row.updated_at),
       revision: number(row.revision),
     };
+    return {
+      ...node,
+      provenance: readMemoryNodeProvenance(database, node, nullableText(row.catalog_hash), this.catalog),
+    };
   }
 
   public search(input: SearchMemoryNodesInput = {}): MemoryNode[] {
+    const normalizedInput = input.types?.length
+      ? {
+          ...input,
+          types: input.types.map((type) => {
+            const normalizedType = type.trim();
+            return this.catalog.typesByAlias.get(normalizedType)?.id ?? normalizedType;
+          }),
+        }
+      : input;
     const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
-    const nodes = this.searchBinding(this.local, input);
+    const nodes = this.searchBinding(this.local, normalizedInput);
     const query = input.query?.trim() ?? "";
     return nodes
       .sort((left, right) =>
@@ -342,19 +627,32 @@ export class MemoryGraphStore {
       clauses.push("EXISTS (SELECT 1 FROM memory_node_tags t WHERE t.node_id = n.id AND t.tag = ?)");
       params.push(normalizeTag(tag));
     }
-    params.push(100);
     const rows = binding.database
-      .prepare(`SELECT n.id FROM memory_nodes n ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY n.updated_at DESC, n.id LIMIT ?`)
+      .prepare(`SELECT n.id FROM memory_nodes n ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY n.updated_at DESC, n.id`)
       .all(...params) as { id?: unknown }[];
-    return rows.flatMap((row) => (typeof row.id === "string" ? [this.getFromDatabase(binding.database, row.id)!] : []));
+    return rows
+      .flatMap((row) => {
+        if (typeof row.id !== "string") return [];
+        const node = this.getFromDatabase(binding.database, row.id);
+        return node && nodeCanParticipateInActiveCatalog(node, this.catalog) ? [node] : [];
+      })
+      .slice(0, 100);
   }
 
   public link(fromId: string, toId: string, relation: string, note = ""): MemoryEdge {
     const from = this.locate(fromId);
     const to = this.locate(toId);
     if (!from || !to) throw new Error("Both memory edge nodes must belong to the current subject.");
+    if (!nodeCanParticipateInActiveCatalog(from.node, this.catalog)
+      || !nodeCanParticipateInActiveCatalog(to.node, this.catalog)) {
+      throw new Error("Memory edge nodes from another catalog must be explicitly reclassified before linking.");
+    }
     const database = this.local.database;
-    const cleanRelation = normalizeTag(relation);
+    const requestedRelation = relation.trim();
+    const cleanRelation = this.catalog.relationIds.has(requestedRelation)
+      ? requestedRelation
+      : normalizeTag(requestedRelation);
+    if (!cleanRelation) throw new Error("Memory edge relation must be a non-empty relation ID.");
     const now = new Date().toISOString();
     database
       .prepare(
@@ -383,8 +681,14 @@ export class MemoryGraphStore {
 
   private visibleNodeIds(binding: MemoryDatabaseBinding): Set<string> {
     const visibility = visibilityClause(this.local.context);
-    const rows = binding.database.prepare(`SELECT n.id FROM memory_nodes n WHERE ${visibility.sql}`).all(...visibility.params) as Array<{ id?: unknown }>;
-    return new Set(rows.flatMap((row) => typeof row.id === "string" ? [row.id] : []));
+    const rows = binding.database
+      .prepare(`SELECT n.id FROM memory_nodes n WHERE ${visibility.sql}`)
+      .all(...visibility.params) as Array<{ id?: unknown }>;
+    return new Set(rows.flatMap((row) => {
+      if (typeof row.id !== "string") return [];
+      const node = this.getFromDatabase(binding.database, row.id);
+      return node && nodeCanParticipateInActiveCatalog(node, this.catalog) ? [node.id] : [];
+    }));
   }
 
   private locate(id: string): LocatedMemoryNode | null {
@@ -394,17 +698,158 @@ export class MemoryGraphStore {
   }
 
   private findByIdentity(type: MemoryNodeType, titleNorm: string): LocatedMemoryNode | null {
-    const row = this.local.database
+    const rows = this.local.database
       .prepare(
         `SELECT n.id FROM memory_nodes n
-         WHERE n.subject_id = ? AND n.type = ? AND n.title_norm = ?
-         ORDER BY n.updated_at DESC, n.id
-         LIMIT 1`,
+         WHERE n.subject_id = ? AND n.catalog_hash IS NOT NULL AND n.type = ? AND n.title_norm = ?
+         ORDER BY CASE WHEN n.catalog_hash = ? THEN 0 ELSE 1 END, n.updated_at DESC, n.id`,
       )
-      .get(this.local.context.subjectId, type, titleNorm) as { id?: unknown } | undefined;
-    if (typeof row?.id !== "string") return null;
-    const node = this.getFromDatabase(this.local.database, row.id);
-    return node ? { binding: this.local, node } : null;
+      .all(this.local.context.subjectId, type, titleNorm, this.catalog.hash) as Array<{ id?: unknown }>;
+    for (const row of rows) {
+      if (typeof row.id !== "string") continue;
+      const node = this.getFromDatabase(this.local.database, row.id);
+      if (node && nodeCanParticipateInActiveCatalog(node, this.catalog)) {
+        return { binding: this.local, node };
+      }
+    }
+    return null;
+  }
+
+  private requireCreatableType(typeOrAlias: string): ResearchProfileMemoryType {
+    const normalizedType = typeOrAlias.trim();
+    const memoryType = this.catalog.typesByAlias.get(normalizedType);
+    if (!memoryType) throw new Error(`Unsupported memory node type: ${String(typeOrAlias)}`);
+    if (memoryType.lifecycle === "retired") {
+      throw new Error(`Memory node type is retired and cannot be written: ${memoryType.id}`);
+    }
+    if (!memoryType.creatable) {
+      throw new Error(`Memory node type is not creatable: ${memoryType.id}`);
+    }
+    return memoryType;
+  }
+
+  private validateExplicitNodeFields(
+    input: Pick<SaveMemoryNodeInput, "type" | "title" | "status" | "attributes" | "evidence">,
+    memoryType: ResearchProfileMemoryType,
+    isNew: boolean,
+  ): void {
+    if (isNew && memoryType.requiresExplicitStatus && input.status === undefined) {
+      throw new Error(`Memory node type ${memoryType.id} requires an explicit status.`);
+    }
+    if (input.status !== undefined && !memoryType.allowedStatuses.includes(input.status)) {
+      if (memoryType.id === "hypothesis" && input.status === "confirmed") {
+        throw new Error("A proven hypothesis must be reclassified as a primitive or chain instead of confirmed in place.");
+      }
+      throw new Error(`Memory node type ${memoryType.id} does not allow status: ${String(input.status)}`);
+    }
+    if (input.attributes !== undefined) validateAttributeValues(input.attributes, memoryType);
+    for (const evidence of input.evidence ?? []) validateEvidence(evidence, this.catalog);
+  }
+
+  private validateCompleteNode(
+    node: Pick<MemoryNode, "id" | "type" | "status" | "attributes" | "assetIds" | "evidence">,
+    memoryType: ResearchProfileMemoryType,
+    database: DatabaseSync,
+    relationshipNodeId: string,
+    scope: MemoryConstraintValidationScope,
+    prospectiveNeighborTypes: ReadonlySet<string> = new Set(),
+  ): void {
+    if (scope.full && !memoryType.allowedStatuses.includes(node.status)) {
+      if (memoryType.id === "hypothesis" && node.status === "confirmed") {
+        throw new Error("A proven hypothesis must be reclassified as a primitive or chain instead of confirmed in place.");
+      }
+      throw new Error(`Memory node type ${memoryType.id} does not allow status: ${node.status}`);
+    }
+    if (scope.full) validateAttributeValues(node.attributes, memoryType);
+    for (const requirement of memoryType.requirements ?? []) {
+      if (requirement.statuses?.length && !requirement.statuses.includes(node.status)) continue;
+      if (scope.full || scope.status || scope.attributes) {
+        const requiredAttributes = requirement.requiredAttributes ?? [];
+        const missingAttributes = requiredAttributes.filter(
+          (name) => !hasRequiredAttribute(node.attributes, name),
+        );
+        if (missingAttributes.length > 0) {
+          if (memoryType.id === "chain" && (missingAttributes.includes("impact") || missingAttributes.includes("reachability"))) {
+            throw new Error("Chain nodes require non-empty impact and reachability attributes.");
+          }
+          throw new Error(`Memory node type ${memoryType.id} requires non-empty attributes: ${missingAttributes.join(", ")}.`);
+        }
+        if (!scope.full && scope.status) {
+          validateAttributeValues(
+            Object.fromEntries(requiredAttributes.map((name) => [name, node.attributes[name]])),
+            memoryType,
+          );
+        }
+      }
+      if (requirement.requireAssetLinks && (scope.full || scope.status || scope.assetIds) && node.assetIds.length === 0) {
+        if (memoryType.id === "bug") throw new Error("Historical bug memories require at least one affected asset.");
+        throw new Error(`Memory node type ${memoryType.id} requires at least one asset link.`);
+      }
+      if (requirement.requireEvidence && (scope.full || scope.status || scope.evidence) && node.evidence.length === 0) {
+        if (memoryType.id === "bug") throw new Error("Historical bug memories require precedent evidence.");
+        throw new Error(`Memory node type ${memoryType.id} requires evidence.`);
+      }
+      if (requirement.requiredNeighborTypes?.length && (scope.full || scope.status || scope.neighbors)) {
+        const neighborTypes = new Set([
+          ...this.memoryNeighborTypes(database, relationshipNodeId),
+          ...prospectiveNeighborTypes,
+        ]);
+        const missingNeighbors = requirement.requiredNeighborTypes.filter((type) => !neighborTypes.has(type));
+        if (missingNeighbors.length > 0) {
+          throw new Error(`Memory node type ${memoryType.id} requires linked neighbor types: ${missingNeighbors.join(", ")}.`);
+        }
+      }
+    }
+  }
+
+  private prepareMemoryLinks(
+    sourceIds: readonly string[],
+    inputs: readonly MemoryNodeLinkInput[],
+  ): PreparedMemoryLink[] {
+    const prepared = new Map<string, PreparedMemoryLink>();
+    const selfIds = new Set(sourceIds);
+    for (const input of inputs) {
+      const toId = input.nodeId?.trim();
+      if (!toId) throw new Error("Memory link nodeId must be a non-empty string.");
+      if (selfIds.has(toId)) throw new Error("Memory nodes cannot link to themselves.");
+      const target = this.locate(toId);
+      if (!target) throw new Error(`Memory link target does not belong to the current subject: ${toId}`);
+      if (!nodeCanParticipateInActiveCatalog(target.node, this.catalog)) {
+        throw new Error(`Memory link target from another catalog must be explicitly reclassified: ${toId}`);
+      }
+      const requestedRelation = input.relation?.trim();
+      if (!requestedRelation) throw new Error("Memory link relation must be a non-empty relation ID.");
+      const relation = this.catalog.relationIds.has(requestedRelation)
+        ? requestedRelation
+        : normalizeTag(requestedRelation);
+      if (!relation) throw new Error("Memory link relation must be a non-empty relation ID.");
+      const link: PreparedMemoryLink = {
+        toId,
+        relation,
+        note: input.note?.trim() ?? "",
+        neighborType: target.node.type,
+      };
+      prepared.set(`${toId}\0${relation}`, link);
+    }
+    return [...prepared.values()];
+  }
+
+  private memoryNeighborTypes(database: DatabaseSync, nodeId: string): ReadonlySet<string> {
+    const rows = database.prepare(`
+      SELECT other.id
+      FROM memory_edges edge
+      JOIN memory_nodes other
+        ON other.id = CASE WHEN edge.from_id = ? THEN edge.to_id ELSE edge.from_id END
+      WHERE edge.from_id = ? OR edge.to_id = ?
+    `).all(nodeId, nodeId, nodeId) as Array<{ id?: unknown }>;
+    const types = rows.flatMap((row) => {
+      if (typeof row.id !== "string") return [];
+      const neighbor = this.getFromDatabase(database, row.id);
+      return neighbor && nodeCanParticipateInActiveCatalog(neighbor, this.catalog)
+        ? [neighbor.type]
+        : [];
+    });
+    return new Set(types);
   }
 
   private openBinding(
@@ -415,9 +860,15 @@ export class MemoryGraphStore {
     mkdirSync(dirname(databasePath), { recursive: true });
     const database = new Database(databasePath);
     if (databasePath !== ":memory:") chmodSync(databasePath, 0o600);
-    database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
-    MemoryGraphStore.initializeSchema(database);
-    return { database, databasePath: resolveDatabasePath(databasePath), context };
+    try {
+      database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+      MemoryGraphStore.initializeSchema(database);
+      registerMemoryCatalogSnapshot(database, this.catalog);
+      return { database, databasePath: resolveDatabasePath(databasePath), context };
+    } catch (error) {
+      database.close();
+      throw error;
+    }
   }
 
   public static initializeSchema(database: DatabaseSync): void {
@@ -598,10 +1049,70 @@ export class MemoryGraphStore {
           `);
         },
       },
+      {
+        version: 7,
+        name: "memory_catalog_provenance",
+        up(database) {
+          database.exec(`
+            CREATE TABLE IF NOT EXISTS memory_catalog_snapshots (
+              catalog_hash TEXT PRIMARY KEY,
+              schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+              catalog_json TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS memory_catalog_snapshots_immutable_update
+              BEFORE UPDATE ON memory_catalog_snapshots
+              BEGIN
+                SELECT RAISE(ABORT, 'memory catalog snapshots are immutable');
+              END;
+            CREATE TRIGGER IF NOT EXISTS memory_catalog_snapshots_immutable_delete
+              BEFORE DELETE ON memory_catalog_snapshots
+              BEGIN
+                SELECT RAISE(ABORT, 'memory catalog snapshots are immutable');
+              END;
+          `);
+          if (!tableHasColumn(database, "memory_nodes", "catalog_hash")) {
+            database.exec(
+              "ALTER TABLE memory_nodes ADD COLUMN catalog_hash TEXT REFERENCES memory_catalog_snapshots(catalog_hash)",
+            );
+          }
+          database.exec(`
+            CREATE TABLE IF NOT EXISTS memory_node_catalog_validations (
+              node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              node_revision INTEGER NOT NULL CHECK (node_revision > 0),
+              catalog_hash TEXT NOT NULL REFERENCES memory_catalog_snapshots(catalog_hash),
+              node_content_hash TEXT NOT NULL,
+              validation_kind TEXT NOT NULL CHECK (validation_kind IN ('full', 'scoped', 'inherited')),
+              research_profile_hash TEXT,
+              research_profile_id TEXT,
+              research_profile_version TEXT,
+              validated_at TEXT NOT NULL,
+              CHECK (
+                (research_profile_hash IS NULL AND research_profile_id IS NULL AND research_profile_version IS NULL)
+                OR
+                (research_profile_hash IS NOT NULL AND research_profile_id IS NOT NULL AND research_profile_version IS NOT NULL)
+              ),
+              PRIMARY KEY(node_id, node_revision, catalog_hash)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS memory_nodes_catalog_identity_idx
+              ON memory_nodes(subject_id, catalog_hash, type, title_norm)
+              WHERE catalog_hash IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS memory_node_catalog_validations_catalog_idx
+              ON memory_node_catalog_validations(catalog_hash, node_id, node_revision);
+          `);
+        },
+      },
     ]);
   }
 
-  private writeNode(database: DatabaseSync, node: MemoryNode, titleNorm: string, expectedRevision?: number): void {
+  private writeNode(
+    database: DatabaseSync,
+    node: MemoryNode,
+    titleNorm: string,
+    provenance: MemoryNodeWriteProvenance,
+    links: readonly PreparedMemoryLink[] = [],
+    expectedRevision?: number,
+  ): void {
     database.exec("BEGIN IMMEDIATE");
     try {
       if (expectedRevision !== undefined) {
@@ -612,14 +1123,30 @@ export class MemoryGraphStore {
       }
       database
         .prepare(
-          `INSERT INTO memory_nodes(id, subject_id, subject_name, type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO memory_nodes(id, subject_id, subject_name, type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision, catalog_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET subject_id = excluded.subject_id, subject_name = excluded.subject_name,
-             title = excluded.title, title_norm = excluded.title_norm, summary = excluded.summary,
+             type = excluded.type, title = excluded.title, title_norm = excluded.title_norm, summary = excluded.summary,
              body = excluded.body, status = excluded.status, confidence = excluded.confidence, attributes_json = excluded.attributes_json,
-             updated_at = excluded.updated_at, revision = excluded.revision`,
+             updated_at = excluded.updated_at, revision = excluded.revision, catalog_hash = excluded.catalog_hash`,
         )
-        .run(node.id, node.subjectId, node.subjectName, node.type, node.title, titleNorm, node.summary, node.body, node.status, node.confidence, JSON.stringify(node.attributes), node.createdAt, node.updatedAt, node.revision);
+        .run(
+          node.id,
+          node.subjectId,
+          node.subjectName,
+          node.type,
+          node.title,
+          titleNorm,
+          node.summary,
+          node.body,
+          node.status,
+          node.confidence,
+          JSON.stringify(node.attributes),
+          node.createdAt,
+          node.updatedAt,
+          node.revision,
+          provenance.catalogHash,
+        );
       database.prepare("DELETE FROM memory_node_sessions WHERE node_id = ?").run(node.id);
       database.prepare("DELETE FROM memory_node_workspaces WHERE node_id = ?").run(node.id);
       database.prepare("DELETE FROM memory_node_assets WHERE node_id = ?").run(node.id);
@@ -634,6 +1161,8 @@ export class MemoryGraphStore {
           .prepare("INSERT INTO memory_evidence_refs(id, node_id, kind, path_base, path, locator_json, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
           .run(evidence.id, node.id, evidence.kind, evidence.pathBase ?? null, evidence.path ?? null, JSON.stringify(evidence.locator), evidence.summary, evidence.createdAt);
       }
+      writePreparedMemoryLinks(database, node.id, links, node.updatedAt);
+      writeMemoryNodeValidation(database, node, provenance);
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");
@@ -646,6 +1175,8 @@ export class MemoryGraphStore {
     previousId: string,
     node: MemoryNode,
     titleNorm: string,
+    provenance: MemoryNodeWriteProvenance,
+    links: readonly PreparedMemoryLink[],
     expectedRevision: number,
   ): void {
     database.exec("BEGIN IMMEDIATE");
@@ -662,10 +1193,24 @@ export class MemoryGraphStore {
         .prepare(
           `UPDATE memory_nodes
            SET id = ?, type = ?, title = ?, title_norm = ?, summary = ?, body = ?, status = ?, confidence = ?,
-               attributes_json = ?, updated_at = ?, revision = ?
+               attributes_json = ?, updated_at = ?, revision = ?, catalog_hash = ?
            WHERE id = ?`,
         )
-        .run(node.id, node.type, node.title, titleNorm, node.summary, node.body, node.status, node.confidence, JSON.stringify(node.attributes), node.updatedAt, node.revision, previousId);
+        .run(
+          node.id,
+          node.type,
+          node.title,
+          titleNorm,
+          node.summary,
+          node.body,
+          node.status,
+          node.confidence,
+          JSON.stringify(node.attributes),
+          node.updatedAt,
+          node.revision,
+          provenance.catalogHash,
+          previousId,
+        );
       database.prepare("UPDATE memory_node_assets SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
       database.prepare("UPDATE memory_node_tags SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
       database.prepare("UPDATE memory_evidence_refs SET node_id = ? WHERE node_id = ?").run(node.id, previousId);
@@ -686,6 +1231,8 @@ export class MemoryGraphStore {
           .run(evidence.id, node.id, evidence.kind, evidence.pathBase ?? null, evidence.path ?? null, JSON.stringify(evidence.locator), evidence.summary, evidence.createdAt);
       }
       replaceMemoryEdgeNodeId(database, "memory_edges", previousId, node.id);
+      writePreparedMemoryLinks(database, node.id, links, node.updatedAt);
+      writeMemoryNodeValidation(database, node, provenance);
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");
@@ -696,6 +1243,534 @@ export class MemoryGraphStore {
   private strings(database: DatabaseSync, sql: string, value: string): string[] {
     return (database.prepare(sql).all(value) as { value?: unknown }[]).flatMap((row) => (typeof row.value === "string" ? [row.value] : []));
   }
+}
+
+function createActiveMemoryCatalog(
+  memory: ResearchProfileMemory,
+  profile: MemoryNodeProfileIdentity | undefined,
+): ActiveMemoryCatalog {
+  const normalizedMemory = normalizeProfileMemory(memory);
+  const json = stableJson(normalizedMemory);
+  const hash = memoryCatalogHashFromJson(json);
+  const typesById = new Map(normalizedMemory.types.map((type) => [type.id, type]));
+  const typesByAlias = new Map<string, ResearchProfileMemoryType>();
+  for (const memoryType of normalizedMemory.types) {
+    typesByAlias.set(memoryType.id, memoryType);
+    for (const alias of memoryType.aliases ?? []) typesByAlias.set(alias, memoryType);
+  }
+  return {
+    memory: normalizedMemory,
+    hash,
+    json,
+    ...(profile ? { profile: { ...profile } } : {}),
+    preservesLegacyNodeIds:
+      memoryCatalogCompatibilityHashFromNormalized(normalizedMemory)
+      === DEFAULT_SECURITY_MEMORY_CATALOG_COMPATIBILITY_HASH,
+    typesById,
+    typesByAlias,
+    evidenceKinds: new Map(normalizedMemory.evidenceKinds.map((kind) => [kind.id, kind])),
+    evidencePathBases: new Map(normalizedMemory.evidencePathBases.map((base) => [base.id, base])),
+    relationIds: new Set((normalizedMemory.relations ?? []).map((relation) => relation.id)),
+  };
+}
+
+export function memoryCatalogHash(memory: ResearchProfileMemory): string {
+  return memoryCatalogHashFromJson(normalizedMemoryCatalogJson(memory));
+}
+
+/**
+ * Hashes the catalog-wide stored-row validation contract. This is used only to
+ * recognize the pre-profile security memory universe. Recorded profile
+ * catalogs retain their exact snapshot hash and are compared per node so that
+ * unrelated additive catalog changes do not orphan compatible knowledge.
+ */
+export function memoryCatalogCompatibilityHash(memory: ResearchProfileMemory): string {
+  return memoryCatalogCompatibilityHashFromNormalized(normalizeProfileMemory(memory));
+}
+
+function memoryCatalogHashFromJson(json: string): string {
+  return createHash("sha256")
+    .update(MEMORY_CATALOG_HASH_DOMAIN)
+    .update(json)
+    .digest("hex");
+}
+
+function normalizedMemoryCatalogJson(memory: ResearchProfileMemory): string {
+  return stableJson(normalizeProfileMemory(memory));
+}
+
+function normalizeProfileMemory(memory: ResearchProfileMemory): ResearchProfileMemory {
+  return normalizeResearchProfile({
+    ...NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE,
+    capabilities: {
+      ...NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE.capabilities,
+      memoryEnabled: false,
+    },
+    memory,
+  }).memory;
+}
+
+function memoryCatalogCompatibilityHashFromNormalized(memory: ResearchProfileMemory): string {
+  return createHash("sha256")
+    .update(MEMORY_CATALOG_COMPATIBILITY_HASH_DOMAIN)
+    .update(stableJson(memoryCatalogCompatibilityProjection(memory)))
+    .digest("hex");
+}
+
+function memoryCatalogCompatibilityProjection(memory: ResearchProfileMemory): unknown {
+  return {
+    schemaVersion: 1,
+    types: sortedById(memory.types).map((memoryType) =>
+      memoryTypeCompatibilityProjection(memory, memoryType)),
+    evidenceKinds: sortedById(memory.evidenceKinds).map(evidenceKindCompatibilityProjection),
+    evidencePathBases: sortedById(memory.evidencePathBases).map(evidencePathBaseCompatibilityProjection),
+  };
+}
+
+function memoryTypeCompatibilityProjection(
+  memory: ResearchProfileMemory,
+  memoryType: ResearchProfileMemoryType,
+): unknown {
+  const statusesById = new Map(memory.statuses.map((status) => [status.id, status]));
+  return {
+    id: memoryType.id,
+    allowedStatuses: sortedUniqueStrings(memoryType.allowedStatuses),
+    statuses: sortedUniqueStrings(memoryType.allowedStatuses).map((statusId) => {
+      const status = statusesById.get(statusId);
+      return status
+        ? {
+            id: status.id,
+            terminal: status.terminal === true,
+            polarity: status.polarity ?? "neutral",
+          }
+        : { id: statusId, unresolved: true };
+    }),
+    attributes: Object.fromEntries(
+      Object.entries(memoryType.attributes ?? {})
+        .sort(([left], [right]) => ordinalCompare(left, right))
+        .map(([id, definition]) => [
+          id,
+          {
+            type: definition.type,
+            ...(definition.pattern ? { pattern: definition.pattern } : {}),
+            ...(definition.enum
+              ? { enum: sortedUniqueValues(definition.enum) }
+              : {}),
+          },
+        ]),
+    ),
+    requirements: [...(memoryType.requirements ?? [])]
+      .map((requirement) => ({
+        ...(requirement.statuses?.length
+          ? { statuses: sortedUniqueStrings(requirement.statuses) }
+          : {}),
+        ...(requirement.requiredAttributes?.length
+          ? { requiredAttributes: sortedUniqueStrings(requirement.requiredAttributes) }
+          : {}),
+        ...(requirement.requireEvidence === true ? { requireEvidence: true } : {}),
+        ...(requirement.requireAssetLinks === true ? { requireAssetLinks: true } : {}),
+        ...(requirement.requiredNeighborTypes?.length
+          ? { requiredNeighborTypes: sortedUniqueStrings(requirement.requiredNeighborTypes) }
+          : {}),
+      }))
+      .sort((left, right) => ordinalCompare(stableJson(left), stableJson(right))),
+  };
+}
+
+function evidenceKindCompatibilityProjection(
+  kind: ResearchProfileMemory["evidenceKinds"][number],
+): unknown {
+  return { id: kind.id, allowsPath: kind.allowsPath === true };
+}
+
+function evidencePathBaseCompatibilityProjection(
+  base: ResearchProfileMemory["evidencePathBases"][number],
+): unknown {
+  return { id: base.id, pathFormat: base.pathFormat ?? "relative" };
+}
+
+function sortedById<T extends { id: string }>(values: readonly T[]): T[] {
+  return [...values].sort((left, right) => ordinalCompare(left.id, right.id));
+}
+
+function sortedUniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)].sort(ordinalCompare);
+}
+
+function sortedUniqueValues(
+  values: readonly (string | number | boolean)[],
+): Array<string | number | boolean> {
+  const byJson = new Map(values.map((value) => [stableJson(value), value]));
+  return [...byJson.entries()]
+    .sort(([left], [right]) => ordinalCompare(left, right))
+    .map(([, value]) => value);
+}
+
+function ordinalCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function registerMemoryCatalogSnapshot(database: DatabaseSync, catalog: ActiveMemoryCatalog): void {
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO memory_catalog_snapshots(catalog_hash, schema_version, catalog_json, created_at)
+       VALUES (?, 1, ?, ?)`,
+    )
+    .run(catalog.hash, catalog.json, new Date().toISOString());
+  const row = database
+    .prepare(
+      "SELECT schema_version, catalog_json FROM memory_catalog_snapshots WHERE catalog_hash = ?",
+    )
+    .get(catalog.hash) as { schema_version?: unknown; catalog_json?: unknown } | undefined;
+  const storedJson = typeof row?.catalog_json === "string" ? row.catalog_json : undefined;
+  if (
+    row?.schema_version !== 1
+    || storedJson === undefined
+    || storedJson !== catalog.json
+    || memoryCatalogHashFromJson(storedJson) !== catalog.hash
+  ) {
+    throw new Error(`Stored memory catalog snapshot does not match catalog hash: ${catalog.hash}.`);
+  }
+}
+
+function activeCatalogWriteProvenance(
+  catalog: ActiveMemoryCatalog,
+  validationKind: MemoryNodeValidationKind | null,
+): MemoryNodeWriteProvenance {
+  return validationKind
+    ? catalogWriteProvenance(catalog.hash, validationKind, catalog.profile)
+    : { catalogHash: catalog.hash };
+}
+
+function catalogWriteProvenance(
+  catalogHash: string,
+  kind: MemoryNodeValidationKind,
+  profile: MemoryNodeProfileIdentity | undefined,
+): MemoryNodeWriteProvenance {
+  return {
+    catalogHash,
+    validation: {
+      kind,
+      ...(profile ? { profile: { ...profile } } : {}),
+    },
+  };
+}
+
+function writeMemoryNodeValidation(
+  database: DatabaseSync,
+  node: MemoryNode,
+  provenance: MemoryNodeWriteProvenance,
+): void {
+  if (!provenance.validation) return;
+  if (!provenance.catalogHash) {
+    throw new Error(`Cannot validate memory node ${node.id} without recorded catalog provenance.`);
+  }
+  const profile = provenance.validation.profile;
+  database
+    .prepare(
+      `INSERT INTO memory_node_catalog_validations(
+         node_id, node_revision, catalog_hash, node_content_hash, validation_kind,
+         research_profile_hash, research_profile_id, research_profile_version, validated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      node.id,
+      node.revision,
+      provenance.catalogHash,
+      memoryNodeValidationHash(node),
+      provenance.validation.kind,
+      profile?.hash ?? null,
+      profile?.id ?? null,
+      profile?.version ?? null,
+      node.updatedAt,
+    );
+}
+
+function readMemoryNodeProvenance(
+  database: DatabaseSync,
+  node: Omit<MemoryNode, "provenance">,
+  catalogHash: string | null,
+  activeCatalog: ActiveMemoryCatalog,
+): MemoryNodeProvenance {
+  if (catalogHash === null) {
+    return {
+      state: "legacy_unrecorded",
+      catalogHash: null,
+      activeCatalog: false,
+      validation: null,
+    };
+  }
+  const isExactActiveCatalog = catalogHash === activeCatalog.hash;
+  const snapshot = database
+    .prepare("SELECT schema_version, catalog_json FROM memory_catalog_snapshots WHERE catalog_hash = ?")
+    .get(catalogHash) as { schema_version?: unknown; catalog_json?: unknown } | undefined;
+  const snapshotJson = typeof snapshot?.catalog_json === "string" ? snapshot.catalog_json : undefined;
+  const snapshotIsValid = snapshot?.schema_version === 1
+    && snapshotJson !== undefined
+    && memoryCatalogHashFromJson(snapshotJson) === catalogHash;
+  const sourceMemory = snapshotIsValid && snapshotJson !== undefined
+    ? parseMemoryCatalogSnapshot(snapshotJson)
+    : undefined;
+  const isActiveCatalog = isExactActiveCatalog
+    || (sourceMemory !== undefined
+      && memoryNodeCatalogsAreCompatible(node, sourceMemory, activeCatalog.memory));
+  const row = snapshotIsValid
+    ? database
+        .prepare(
+          `SELECT node_revision, catalog_hash, node_content_hash, validation_kind,
+                  research_profile_hash, research_profile_id, research_profile_version, validated_at
+           FROM memory_node_catalog_validations
+           WHERE node_id = ? AND node_revision = ? AND catalog_hash = ?`,
+        )
+        .get(node.id, node.revision, catalogHash) as Record<string, unknown> | undefined
+    : undefined;
+  if (
+    !row
+    || row.node_content_hash !== memoryNodeValidationHash(node)
+    || !isMemoryNodeValidationKind(row.validation_kind)
+  ) {
+    return {
+      state: "catalog_unvalidated",
+      catalogHash,
+      activeCatalog: isActiveCatalog,
+      validation: null,
+    };
+  }
+  const profileHash = nullableText(row.research_profile_hash);
+  const profileId = nullableText(row.research_profile_id);
+  const profileVersion = nullableText(row.research_profile_version);
+  const hasProfile = profileHash !== null && profileId !== null && profileVersion !== null;
+  const validation: MemoryNodeCatalogValidation = {
+    nodeRevision: number(row.node_revision),
+    catalogHash: text(row.catalog_hash),
+    contentHash: text(row.node_content_hash),
+    kind: row.validation_kind,
+    validatedAt: text(row.validated_at),
+    ...(hasProfile
+      ? { researchProfile: { hash: profileHash, id: profileId, version: profileVersion } }
+      : {}),
+  };
+  return isActiveCatalog
+    ? {
+        state: "active_validated",
+        catalogHash,
+        activeCatalog: true,
+        validation,
+      }
+    : {
+        state: "foreign_validated",
+        catalogHash,
+        activeCatalog: false,
+        validation,
+      };
+}
+
+function memoryNodeValidationHash(node: Omit<MemoryNode, "provenance"> | MemoryNode): string {
+  return createHash("sha256")
+    .update(MEMORY_NODE_VALIDATION_HASH_DOMAIN)
+    .update(stableJson({
+      id: node.id,
+      sessionIds: [...node.sessionIds].sort(),
+      workspaces: [...node.workspaces].sort((left, right) => left.id.localeCompare(right.id)),
+      subjectId: node.subjectId,
+      subjectName: node.subjectName,
+      type: node.type,
+      title: node.title,
+      summary: node.summary,
+      body: node.body,
+      status: node.status,
+      confidence: node.confidence,
+      assetIds: [...node.assetIds].sort(),
+      tags: [...node.tags].sort(),
+      attributes: node.attributes,
+      evidence: [...node.evidence].sort((left, right) => left.id.localeCompare(right.id)),
+      createdAt: node.createdAt,
+      updatedAt: node.updatedAt,
+      revision: node.revision,
+    }))
+    .digest("hex");
+}
+
+function nodeCanParticipateInActiveCatalog(
+  node: MemoryNode,
+  activeCatalog: Pick<ActiveMemoryCatalog, "preservesLegacyNodeIds">,
+): boolean {
+  return node.provenance.catalogHash === null
+    ? activeCatalog.preservesLegacyNodeIds
+    : node.provenance.activeCatalog;
+}
+
+function parseMemoryCatalogSnapshot(json: string): ResearchProfileMemory | undefined {
+  try {
+    return normalizeProfileMemory(JSON.parse(json) as ResearchProfileMemory);
+  } catch {
+    return undefined;
+  }
+}
+
+function memoryNodeCatalogsAreCompatible(
+  node: Pick<MemoryNode, "type" | "status" | "attributes" | "evidence">,
+  sourceMemory: ResearchProfileMemory,
+  activeMemory: ResearchProfileMemory,
+): boolean {
+  const sourceProjection = memoryNodeCatalogCompatibilityProjection(node, sourceMemory);
+  const activeProjection = memoryNodeCatalogCompatibilityProjection(node, activeMemory);
+  return sourceProjection !== undefined
+    && activeProjection !== undefined
+    && stableJson(sourceProjection) === stableJson(activeProjection);
+}
+
+function memoryNodeCatalogCompatibilityProjection(
+  node: Pick<MemoryNode, "type" | "status" | "attributes" | "evidence">,
+  memory: ResearchProfileMemory,
+): unknown | undefined {
+  const memoryType = memory.types.find((candidate) => candidate.id === node.type);
+  if (!memoryType) return undefined;
+  const typeProjection = memoryNodeTypeCompatibilityProjection(node, memory, memoryType);
+  if (typeProjection === undefined) return undefined;
+  const evidenceKinds = new Map(memory.evidenceKinds.map((kind) => [kind.id, kind]));
+  const evidencePathBases = new Map(memory.evidencePathBases.map((base) => [base.id, base]));
+  const usedEvidenceKinds = sortedUniqueStrings(node.evidence.map((evidence) => evidence.kind));
+  const usedPathBases = sortedUniqueStrings(
+    node.evidence.flatMap((evidence) => evidence.pathBase ? [evidence.pathBase] : []),
+  );
+  const projectedEvidenceKinds = usedEvidenceKinds.map((kindId) => {
+    const kind = evidenceKinds.get(kindId);
+    return kind ? evidenceKindCompatibilityProjection(kind) : undefined;
+  });
+  const projectedPathBases = usedPathBases.map((baseId) => {
+    const base = evidencePathBases.get(baseId);
+    return base ? evidencePathBaseCompatibilityProjection(base) : undefined;
+  });
+  if (projectedEvidenceKinds.some((kind) => kind === undefined)
+    || projectedPathBases.some((base) => base === undefined)) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    type: typeProjection,
+    evidenceKinds: projectedEvidenceKinds,
+    evidencePathBases: projectedPathBases,
+  };
+}
+
+function memoryNodeTypeCompatibilityProjection(
+  node: Pick<MemoryNode, "type" | "status" | "attributes">,
+  memory: ResearchProfileMemory,
+  memoryType: ResearchProfileMemoryType,
+): unknown | undefined {
+  if (!memoryType.allowedStatuses.includes(node.status)) return undefined;
+  const status = memory.statuses.find((candidate) => candidate.id === node.status);
+  if (!status) return undefined;
+  const attributes = Object.fromEntries(
+    Object.keys(node.attributes)
+      .sort(ordinalCompare)
+      .map((id) => {
+        const definition = memoryType.attributes?.[id];
+        return [
+          id,
+          definition
+            ? {
+                type: definition.type,
+                ...(definition.pattern ? { pattern: definition.pattern } : {}),
+                ...(definition.enum ? { enum: sortedUniqueValues(definition.enum) } : {}),
+              }
+            : { unresolved: true },
+        ];
+      }),
+  );
+  const requirements = [...(memoryType.requirements ?? [])]
+    .filter((requirement) => !requirement.statuses?.length || requirement.statuses.includes(node.status))
+    .map((requirement) => ({
+      ...(requirement.requiredAttributes?.length
+        ? { requiredAttributes: sortedUniqueStrings(requirement.requiredAttributes) }
+        : {}),
+      ...(requirement.requireEvidence === true ? { requireEvidence: true } : {}),
+      ...(requirement.requireAssetLinks === true ? { requireAssetLinks: true } : {}),
+      ...(requirement.requiredNeighborTypes?.length
+        ? { requiredNeighborTypes: sortedUniqueStrings(requirement.requiredNeighborTypes) }
+        : {}),
+    }))
+    .sort((left, right) => ordinalCompare(stableJson(left), stableJson(right)));
+  return {
+    id: memoryType.id,
+    status: {
+      id: status.id,
+      terminal: status.terminal === true,
+      polarity: status.polarity ?? "neutral",
+    },
+    attributes,
+    requirements,
+  };
+}
+
+function isMemoryNodeValidationKind(value: unknown): value is MemoryNodeValidationKind {
+  return value === "full" || value === "scoped" || value === "inherited";
+}
+
+function nodeConstraintFieldsWereProvided(input: SaveMemoryNodeInput): boolean {
+  return input.status !== undefined
+    || input.attributes !== undefined
+    || input.assetIds !== undefined
+    || input.evidence !== undefined
+    || input.links !== undefined;
+}
+
+function fullConstraintValidationScope(): MemoryConstraintValidationScope {
+  return { full: true, status: true, attributes: true, assetIds: true, evidence: true, neighbors: true };
+}
+
+function constraintValidationScope(
+  input: Partial<Pick<SaveMemoryNodeInput, "status" | "attributes" | "assetIds" | "evidence" | "links">>,
+): MemoryConstraintValidationScope {
+  return {
+    full: false,
+    status: input.status !== undefined,
+    attributes: input.attributes !== undefined,
+    assetIds: input.assetIds !== undefined,
+    evidence: input.evidence !== undefined,
+    neighbors: input.links !== undefined,
+  };
+}
+
+function correctionTouchesCatalogFields(
+  patch: Partial<Omit<SaveMemoryNodeInput, "id">>,
+): boolean {
+  return patch.type !== undefined
+    || patch.status !== undefined
+    || patch.attributes !== undefined
+    || patch.assetIds !== undefined
+    || patch.evidence !== undefined
+    || patch.links !== undefined;
+}
+
+function validateAttributeValues(
+  attributes: Record<string, unknown>,
+  memoryType: ResearchProfileMemoryType,
+): void {
+  for (const [name, value] of Object.entries(attributes)) {
+    const definition = memoryType.attributes?.[name];
+    // Profile definitions constrain recognized fields while extension metadata remains open.
+    if (!definition) continue;
+    const validType = definition.type === "number"
+      ? typeof value === "number" && Number.isFinite(value)
+      : typeof value === definition.type;
+    if (!validType) {
+      throw new Error(`Memory node type ${memoryType.id} attribute ${name} must be a ${definition.type}.`);
+    }
+    if (definition.enum && !definition.enum.includes(value as never)) {
+      throw new Error(`Memory node type ${memoryType.id} attribute ${name} has an unsupported value.`);
+    }
+    if (definition.pattern && typeof value === "string" && !new RegExp(definition.pattern, "u").test(value)) {
+      throw new Error(`Memory node type ${memoryType.id} attribute ${name} does not match its required pattern.`);
+    }
+  }
+}
+
+function hasRequiredAttribute(attributes: Record<string, unknown>, name: string): boolean {
+  if (!Object.prototype.hasOwnProperty.call(attributes, name)) return false;
+  const value = attributes[name];
+  return typeof value !== "string" || value.trim().length > 0;
 }
 
 function memorySearchTerms(query: string): string[] {
@@ -730,30 +1805,20 @@ function memorySearchScore(node: MemoryNode, query: string): number {
   return score;
 }
 
-function validateNodeInput(input: { type: unknown; title: unknown; status?: unknown; confidence?: unknown; attributes?: unknown }): void {
-  if (!MEMORY_NODE_TYPES.includes(input.type as MemoryNodeType)) throw new Error(`Unsupported memory node type: ${String(input.type)}`);
+function validateNodeShape(input: {
+  type: unknown;
+  title: unknown;
+  status?: unknown;
+  confidence?: unknown;
+  attributes?: unknown;
+  links?: unknown;
+}): void {
+  if (typeof input.type !== "string" || !input.type.trim()) throw new Error("Memory node type is required.");
   if (typeof input.title !== "string" || !input.title.trim()) throw new Error("Memory node title is required.");
-  if (input.status !== undefined && !MEMORY_NODE_STATUSES.includes(input.status as MemoryNodeStatus)) throw new Error(`Unsupported memory node status: ${String(input.status)}`);
+  if (input.status !== undefined && (typeof input.status !== "string" || !input.status.trim())) throw new Error("Memory node status must be a non-empty string.");
   if (input.confidence !== undefined && (typeof input.confidence !== "number" || input.confidence < 0 || input.confidence > 1)) throw new Error("Memory confidence must be between 0 and 1.");
-  if (input.type === "chain") {
-    const attributes = input.attributes;
-    if (typeof attributes !== "object" || attributes === null || Array.isArray(attributes)) throw new Error("Chain nodes require impact and reachability attributes.");
-    const values = attributes as Record<string, unknown>;
-    if (typeof values.impact !== "string" || !values.impact.trim() || typeof values.reachability !== "string" || !values.reachability.trim()) {
-      throw new Error("Chain nodes require non-empty impact and reachability attributes.");
-    }
-  }
-}
-
-function validateCompleteNode(node: Pick<MemoryNode, "type" | "status" | "attributes" | "assetIds" | "evidence">): void {
-  if (node.type === "hypothesis" && node.status === "confirmed") {
-    throw new Error("A proven hypothesis must be reclassified as a primitive or chain instead of confirmed in place.");
-  }
-  if (node.type !== "bug") return;
-  if (node.status !== "confirmed") throw new Error("Bug memories are reserved for confirmed historical flaw precedents.");
-  if (node.attributes.historicalPrecedent !== true) throw new Error("Bug memories require attributes.historicalPrecedent=true.");
-  if (node.assetIds.length === 0) throw new Error("Historical bug memories require at least one affected asset.");
-  if (node.evidence.length === 0) throw new Error("Historical bug memories require precedent evidence.");
+  if (input.attributes !== undefined && !isRecord(input.attributes)) throw new Error("Memory node attributes must be an object.");
+  if (input.links !== undefined && !Array.isArray(input.links)) throw new Error("Memory node links must be an array.");
 }
 
 function readStoredMemoryContext(
@@ -829,24 +1894,62 @@ function resolveDatabasePath(path: string): string {
   return resolve(path);
 }
 
-function validateEvidence(item: Omit<MemoryEvidenceRef, "id" | "createdAt">): void {
-  if (!(["code", "artifact", "command", "url", "human_note"] as const).includes(item.kind)) {
+function validateEvidence(
+  item: Omit<MemoryEvidenceRef, "id" | "createdAt">,
+  catalog: ActiveMemoryCatalog,
+): void {
+  const evidenceKind = catalog.evidenceKinds.get(item.kind);
+  if (!evidenceKind) {
     throw new Error(`Unsupported memory evidence kind: ${String(item.kind)}`);
   }
-  if (item.pathBase !== undefined && !(["workspace", "repository", "asset_root", "external"] as const).includes(item.pathBase)) {
+  const pathBase = item.pathBase === undefined
+    ? undefined
+    : catalog.evidencePathBases.get(item.pathBase);
+  if (item.pathBase !== undefined && !pathBase) {
     throw new Error(`Unsupported memory evidence path base: ${String(item.pathBase)}`);
   }
   if (item.path !== undefined) {
     if (typeof item.path !== "string" || !item.path.trim()) throw new Error("Memory evidence path must be a non-empty string.");
-    if (item.kind !== "url" && (/^(?:\/|~\/)/.test(item.path) || /^[A-Za-z]:[\\/]/.test(item.path))) {
+    if (!evidenceKind.allowsPath) throw new Error(`Memory evidence kind ${item.kind} does not allow a path.`);
+    const pathFormat = pathBase?.pathFormat ?? "relative";
+    const url = isUrlEvidencePath(item.path);
+    if (pathFormat === "url" && !url) {
+      throw new Error(`Memory evidence path base ${item.pathBase ?? "(none)"} requires a URL.`);
+    }
+    if (pathFormat !== "url" && !url && isAbsoluteEvidencePath(item.path)) {
       throw new Error("Memory evidence paths must be relative; use pathBase to identify their root.");
+    }
+    if (pathFormat === "relative" && url) {
+      throw new Error(`Memory evidence path base ${item.pathBase ?? "(none)"} requires a relative path.`);
     }
   }
 }
 
+function isUrlEvidencePath(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//iu.test(value);
+}
+
+function isAbsoluteEvidencePath(value: string): boolean {
+  return /^(?:[\\/]|~[\\/])/.test(value) || /^[A-Za-z]:[\\/]/.test(value);
+}
+
 function normalizeTitle(value: string): string { return value.trim().replace(/\s+/g, " ").toLowerCase(); }
 function normalizeTag(value: string): string { return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); }
-function stableNodeId(subjectId: string, type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${subjectId}:${type}:${title}`).digest("hex").slice(0, 20)}`; }
+function stableNodeId(
+  subjectId: string,
+  type: MemoryNodeType,
+  title: string,
+  catalog: Pick<ActiveMemoryCatalog, "hash">,
+  forceCatalogIdentity = false,
+): string {
+  // Stable type IDs, not presentation labels or whole-catalog revisions, are
+  // the durable identity contract. The exact catalog hash is only a collision
+  // namespace when an incompatible catalog already owns the primary ID.
+  const identity = forceCatalogIdentity
+    ? stableJson({ catalogHash: catalog.hash, subjectId, title, type })
+    : `${subjectId}:${type}:${title}`;
+  return `${type}_${createHash("sha256").update(identity).digest("hex").slice(0, 20)}`;
+}
 function legacyStableNodeId(tier: string, scopeKey: string, type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${tier}:${scopeKey}:${type}:${title}`).digest("hex").slice(0, 20)}`; }
 function renameLegacyFindingMemoryIds(database: DatabaseSync): void {
   database.exec("PRAGMA defer_foreign_keys = ON");
@@ -878,8 +1981,28 @@ function replaceMemoryEdgeNodeId(database: DatabaseSync, table: "memory_edges" |
     insert.run(edge.from_id === previousId ? nextId : edge.from_id, edge.to_id === previousId ? nextId : edge.to_id, edge.relation, edge.note, edge.created_at, edge.updated_at);
   }
 }
+function writePreparedMemoryLinks(
+  database: DatabaseSync,
+  fromId: string,
+  links: readonly PreparedMemoryLink[],
+  now: string,
+): void {
+  const statement = database.prepare(
+    `INSERT INTO memory_edges(from_id, to_id, relation, note, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(from_id, to_id, relation)
+     DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at`,
+  );
+  for (const link of links) {
+    statement.run(fromId, link.toId, link.relation, link.note, now, now);
+  }
+}
 function tableExists(database: DatabaseSync, table: string): boolean {
   return Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+}
+function tableHasColumn(database: DatabaseSync, table: string, column: string): boolean {
+  return (database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>)
+    .some((row) => row.name === column);
 }
 function unique(values: readonly string[]): string[] { return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort(); }
 function mergeSessionMemberships(existing: readonly string[], sessionId: string | undefined): string[] {
@@ -891,10 +2014,16 @@ function mergeWorkspaceMemberships(existing: readonly MemoryWorkspaceMembership[
   return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 }
 function mergeObjects(base: Record<string, unknown>, update: Record<string, unknown>): Record<string, unknown> { return { ...base, ...update }; }
-function mergeEvidence(existing: readonly MemoryEvidenceRef[], incoming: readonly Omit<MemoryEvidenceRef, "id" | "createdAt">[], nodeId: string, now: string): MemoryEvidenceRef[] {
+function mergeEvidence(
+  existing: readonly MemoryEvidenceRef[],
+  incoming: readonly Omit<MemoryEvidenceRef, "id" | "createdAt">[],
+  nodeId: string,
+  now: string,
+  catalog: ActiveMemoryCatalog,
+): MemoryEvidenceRef[] {
   const byId = new Map(existing.map((item) => [item.id, item]));
   for (const item of incoming) {
-    validateEvidence(item);
+    validateEvidence(item, catalog);
     const key = JSON.stringify([item.kind, item.pathBase ?? null, item.path ?? null, item.locator ?? {}, item.summary ?? ""]);
     const id = `evidence_${createHash("sha256").update(`${nodeId}:${key}`).digest("hex").slice(0, 20)}`;
     const pathBase = item.pathBase;
@@ -919,8 +2048,25 @@ function evidenceFromRow(row: Record<string, unknown>): MemoryEvidenceRef {
   return evidence;
 }
 function edgeFromRow(row: Record<string, unknown>): MemoryEdge { return { fromId: text(row.from_id), toId: text(row.to_id), relation: text(row.relation), note: text(row.note), createdAt: text(row.created_at), updatedAt: text(row.updated_at) }; }
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function jsonObject(value: unknown): Record<string, unknown> { if (typeof value !== "string") return {}; const parsed = JSON.parse(value) as unknown; return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; }
 function text(value: unknown): string { if (typeof value !== "string") throw new Error("Expected SQLite text value."); return value; }
+function nullableText(value: unknown): string | null { if (value === null || value === undefined) return null; return text(value); }
 function number(value: unknown): number { if (typeof value !== "number") throw new Error("Expected SQLite number value."); return value; }
-function nodeType(value: unknown): MemoryNodeType { if (!MEMORY_NODE_TYPES.includes(value as MemoryNodeType)) throw new Error(`Unsupported stored memory node type: ${String(value)}`); return value as MemoryNodeType; }
-function nodeStatus(value: unknown): MemoryNodeStatus { if (!MEMORY_NODE_STATUSES.includes(value as MemoryNodeStatus)) throw new Error(`Unsupported stored memory status: ${String(value)}`); return value as MemoryNodeStatus; }
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, nested]) => nested !== undefined)
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`)
+    .join(",")}}`;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+  return value;
+}

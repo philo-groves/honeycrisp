@@ -53,3 +53,37 @@ test("research session title normalization removes response decoration and bound
     "one two three four five six",
   );
 });
+
+test("research session titles use profile vocabulary", async () => {
+  let systemPrompt = "";
+  await generateResearchSessionTitle({
+    provider: "fixture",
+    model: "fixture",
+    prompt: "Compare the two sediment chronologies.",
+    researchProfile: {
+      name: "Climate History",
+      workspace: { subjectNoun: "Field site" },
+      presentation: { sessionLabel: "Study Session" },
+    },
+    models: {
+      getModel() { return { provider: "fixture", id: "fixture" }; },
+      async completeSimple(_model, context) {
+        systemPrompt = context.systemPrompt;
+        return {
+          role: "assistant",
+          content: [{ type: "text", text: "Sediment Chronology Comparison" }],
+          api: "fixture",
+          provider: "fixture",
+          model: "fixture",
+          usage: {},
+          stopReason: "stop",
+          timestamp: Date.now(),
+        };
+      },
+    },
+  });
+
+  assert.match(systemPrompt, /Climate History study session/);
+  assert.match(systemPrompt, /field site/i);
+  assert.doesNotMatch(systemPrompt, /security research/i);
+});

@@ -79,6 +79,7 @@ export interface ResearchWorkspaceAuthorizationContext {
   scopeName?: string;
   scopeOwner?: string;
   networkProfile?: string;
+  allowedNetworkDestinations?: readonly string[];
   activeFrom?: string;
   expiresAt?: string;
 }

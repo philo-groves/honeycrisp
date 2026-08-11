@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "id": "general-research",
+  "version": "1.0.0",
+  "name": "General Research",
+  "description": "Open-ended evidence-driven research across domains.",
+  "agent": {
+    "role": "You are a rigorous interdisciplinary researcher operating inside the Honeycrisp harness.",
+    "posture": [
+      "Explore competing explanations and design discriminating tests."
+    ],
+    "style": [
+      "Write concise, evidence-calibrated prose."
+    ],
+    "memoryInstructions": [
+      "Search prior questions and results before repeating work."
+    ],
+    "runbookInstructions": [
+      "Record reusable methods with exact prerequisites and steps."
+    ]
+  },
+  "memory": {
+    "types": [
+      {
+        "id": "claim",
+        "aliases": [
+          "question"
+        ],
+        "name": "Question",
+        "pluralName": "Questions",
+        "description": "A question that can be tested against observations.",
+        "lifecycle": "active",
+        "creatable": true,
+        "order": 10,
+        "defaultStatus": "open",
+        "allowedStatuses": [
+          "open",
+          "supported",
+          "rejected"
+        ],
+        "contextWeight": 4
+      },
+      {
+        "id": "result",
+        "name": "Result",
+        "pluralName": "Results",
+        "description": "A durable result supported by evidence.",
+        "lifecycle": "active",
+        "creatable": true,
+        "order": 20,
+        "defaultStatus": "supported",
+        "allowedStatuses": [
+          "supported",
+          "rejected"
+        ],
+        "requirements": [
+          {
+            "statuses": [
+              "supported"
+            ],
+            "requireEvidence": true
+          }
+        ]
+      }
+    ],
+    "statuses": [
+      {
+        "id": "open",
+        "name": "Open",
+        "description": "Not yet resolved.",
+        "order": 10,
+        "polarity": "neutral"
+      },
+      {
+        "id": "supported",
+        "name": "Supported",
+        "description": "Supported by available evidence.",
+        "order": 20,
+        "polarity": "positive"
+      },
+      {
+        "id": "rejected",
+        "name": "Rejected",
+        "description": "Rejected by available evidence.",
+        "order": 30,
+        "terminal": true,
+        "polarity": "negative"
+      }
+    ],
+    "evidenceKinds": [
+      {
+        "id": "observation",
+        "name": "Observation",
+        "description": "A recorded observation.",
+        "allowsPath": true
+      }
+    ],
+    "evidencePathBases": [
+      {
+        "id": "workspace",
+        "name": "Workspace",
+        "description": "Relative to this workspace.",
+        "pathFormat": "relative"
+      }
+    ],
+    "relations": [
+      {
+        "id": "supports",
+        "name": "Supports",
+        "description": "Supports another memory."
+      }
+    ],
+    "defaultNodeLimit": 8,
+    "defaultCharacterBudget": 12000
+  },
+  "workflows": [
+    {
+      "id": "explore",
+      "name": "Explore",
+      "description": "Explore a bounded question without assuming an answer.",
+      "goalSuggestionCount": 3,
+      "goalSuggestionInstructions": [
+        "Suggest distinct bounded questions."
+      ],
+      "promptInstructions": [
+        "Compare at least two plausible explanations."
+      ],
+      "outputRequirements": [
+        "State observations separately from inference."
+      ],
+      "default": true
+    }
+  ],
+  "capabilities": {
+    "defaultToolFamilies": [
+      "repository-search",
+      "file-read"
+    ],
+    "disabledToolFamilies": [],
+    "allowedSideEffects": [
+      "none",
+      "read"
+    ],
+    "selectedSkillIds": [],
+    "disabledSkillIds": [],
+    "allowedMcpServerIds": [],
+    "memoryEnabled": true,
+    "runbooksEnabled": true,
+    "collaborationEnabled": true
+  },
+  "workspace": {
+    "workspaceNoun": "Research workspace",
+    "subjectNoun": "Research subject",
+    "boundaryNoun": "Research boundary",
+    "authorizationMode": "optional",
+    "boundaryInstructions": [
+      "Stay within the recorded materials and systems."
+    ],
+    "materialKinds": [
+      "path",
+      "documentation",
+      "dataset"
+    ]
+  },
+  "modelJobs": {},
+  "presentation": {
+    "newResearchLabel": "New Study",
+    "memoryLabel": "Knowledge",
+    "runbookLabel": "Methods",
+    "sessionLabel": "Study Session"
+  }
+}

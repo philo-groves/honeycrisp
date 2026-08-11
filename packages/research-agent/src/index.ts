@@ -34,5 +34,6 @@ export * from "./pi-runtime.js";
 export * from "./session-title.js";
 export * from "./session-disposition-tool.js";
 export * from "./goal-runtime.js";
+export * from "./research-profile.js";
 export * from "./types.js";
 export type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";

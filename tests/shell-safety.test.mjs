@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  classifyShellNetworkIntent,
   createShellSafetyAuthorizer,
   DEFAULT_SHELL_REVIEW_MODELS,
 } from "../packages/research-agent/dist/index.js";
@@ -53,6 +54,188 @@ test("Danger Mode approves without a reviewer or human decision", async () => {
   assert.equal(modelCalls, 0);
   assert.equal(manualCalls, 0);
   assert.equal(resolved[0]?.type, "shell_authorization_resolved");
+});
+
+test("the host network boundary fails closed before every shell approval mode", async () => {
+  const baseOptions = {
+    getMode: () => "danger",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: async () => ({ decision: "approved", reason: "unused" }),
+    models: unreachableModels(),
+  };
+  const request = {
+    ...BASE_REQUEST,
+    utility: "curl",
+    args: ["https://api.example.test/status"],
+  };
+
+  const missingGrant = await createShellSafetyAuthorizer(baseOptions)(request);
+  assert.equal(missingGrant.decision, "denied");
+  assert.equal(missingGrant.source, "policy");
+  assert.match(missingGrant.reason, /did not explicitly allow the network side effect/);
+  assert.equal(missingGrant.network.intent, "network");
+
+  const windowsExecutable = await createShellSafetyAuthorizer(baseOptions)({
+    ...request,
+    utility: "CuRl.ExE",
+  });
+  assert.equal(windowsExecutable.decision, "denied");
+  assert.equal(windowsExecutable.network.classification, "network utility curl");
+
+  const commandInterpreter = await createShellSafetyAuthorizer(baseOptions)({
+    ...request,
+    utility: "cmd.exe",
+    args: ["/c", "curl api.example.test/status"],
+  });
+  assert.equal(commandInterpreter.decision, "denied");
+  assert.match(commandInterpreter.network.classification, /network API in cmd input/);
+
+  const unrecorded = await createShellSafetyAuthorizer({
+    ...baseOptions,
+    getNetworkAuthorization: () => ({
+      sideEffectAllowed: true,
+      authorizationRecorded: false,
+      profile: "elevated",
+      allowedDestinations: [],
+    }),
+  })(request);
+  assert.equal(unrecorded.decision, "denied");
+  assert.match(unrecorded.reason, /no recorded host authorization/);
+
+  const offline = await createShellSafetyAuthorizer({
+    ...baseOptions,
+    getNetworkAuthorization: () => ({
+      sideEffectAllowed: true,
+      authorizationRecorded: true,
+      profile: "offline",
+      allowedDestinations: ["api.example.test"],
+    }),
+  })(request);
+  assert.equal(offline.decision, "denied");
+  assert.match(offline.reason, /network profile is offline/);
+});
+
+test("shell network intent classification is deterministic and does not treat Windows paths as SCP destinations", () => {
+  const request = {
+    utility: "printf",
+    args: ["https://api.example.test/status"],
+  };
+  const first = classifyShellNetworkIntent(request);
+  const second = classifyShellNetworkIntent(request);
+  assert.deepEqual(second, first);
+  assert.deepEqual(first.destinations, ["api.example.test"]);
+
+  assert.deepEqual(classifyShellNetworkIntent({
+    utility: "printf",
+    args: ["C:\\fixtures\\report.txt"],
+  }), {
+    intent: "none",
+    classification: "no recognized network intent",
+    destinations: [],
+  });
+});
+
+test("scoped shell networking requires a recognized host-recorded destination", async () => {
+  const policy = {
+    sideEffectAllowed: true,
+    authorizationRecorded: true,
+    profile: "scoped",
+    allowedDestinations: ["*.example.test", "10.20.0.0/16"],
+    source: "beale",
+    scopeId: "scope_1",
+    activeFrom: "2000-01-01T00:00:00.000Z",
+    expiresAt: "2999-01-01T00:00:00.000Z",
+  };
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "danger",
+    getReviewerSelection: () => undefined,
+    getNetworkAuthorization: () => policy,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: unreachableModels(),
+  });
+
+  const allowed = await authorize({
+    ...BASE_REQUEST,
+    utility: "curl",
+    args: ["https://api.example.test/status"],
+  });
+  assert.equal(allowed.decision, "approved");
+  assert.deepEqual(allowed.network.destinations, ["api.example.test"]);
+  assert.equal(allowed.network.permitted, true);
+
+  const allowedCidr = await authorize({
+    ...BASE_REQUEST,
+    utility: "ping",
+    args: ["10.20.4.9"],
+  });
+  assert.equal(allowedCidr.decision, "approved");
+
+  const outside = await authorize({
+    ...BASE_REQUEST,
+    utility: "curl",
+    args: ["https://outside.test/status"],
+  });
+  assert.equal(outside.decision, "denied");
+  assert.match(outside.reason, /outside the recorded scope: outside\.test/);
+
+  const unknown = await authorize({
+    ...BASE_REQUEST,
+    utility: "git",
+    args: ["pull"],
+  });
+  assert.equal(unknown.decision, "denied");
+  assert.match(unknown.reason, /destination could not be determined/);
+});
+
+test("elevated shell networking still requires current recorded host authorization and reaches the reviewer as policy data", async () => {
+  const calls = [];
+  const reviewer = {
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "medium",
+  };
+  const activePolicy = {
+    sideEffectAllowed: true,
+    authorizationRecorded: true,
+    profile: "elevated",
+    allowedDestinations: ["approved.example.test"],
+    source: "beale",
+    scopeId: "scope_active",
+    scopeName: "Authorized fixture",
+    activeFrom: "2000-01-01T00:00:00.000Z",
+    expiresAt: "2999-01-01T00:00:00.000Z",
+  };
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    getNetworkAuthorization: () => activePolicy,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: fixtureModels('{"decision":"approved","reason":"Host network policy is active."}', calls),
+  });
+  const approved = await authorize({
+    ...BASE_REQUEST,
+    utility: "git",
+    args: ["pull"],
+  });
+  assert.equal(approved.decision, "approved");
+  assert.equal(approved.network.profile, "elevated");
+  assert.match(calls[0].context.messages[0].content, /"authorizationRecorded":true/);
+  assert.match(calls[0].context.messages[0].content, /"scopeId":"scope_active"/);
+
+  const expired = createShellSafetyAuthorizer({
+    getMode: () => "danger",
+    getReviewerSelection: () => undefined,
+    getNetworkAuthorization: () => ({ ...activePolicy, expiresAt: "2001-01-01T00:00:00.000Z" }),
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: unreachableModels(),
+  });
+  const denied = await expired({
+    ...BASE_REQUEST,
+    utility: "curl",
+    args: ["https://approved.example.test"],
+  });
+  assert.equal(denied.decision, "denied");
+  assert.match(denied.reason, /authorization has expired/);
 });
 
 test("Manual Approval waits for one correlated human decision", async () => {

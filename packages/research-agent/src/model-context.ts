@@ -4,6 +4,8 @@ import type {
   MemoryGraphStore,
   MemoryNode,
 } from "./memory-graph.js";
+import { DEFAULT_SECURITY_RESEARCH_PROFILE } from "./research-profile.js";
+import type { ResearchProfileMemory } from "./research-profile.js";
 import type {
   ResearchSelectedSkill,
   ResearchToolDescriptor,
@@ -77,6 +79,11 @@ export interface ResearchModelMemoryContextNode {
   attributes?: Record<string, unknown>;
   evidence: readonly MemoryEvidenceRef[];
   relationships: readonly ResearchModelMemoryRelationship[];
+  provenance?: {
+    state: MemoryNode["provenance"]["state"];
+    catalogHash: string | null;
+    activeCatalog: boolean;
+  };
   updatedAt: string;
   revision: number;
 }
@@ -157,6 +164,7 @@ export function compileMemoryModelContext(
     maxCharacters?: number;
   } = {},
 ): ResearchModelMemoryContextNode[] {
+  const profileMemory = store.getProfileMemory();
   const nodes = new Map<string, MemoryNode>();
   const current = store.getContext();
   for (const node of store.search({ scope: "workspace", limit: 100 })) nodes.set(node.id, node);
@@ -172,6 +180,7 @@ export function compileMemoryModelContext(
     prompt,
     ...(current.sessionId ? { sessionId: current.sessionId } : {}),
     workspaceId: current.workspaceId,
+    profileMemory,
     ...options,
   });
 }
@@ -184,11 +193,18 @@ export function selectMemoryModelContext(input: {
   maxCharacters?: number;
   sessionId?: string;
   workspaceId?: string;
+  profileMemory?: ResearchProfileMemory;
 }): ResearchModelMemoryContextNode[] {
-  const maxNodes = clampInteger(input.maxNodes, DEFAULT_MEMORY_NODE_LIMIT, 1, 100);
+  const profileMemory = input.profileMemory ?? DEFAULT_SECURITY_RESEARCH_PROFILE.memory;
+  const maxNodes = clampInteger(
+    input.maxNodes,
+    profileMemory.defaultNodeLimit ?? DEFAULT_MEMORY_NODE_LIMIT,
+    1,
+    100,
+  );
   const maxCharacters = clampInteger(
     input.maxCharacters,
-    DEFAULT_MEMORY_CHARACTER_BUDGET,
+    profileMemory.defaultCharacterBudget ?? DEFAULT_MEMORY_CHARACTER_BUDGET,
     1_000,
     200_000,
   );
@@ -216,8 +232,8 @@ export function selectMemoryModelContext(input: {
     )
     .sort((left, right) => {
       const scoreDifference =
-        rankScore(right, relevance.get(right.id) ?? 0, linkedIds.has(right.id), input.sessionId, input.workspaceId) -
-        rankScore(left, relevance.get(left.id) ?? 0, linkedIds.has(left.id), input.sessionId, input.workspaceId);
+        rankScore(right, relevance.get(right.id) ?? 0, linkedIds.has(right.id), input.sessionId, input.workspaceId, profileMemory) -
+        rankScore(left, relevance.get(left.id) ?? 0, linkedIds.has(left.id), input.sessionId, input.workspaceId, profileMemory);
       return (
         scoreDifference ||
         right.updatedAt.localeCompare(left.updatedAt) ||
@@ -276,6 +292,15 @@ function projectMemoryNode(
       0,
       compact ? 4 : MAX_RELATIONSHIPS_PER_NODE,
     ),
+    ...(node.provenance
+      ? {
+          provenance: {
+            state: node.provenance.state,
+            catalogHash: node.provenance.catalogHash,
+            activeCatalog: node.provenance.activeCatalog,
+          },
+        }
+      : {}),
     updatedAt: node.updatedAt,
     revision: node.revision,
   };
@@ -335,14 +360,16 @@ function rankScore(
   linked: boolean,
   sessionId: string | undefined,
   workspaceId: string | undefined,
+  profileMemory: ResearchProfileMemory,
 ): number {
   const contextWeight = sessionId && node.sessionIds.includes(sessionId)
     ? 1_000
     : workspaceId && node.workspaces.some((workspace) => workspace.id === workspaceId)
       ? 80
       : 0;
-  const statusWeight = node.status === "confirmed" ? 20 : node.status === "rejected" ? -20 : 0;
-  const typeWeight = node.type === "hypothesis" ? 8 : 0;
+  const statusPolarity = profileMemory.statuses.find((status) => status.id === node.status)?.polarity;
+  const statusWeight = statusPolarity === "positive" ? 20 : statusPolarity === "negative" ? -20 : 0;
+  const typeWeight = profileMemory.types.find((type) => type.id === node.type)?.contextWeight ?? 0;
   return contextWeight + relevance * 100 + (linked ? 40 : 0) + statusWeight + typeWeight;
 }
 

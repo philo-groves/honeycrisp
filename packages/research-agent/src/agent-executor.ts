@@ -54,9 +54,16 @@ import {
 } from "./research-focus-guard.js";
 import { createResearchSystemPrompt } from "./system-prompt.js";
 import {
-  resolveMemoryTypeDescriptions,
   type MemoryTypeDescriptionsInput,
 } from "./memory-taxonomy.js";
+import {
+  DEFAULT_SECURITY_RESEARCH_PROFILE,
+  normalizeResearchProfile,
+  overrideResearchProfileMemoryDescriptions,
+  researchProfileHash,
+  researchProfileWorkflow,
+  type ResearchProfile,
+} from "./research-profile.js";
 import type {
   ResearchAgentExecutionInput,
   ResearchAgentExecutor,
@@ -64,6 +71,7 @@ import type {
   ResearchEvent,
   ResearchLiveEventSink,
   ResearchToolAction,
+  ResearchWorkspaceAuthorizationContext,
 } from "./types.js";
 
 export interface CreatePiAgentExecutorOptions {
@@ -88,6 +96,8 @@ export interface CreatePiAgentExecutorOptions {
   goal?: CreateResearchGoalRuntimeOptions;
   resumableState?: PiAgentResumableState;
   memoryTypeDescriptions?: MemoryTypeDescriptionsInput;
+  researchProfile?: ResearchProfile;
+  workflowId?: string;
 }
 
 const MODEL_CONTEXT_RESERVE_TOKENS = 32_768;
@@ -102,7 +112,7 @@ const MAX_TRANSIENT_MODEL_RETRIES = 4;
 const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition"]);
 
 export interface PiAgentResumableState {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   provider: string;
   model: string;
   api: string;
@@ -111,6 +121,8 @@ export interface PiAgentResumableState {
   goal?: ResearchGoalPersistedState;
   researchFocus?: ResearchFocusPersistedState;
   lastNativeCompactionFingerprint?: string;
+  researchProfileHash?: string;
+  workflowId?: string;
 }
 
 export function applyNativeOpenAiCompaction(
@@ -139,11 +151,12 @@ export function extractCompatiblePiAgentResumableState(
   raw: unknown,
   provider: string,
   model: string,
+  expected: { researchProfileHash?: string; workflowId?: string } = {},
 ): PiAgentResumableState | undefined {
   if (!isRecord(raw) || !isRecord(raw.resumableState)) return undefined;
   const state = raw.resumableState;
   if (
-    (state.schemaVersion !== 1 && state.schemaVersion !== 2)
+    (state.schemaVersion !== 1 && state.schemaVersion !== 2 && state.schemaVersion !== 3)
     || state.provider !== provider
     || state.model !== model
     || typeof state.api !== "string"
@@ -163,6 +176,19 @@ export function extractCompatiblePiAgentResumableState(
     && /^[a-f0-9]{64}$/u.test(state.lastNativeCompactionFingerprint)
     ? state.lastNativeCompactionFingerprint
     : undefined;
+  const profileHash = typeof state.researchProfileHash === "string" && /^[a-f0-9]{64}$/u.test(state.researchProfileHash)
+    ? state.researchProfileHash
+    : undefined;
+  const workflowId = typeof state.workflowId === "string" && state.workflowId.trim()
+    ? state.workflowId.trim()
+    : undefined;
+  if (state.schemaVersion === 3 && (!profileHash || !workflowId)) return undefined;
+  if (expected.researchProfileHash) {
+    if (profileHash && profileHash !== expected.researchProfileHash) return undefined;
+    if (!profileHash && expected.researchProfileHash !== defaultSecurityProfileHash()) return undefined;
+  }
+  if (expected.workflowId && workflowId && workflowId !== expected.workflowId) return undefined;
+  if (expected.workflowId && !workflowId && expected.workflowId !== defaultSecurityWorkflowId()) return undefined;
   return {
     schemaVersion: state.schemaVersion,
     provider,
@@ -173,6 +199,8 @@ export function extractCompatiblePiAgentResumableState(
     ...(goal ? { goal } : {}),
     ...(researchFocus ? { researchFocus } : {}),
     ...(lastNativeCompactionFingerprint ? { lastNativeCompactionFingerprint } : {}),
+    ...(profileHash ? { researchProfileHash: profileHash } : {}),
+    ...(workflowId ? { workflowId } : {}),
   };
 }
 
@@ -195,6 +223,28 @@ export function createDeterministicAgentExecutor(): ResearchAgentExecutor {
 export function createPiAgentExecutor(
   options: CreatePiAgentExecutorOptions,
 ): ResearchAgentExecutor {
+  const baseProfile = normalizeResearchProfile(options.researchProfile ?? DEFAULT_SECURITY_RESEARCH_PROFILE);
+  const bundledSecurityProfile = researchProfileHash(baseProfile) === defaultSecurityProfileHash();
+  const researchProfile = options.memoryTypeDescriptions === undefined
+    ? baseProfile
+    : overrideResearchProfileMemoryDescriptions(baseProfile, Object.fromEntries(
+        Object.entries(options.memoryTypeDescriptions).flatMap(([id, description]) =>
+          typeof description === "string" ? [[id, description]] : []),
+      ));
+  const profileHash = researchProfileHash(researchProfile);
+  const workflow = researchProfileWorkflow(researchProfile, options.workflowId);
+  if (options.resumableState?.researchProfileHash && options.resumableState.researchProfileHash !== profileHash) {
+    throw new Error("Resumable state research profile hash does not match this run.");
+  }
+  if (!options.resumableState?.researchProfileHash && options.resumableState && profileHash !== defaultSecurityProfileHash()) {
+    throw new Error("Legacy resumable state can only be resumed with the bundled security research profile.");
+  }
+  if (options.resumableState?.workflowId && options.resumableState.workflowId !== workflow.id) {
+    throw new Error("Resumable state research workflow does not match this run.");
+  }
+  if (options.resumableState && !options.resumableState.workflowId && workflow.id !== defaultSecurityWorkflowId()) {
+    throw new Error("Legacy resumable state can only be resumed with the bundled default research workflow.");
+  }
   const controlToolDescriptors = [
     ...(options.subagents === false ? [] : SUBAGENT_COLLABORATION_TOOLS),
   ];
@@ -211,10 +261,6 @@ export function createPiAgentExecutor(
       if (!model) {
         throw new Error(`Unknown model ${options.provider}/${options.model}`);
       }
-      const memoryTypeDescriptions = resolveMemoryTypeDescriptions(
-        options.memoryTypeDescriptions,
-      );
-
       const toolExecution = options.toolExecution ?? "sequential";
       const rootProviderSessionId = normalizeProviderSessionId(options.sessionId) ?? createId("session");
       const goalRuntime = options.goal
@@ -432,7 +478,11 @@ export function createPiAgentExecutor(
         const streamFn = createRetryingStreamFn(dynamicStreamFn, {
           signal: request.signal,
           firstEventTimeoutMs: options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
-          authorizationRecorded: input.authorization?.recorded === true,
+          safetyRecoveryContext: {
+            researchProfile,
+            bundledSecurityProfile,
+            ...(input.authorization ? { authorization: input.authorization } : {}),
+          },
           onContextAdopt: (context) => {
             pendingRetryContextMessages = context.messages as AgentMessage[];
           },
@@ -572,7 +622,8 @@ export function createPiAgentExecutor(
               ...(request.root ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),
               goalEnabled: request.root === true && goalRuntime !== null,
-              memoryTypeDescriptions,
+              researchProfile,
+              workflowId: workflow.id,
               ...(agentInstructions ? { agentInstructions } : {}),
             }),
             messages: initialMessages,
@@ -942,7 +993,7 @@ export function createPiAgentExecutor(
           modelCalls: rootResult.modelCalls,
           agentEvents: rootResult.agentEvents,
           resumableState: {
-            schemaVersion: 2,
+            schemaVersion: 3,
             provider: model.provider,
             model: model.id,
             api: model.api,
@@ -950,6 +1001,8 @@ export function createPiAgentExecutor(
             messages: resumableMessages.messages,
             ...(goalRuntime ? { goal: goalRuntime.exportState() } : {}),
             researchFocus: rootResult.researchFocusState,
+            researchProfileHash: profileHash,
+            workflowId: workflow.id,
             ...(rootResult.lastNativeCompactionFingerprint
               ? { lastNativeCompactionFingerprint: rootResult.lastNativeCompactionFingerprint }
               : {}),
@@ -959,6 +1012,22 @@ export function createPiAgentExecutor(
       };
     },
   };
+}
+
+let cachedDefaultSecurityProfileHash: string | undefined;
+let cachedDefaultSecurityWorkflowId: string | undefined;
+
+function defaultSecurityProfileHash(): string {
+  cachedDefaultSecurityProfileHash ??= researchProfileHash(normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE));
+  return cachedDefaultSecurityProfileHash;
+}
+
+function defaultSecurityWorkflowId(): string {
+  cachedDefaultSecurityWorkflowId ??= researchProfileWorkflow(
+    normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE),
+    undefined,
+  ).id;
+  return cachedDefaultSecurityWorkflowId;
 }
 
 const MODEL_RETRY_INTERVAL_MS = 60_000;
@@ -971,10 +1040,43 @@ export function modelRetryDelayMs(retry: number): number {
 
 export type SafetyRecoveryDisposition = "likely_false_positive" | "safety_adjustment";
 
+export interface SafetyRecoveryContext {
+  researchProfile: Pick<ResearchProfile, "id" | "name" | "workspace">;
+  bundledSecurityProfile: boolean;
+  authorization?: ResearchWorkspaceAuthorizationContext;
+}
+
 export function safetyRecoverySteeringMessage(
   messages: readonly Message[],
   authorizationRecorded: boolean,
+): { disposition: SafetyRecoveryDisposition; message: Message };
+export function safetyRecoverySteeringMessage(
+  messages: readonly Message[],
+  context: SafetyRecoveryContext,
+): { disposition: SafetyRecoveryDisposition; message: Message };
+
+export function safetyRecoverySteeringMessage(
+  messages: readonly Message[],
+  contextOrAuthorization: SafetyRecoveryContext | boolean,
 ): { disposition: SafetyRecoveryDisposition; message: Message } {
+  const context = typeof contextOrAuthorization === "boolean"
+    ? {
+        researchProfile: normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE),
+        bundledSecurityProfile: true,
+        ...(contextOrAuthorization
+          ? {
+              authorization: {
+                recorded: true as const,
+                source: "cli" as const,
+              },
+            }
+          : {}),
+      }
+    : contextOrAuthorization;
+  if (!context.bundledSecurityProfile) {
+    return generalResearchSafetyRecoveryMessage(context);
+  }
+  const authorizationRecorded = context.authorization?.recorded === true;
   const behavioralTranscript = JSON.stringify(messages.filter((message) =>
     message.role === "user"
     || (
@@ -1013,6 +1115,28 @@ export function safetyRecoverySteeringMessage(
   };
 }
 
+function generalResearchSafetyRecoveryMessage(
+  context: SafetyRecoveryContext,
+): { disposition: SafetyRecoveryDisposition; message: Message } {
+  const boundaryNoun = context.researchProfile.workspace.boundaryNoun;
+  const scopeName = context.authorization?.scopeName?.trim();
+  const recordedBoundary = context.authorization?.recorded === true
+    ? `The host recorded the ${boundaryNoun}${scopeName ? ` (${scopeName})` : ""}; keep all access and actions inside it and the currently granted tool permissions.`
+    : `Do not infer access beyond the host-supplied ${boundaryNoun}; restrict work to the supplied workspace materials and currently granted tool permissions.`;
+  return {
+    disposition: "safety_adjustment",
+    message: {
+      role: "user",
+      timestamp: Date.now(),
+      content: [
+        `Provider guardrail recovery for the ${context.researchProfile.name} profile: review the full transcript before continuing and identify any behavior or language that may have triggered the safeguard.`,
+        recordedBoundary,
+        "Reframe the same objective around bounded, reversible, evidence-producing methods. Preserve the host-supplied constraints and continue only when the revised approach stays within them.",
+      ].join("\n\n"),
+    },
+  };
+}
+
 function createRetryingStreamFn(
   streamFn: StreamFn,
   options: {
@@ -1026,12 +1150,12 @@ function createRetryingStreamFn(
       awaitingSteering?: boolean;
     }) => Promise<void> | void;
     compactContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
-    authorizationRecorded?: boolean;
+    safetyRecoveryContext: SafetyRecoveryContext;
     onContextAdopt?: (context: Parameters<StreamFn>[1]) => Promise<void> | void;
     waitForSafetyRecovery?: () => Promise<Message[]>;
     onContextRetry?: (event: { tokensBefore: number; tokensAfter: number; errorMessage: string }) => Promise<void> | void;
     firstEventTimeoutMs?: number;
-  } = {},
+  },
 ): StreamFn {
   return (model, context, streamOptions) => {
     const output = createAssistantMessageEventStream();
@@ -1093,7 +1217,7 @@ function createRetryingStreamFn(
               if (automaticSafetyRetry) {
                 const recovery = safetyRecoverySteeringMessage(
                   activeContext.messages as Message[],
-                  options.authorizationRecorded === true,
+                  options.safetyRecoveryContext,
                 );
                 activeContext = {
                   ...activeContext,
@@ -1156,7 +1280,7 @@ function createRetryingStreamFn(
             if (automaticSafetyRetry) {
               const recovery = safetyRecoverySteeringMessage(
                 activeContext.messages as Message[],
-                options.authorizationRecorded === true,
+                options.safetyRecoveryContext,
               );
               activeContext = {
                 ...activeContext,
