@@ -105,6 +105,7 @@ export interface ResearchProfileAgentPrompt {
   style: readonly string[];
   memoryInstructions: readonly string[];
   runbookInstructions: readonly string[];
+  reportInstructions?: readonly string[];
 }
 
 export interface ResearchProfileWorkflow {
@@ -127,6 +128,7 @@ export interface ResearchProfileCapabilities {
   allowedMcpServerIds: readonly string[];
   memoryEnabled: boolean;
   runbooksEnabled: boolean;
+  reportsEnabled?: boolean;
   collaborationEnabled: boolean;
 }
 
@@ -379,7 +381,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.1.0",
+  version: "1.2.0",
   name: "Security Research",
   description: "Authorized open-ended vulnerability discovery, chaining, verification, and reporting.",
   agent: {
@@ -402,6 +404,12 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       "Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
       "Keep runbooks operational and reproducible: record exact commands or code, required context, decisive bounded outputs, and interpretation.",
       "Use shell.run for execution; a runbook never executes itself.",
+    ],
+    reportInstructions: [
+      "List existing workspace reports before creating one.",
+      "Create or revise a report when a reportable vulnerability chain is ready to share with triagers and its important claims have tool-, artifact-, or verifier-backed evidence.",
+      "Write in clear, casual, blog-like language where possible. Avoid semantic cramming, unnecessary jargon, and overusing security vocabulary.",
+      "Reports are Markdown artifacts, not memories. Keep each one coherent and standalone, and mark it stale when superseded or no longer accurate.",
     ],
   },
   memory: {
@@ -484,6 +492,7 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     allowedMcpServerIds: [],
     memoryEnabled: true,
     runbooksEnabled: true,
+    reportsEnabled: true,
     collaborationEnabled: true,
   },
   workspace: {
@@ -769,7 +778,7 @@ const MATHEMATICS_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = [
 export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "mathematics",
-  version: "1.1.0",
+  version: "1.2.0",
   name: "Mathematics",
   description: "Open-ended mathematical research through conjecture exploration, proof construction, counterexample search, computation, literature synthesis, and rigorous verification.",
   agent: {
@@ -792,6 +801,12 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
       "Create or extend a runbook for reproducible formalization builds, symbolic computations, exhaustive searches, literature queries, or repeated verification pipelines.",
       "Record exact commands, package or theorem-prover versions, parameters, seeds, precision, assumptions, decisive outputs, and interpretation.",
       "Use shell.run for execution; a runbook never executes itself.",
+    ],
+    reportInstructions: [
+      "List existing workspace reports before creating one.",
+      "Create or revise a report when a mathematical breakthrough is ready to share with the greater community and its important claims have checkable support.",
+      "Write in clear, casual, blog-like language where possible. Avoid semantic cramming, unnecessary jargon, and overusing mathematical vocabulary.",
+      "Reports are Markdown artifacts, not memories. Keep each one coherent and standalone, and mark it stale when superseded or no longer accurate.",
     ],
   },
   memory: {
@@ -881,6 +896,7 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
     allowedMcpServerIds: [],
     memoryEnabled: true,
     runbooksEnabled: true,
+    reportsEnabled: true,
     collaborationEnabled: true,
   },
   workspace: {
@@ -1054,13 +1070,16 @@ export function overrideResearchProfileMemoryDescriptions(
 
 function normalizeAgentPrompt(value: unknown): ResearchProfileAgentPrompt {
   const input = record(value, "Research profile agent");
-  assertKnownKeys(input, ["role", "posture", "style", "memoryInstructions", "runbookInstructions"], "Research profile agent");
+  assertKnownKeys(input, ["role", "posture", "style", "memoryInstructions", "runbookInstructions", "reportInstructions"], "Research profile agent");
   return {
     role: nonEmptyString(input.role, "agent role"),
     posture: stringArray(input.posture, "agent posture"),
     style: stringArray(input.style, "agent style"),
     memoryInstructions: stringArray(input.memoryInstructions, "memory instructions"),
     runbookInstructions: stringArray(input.runbookInstructions, "runbook instructions"),
+    ...(input.reportInstructions === undefined
+      ? {}
+      : { reportInstructions: stringArray(input.reportInstructions, "report instructions") }),
   };
 }
 
@@ -1299,7 +1318,7 @@ function normalizeCapabilities(value: unknown): ResearchProfileCapabilities {
   const input = record(value, "Research profile capabilities");
   assertKnownKeys(input, [
     "defaultToolFamilies", "disabledToolFamilies", "allowedSideEffects", "selectedSkillIds",
-    "disabledSkillIds", "allowedMcpServerIds", "memoryEnabled", "runbooksEnabled", "collaborationEnabled",
+    "disabledSkillIds", "allowedMcpServerIds", "memoryEnabled", "runbooksEnabled", "reportsEnabled", "collaborationEnabled",
   ], "Research profile capabilities");
   const allowedSideEffects = stringArray(input.allowedSideEffects, "allowed side effects");
   if (allowedSideEffects.some((effect) => !["none", "read", "write", "network", "process"].includes(effect))) {
@@ -1314,6 +1333,9 @@ function normalizeCapabilities(value: unknown): ResearchProfileCapabilities {
     allowedMcpServerIds: input.allowedMcpServerIds === undefined ? [] : stringArray(input.allowedMcpServerIds, "allowed MCP server ids"),
     memoryEnabled: optionalBoolean(input.memoryEnabled, true, "memoryEnabled"),
     runbooksEnabled: optionalBoolean(input.runbooksEnabled, true, "runbooksEnabled"),
+    ...(input.reportsEnabled === undefined
+      ? {}
+      : { reportsEnabled: optionalBoolean(input.reportsEnabled, false, "reportsEnabled") }),
     collaborationEnabled: optionalBoolean(input.collaborationEnabled, true, "collaborationEnabled"),
   };
 }

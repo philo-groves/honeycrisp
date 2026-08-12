@@ -33,6 +33,9 @@ test("bundled profiles own their session heat palettes and memory-status default
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
 
+  assert.equal(security.capabilities.reportsEnabled, true);
+  assert.equal(mathematics.capabilities.reportsEnabled, true);
+  assert.equal(Object.hasOwn(normalizeResearchProfile(generalResearchProfile()).capabilities, "reportsEnabled"), false);
   assert.deepEqual(security.presentation.sessionHeatPalette, {
     low: "#cdaa32",
     medium: "#e8842c",
@@ -48,6 +51,15 @@ test("bundled profiles own their session heat palettes and memory-status default
   });
   assert.equal(mathematics.memory.types.find((type) => type.id === "theorem")?.sessionHeat.verified, "critical");
   assert.equal(mathematics.memory.types.find((type) => type.id === "formalization")?.sessionHeat.verified, "medium");
+});
+
+test("bundled profiles give reports domain-specific share-readiness guidance", () => {
+  const securityPrompt = createResearchSystemPrompt({ hasTools: true, hasReportTools: true, researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE });
+  const mathematicsPrompt = createResearchSystemPrompt({ hasTools: true, hasReportTools: true, researchProfile: DEFAULT_MATHEMATICS_RESEARCH_PROFILE });
+  assert.match(securityPrompt, /reportable vulnerability chain is ready to share with triagers/);
+  assert.match(mathematicsPrompt, /mathematical breakthrough is ready to share with the greater community/);
+  assert.match(securityPrompt, /casual, blog-like language/);
+  assert.match(mathematicsPrompt, /casual, blog-like language/);
 });
 
 test("research profile validation rejects silent schema drift", () => {
@@ -157,6 +169,7 @@ test("custom profiles replace domain language without weakening host invariants"
     hasTools: true,
     hasMemoryTools: true,
     hasRunbookTools: true,
+    hasReportTools: true,
     researchProfile: profile,
     workflowId: "explore",
   });
@@ -172,6 +185,7 @@ test("custom profiles replace domain language without weakening host invariants"
   assert.match(prompt, /Stay within the recorded materials and systems/);
   assert.match(prompt, /Never expose host credentials/);
   assert.match(prompt, /Never use the \$HOME environment variable/);
+  assert.match(prompt, /casual, blog-like language/);
 });
 
 test("the general-research example is a valid non-security profile", async () => {

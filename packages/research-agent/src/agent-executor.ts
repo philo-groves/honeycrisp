@@ -352,6 +352,9 @@ export function createPiAgentExecutor(
       const hasRunbookTools = researchToolNames.has("runbook_list")
         && researchToolNames.has("runbook_create")
         && researchToolNames.has("runbook_append");
+      const hasReportTools = researchToolNames.has("report_list")
+        && researchToolNames.has("report_create")
+        && researchToolNames.has("report_revise");
       const hasSessionDispositionTool = researchToolNames.has("session_disposition");
 
       runSession = async (request) => {
@@ -618,6 +621,7 @@ export function createPiAgentExecutor(
               hasTools: tools.length > 0,
               hasMemoryTools,
               hasRunbookTools,
+              hasReportTools,
               hasSessionDispositionTool: request.root === true && hasSessionDispositionTool,
               ...(request.root ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),

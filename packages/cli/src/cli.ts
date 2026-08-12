@@ -15,6 +15,7 @@ import {
   createDeterministicAgentExecutor,
   createMemoryGraphTools,
   createRunbookTools,
+  createReportTools,
   compileMemoryModelContext,
   createPiAgentExecutor,
   extractCompatiblePiAgentResumableState,
@@ -31,6 +32,7 @@ import {
   createMcpResearchTools,
   MemoryGraphStore,
   RunbookStore,
+  ReportStore,
   createStorageListTool,
   createStructuredFileReadTool,
   getDefaultResearchModelConfigPath,
@@ -2965,6 +2967,17 @@ async function createRuntimeConfig(args: {
     executableTools.push(...runbookTools);
     toolDescriptors.push(...runbookTools.map((tool) => tool.descriptor));
     cleanupCallbacks.push(async () => runbooks.close());
+  }
+  if (resolvedResearchProfile.profile.capabilities.reportsEnabled === true) {
+    const reports = new ReportStore(
+      memoryGraph.databasePath,
+      storageLayout,
+      memoryGraph.getContext(),
+    );
+    const reportTools = createReportTools(reports);
+    executableTools.push(...reportTools);
+    toolDescriptors.push(...reportTools.map((tool) => tool.descriptor));
+    cleanupCallbacks.push(async () => reports.close());
   }
   const memoryContext = args.prompt && resolvedResearchProfile.profile.capabilities.memoryEnabled
     ? compileMemoryModelContext(memoryGraph, args.prompt)

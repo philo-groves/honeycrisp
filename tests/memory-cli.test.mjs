@@ -484,6 +484,10 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
       "memory.link",
       "memory.save",
       "memory.search",
+      "report.create",
+      "report.get",
+      "report.list",
+      "report.revise",
       "repository.search",
       "runbook.append",
       "runbook.create",
@@ -657,6 +661,10 @@ test("tools CLI honors disabled tool families and treats repository roots as con
     "runbook.get",
     "runbook.create",
     "runbook.append",
+    "report.list",
+    "report.get",
+    "report.create",
+    "report.revise",
     "shell.run",
   ]);
   assert.deepEqual(disabledPayload.toolFamilies.disabled, [
@@ -667,7 +675,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
   assert.equal(workspaceDefault.status, 0, workspaceDefault.stderr);
   assert.deepEqual(
     workspaceDefaultPayload.tools.map((tool) => tool.name),
-    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "shell.run", "repository.search"],
+    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "report.list", "report.get", "report.create", "report.revise", "shell.run", "repository.search"],
   );
   assert.equal(
     workspaceDefaultPayload.workspaceContext.workspaceRoot,

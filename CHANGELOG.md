@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added first-class revisioned Markdown reports with Complete and Stale states, dedicated `report.*` tools, and workspace artifact storage. Migration 8 adds report metadata, and bundled Security Research and Mathematics profiles advance to 1.2.0 with domain-specific report guidance.
 - Added a bundled Mathematics research profile with domain-specific memory types, evidence rules, relations, and exploration, proof, verification, and synthesis workflows; `profile resolve --profile-id mathematics` exposes it to host frontends.
 - Exposed the bundled profile ID catalog, profile resolver, Mathematics default, and deterministic profile hash through the narrow `@honeycrisp/research-agent/workspace-tools` compatibility surface for local agent bridges.
 - Added a narrow `@honeycrisp/research-agent/workspace-tools` compatibility surface and stored workspace resolvers for external local agents, including deterministic workspace identity, Beale research-subject precedence, external session membership, recorded authorization projection, and hash-validated active research-profile snapshots with workspace-profile fallback.

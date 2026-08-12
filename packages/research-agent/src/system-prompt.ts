@@ -12,6 +12,7 @@ export interface CreateResearchSystemPromptOptions {
   hasTools: boolean;
   hasMemoryTools?: boolean;
   hasRunbookTools?: boolean;
+  hasReportTools?: boolean;
   hasSessionDispositionTool?: boolean;
   agentPath?: string;
   hasCollaborationTools?: boolean;
@@ -85,6 +86,15 @@ export function createResearchSystemPrompt(
         "- Keep runbooks operational and reproducible: record exact commands or code, required context, decisive bounded outputs, and interpretation. Use shell.run for execution; a runbook never executes itself.",
         "- Prefer appending to the relevant runbook over scattering reusable procedure across narration or memory. Keep concise research facts in memory and multi-step procedures in runbooks.",
         "- Mark a runbook completed when its procedure is proven and reusable; leave exploratory work active, and archive superseded procedures.",
+      ]),
+    ] : []),
+    ...(options.hasReportTools ? [
+      "Use reports as durable Markdown artifacts for results ready to share beyond the workspace:",
+      ...(profile?.agent.reportInstructions?.map((instruction) => `- ${instruction}`) ?? [
+        "- List existing workspace reports before creating one.",
+        "- Create or revise a report when a meaningful result is ready to share beyond the workspace and its important claims have checkable support.",
+        "- Write in clear, casual, blog-like language where possible. Avoid semantic cramming, unnecessary jargon, and overusing domain vocabulary.",
+        "- Reports are Markdown artifacts, not memories. Keep each one coherent and standalone, and mark it stale when superseded or no longer accurate.",
       ]),
     ] : []),
   ].join("\n");
