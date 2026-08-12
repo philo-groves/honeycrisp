@@ -12,6 +12,7 @@ import {
   ensureResearchStorageLayout,
   getDefaultMemoryDatabasePath,
   listResearchStorageArtifacts,
+  MemoryGraphStore,
   ReportStore,
 } from "../packages/research-agent/dist/index.js";
 
@@ -68,6 +69,57 @@ test("report tools expose list, read, create, and revise operations", async () =
     assert.equal(created.result.artifactRefs[0].kind, "report");
   } finally {
     store.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("security report creation requires a confirmed reportable chain", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-security-report-tools-"));
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
+  const memoryGraph = new MemoryGraphStore({ workspaceRoot, context: {
+    sessionId: "run_security", workspaceId: "workspace_security", workspaceName: "Security",
+    subjectId: "subject_security", subjectName: "Security Subject",
+  } });
+  const store = new ReportStore(memoryGraph.databasePath, layout, memoryGraph.getContext());
+  const registry = createResearchToolRegistry(createReportTools(store, { requireConfirmedChain: true, memoryGraph }));
+  try {
+    const primitive = memoryGraph.save({
+      type: "primitive",
+      title: "Attacker controls the redirect destination",
+      status: "confirmed",
+      attributes: { rootCause: "Unvalidated redirect destination", rootCauseKey: "unvalidated-redirect-destination" },
+      evidence: [{ kind: "command", locator: { command: "redirect-verifier" }, summary: "The verifier demonstrated destination control." }],
+    });
+    const premature = await registry.execute({
+      id: "premature_report",
+      actionClass: "synthesize",
+      toolName: "report.create",
+      input: { title: "Premature", summary: "Primitive only.", content: "# Premature", sourceChainId: primitive.id },
+    });
+    assert.equal(premature.result.status, "error");
+    assert.match(premature.result.error.message, /primitive upgraded to a chain/);
+
+    const chain = memoryGraph.correct(primitive.id, primitive.revision, {
+      type: "chain",
+      status: "confirmed",
+      attributes: {
+        rootCause: "Unvalidated redirect destination reaches an authenticated callback",
+        rootCauseKey: "unvalidated-redirect-authenticated-callback",
+        reachability: "An attacker supplies the destination before authentication.",
+        impact: "The callback discloses the victim authorization result.",
+      },
+    });
+    const created = await registry.execute({
+      id: "confirmed_chain_report",
+      actionClass: "synthesize",
+      toolName: "report.create",
+      input: { title: "Confirmed chain", summary: "Reportable chain.", content: "# Confirmed chain", sourceChainId: chain.id },
+    });
+    assert.equal(created.result.status, "complete");
+    assert.equal(created.result.artifactRefs[0].kind, "report");
+  } finally {
+    store.close();
+    memoryGraph.close();
     await rm(workspaceRoot, { recursive: true, force: true });
   }
 });

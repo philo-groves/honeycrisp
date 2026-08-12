@@ -14,6 +14,8 @@
 
 ### Changed
 
+- Anthropic execution now uses the official Claude Agent SDK and its Claude Code agent process, with Honeycrisp's governed research tools bridged through an in-process MCP server. Subscription sign-in and status delegate to the installed official Claude CLI instead of storing or replaying Anthropic OAuth tokens; API-key use remains available through `ANTHROPIC_API_KEY`.
+- Cybersecurity report creation now requires an explicit confirmed chain with recorded reachability, impact, and proof evidence; observations, hypotheses, and primitives must be upgraded before they can become reports. The bundled Security Research profile advances to 1.3.0.
 - Extended the xAI provider catalog with Grok 4.6, including its 500k context window and low-through-xhigh reasoning controls.
 - Research profiles can now define a session-heat palette and status-specific heat for each memory type; the bundled Security Research and Mathematics profiles include distinct defaults.
 - Standardized the bundled Mathematics profile presentation labels on Memory and Runbooks.
@@ -49,6 +51,7 @@
 
 ### Security
 
+- Real cybersecurity-profile runs now fail closed unless their workspace context contains a host-recorded authorization boundary.
 - Kept stored workspace binding and profile results free of database, storage, and profile-source paths so host-held credential references remain withheld.
 - Removed Honeycrisp's application-level network profiles, destination allowlists, temporal network authorization gate, and fail-closed network veto. Network intent remains reviewer-visible audit metadata, while enforceable network isolation is delegated to operator-managed system controls.
 - Kept profile capability choices inside host policy: workspace and explicit profiles have no executable authority without direct host grants or bounded family/side-effect ceilings; MCP and selected skills remain explicit host-only, profile MCP server IDs can only restrict a host allowlist, and only the code-owned bundled security profile retains deliberate local shell defaults. Direct agent bootstrap now rejects stale resolved-profile hashes before compiling context, and non-security safeguard recovery uses neutral profile and workspace-boundary language while the bundled security profile retains its stronger security-specific recovery policy. The bundled security profile now requires evidence for new or transitioned confirmed primitives and chains without retroactively invalidating legacy rows.

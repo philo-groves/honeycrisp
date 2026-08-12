@@ -5,6 +5,7 @@ import {
   type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
+import { completeClaudeAgentText } from "./claude-agent-executor.js";
 import type { ResearchProfile } from "./research-profile.js";
 
 /*
@@ -38,11 +39,10 @@ const MAX_TITLE_WORDS = 6;
 export async function generateResearchSessionTitle(
   options: GenerateResearchSessionTitleOptions,
 ): Promise<string> {
+  const useOfficialClaude = options.provider === "anthropic" && options.models === undefined;
   const models = options.models ?? createAuthenticatedModels();
-  const model = models.getModel(options.provider, options.model);
-  if (!model) {
-    throw new Error(`Unknown title model ${options.provider}/${options.model}`);
-  }
+  const model = useOfficialClaude ? undefined : models.getModel(options.provider, options.model);
+  if (!useOfficialClaude && !model) throw new Error(`Unknown title model ${options.provider}/${options.model}`);
 
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -66,8 +66,20 @@ export async function generateResearchSessionTitle(
     let response: AssistantMessage | undefined;
     for (let attempt = 0; attempt <= TITLE_RETRY_DELAYS_MS.length; attempt += 1) {
       try {
+        if (useOfficialClaude) {
+          const completion = await completeClaudeAgentText({
+            model: options.model,
+            systemPrompt,
+            prompt: boundedPrompt(options.prompt),
+            reasoning: options.effort ?? "medium",
+            signal,
+          });
+          const title = normalizeResearchSessionTitle(completion.text);
+          if (!title) throw new Error("Title model returned an empty title.");
+          return title;
+        }
         response = await models.completeSimple(
-          model,
+          model!,
           {
             systemPrompt,
             messages: [

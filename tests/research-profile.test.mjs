@@ -56,7 +56,8 @@ test("bundled profiles own their session heat palettes and memory-status default
 test("bundled profiles give reports domain-specific share-readiness guidance", () => {
   const securityPrompt = createResearchSystemPrompt({ hasTools: true, hasReportTools: true, researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE });
   const mathematicsPrompt = createResearchSystemPrompt({ hasTools: true, hasReportTools: true, researchProfile: DEFAULT_MATHEMATICS_RESEARCH_PROFILE });
-  assert.match(securityPrompt, /reportable vulnerability chain is ready to share with triagers/);
+  assert.match(securityPrompt, /Do not create a report from observations, hypotheses, or primitives/);
+  assert.match(securityPrompt, /sourceChainId to report\.create/);
   assert.match(mathematicsPrompt, /mathematical breakthrough is ready to share with the greater community/);
   assert.match(securityPrompt, /casual, blog-like language/);
   assert.match(mathematicsPrompt, /casual, blog-like language/);

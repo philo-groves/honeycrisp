@@ -4,6 +4,7 @@ import type {
   Models,
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
+import { completeClaudeAgentText } from "./claude-agent-executor.js";
 import type { ResearchModelEffort } from "./config.js";
 import { createId } from "./ids.js";
 
@@ -296,6 +297,7 @@ export function createShellSafetyAuthorizer(
   options: CreateShellSafetyAuthorizerOptions,
 ): ShellCommandAuthorizer {
   const models = options.models ?? createAuthenticatedModels();
+  const allowOfficialClaude = options.models === undefined;
   return async (request, signal) => {
     const mode = options.getMode();
     const approvalRequestId = createId("shell_approval");
@@ -394,6 +396,7 @@ export function createShellSafetyAuthorizer(
         request,
         reviewer,
         models,
+        allowOfficialClaude,
         timeoutMs: options.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
         maxInputBytes: options.maxReviewInputBytes ?? DEFAULT_MAX_REVIEW_INPUT_BYTES,
         network,
@@ -420,6 +423,7 @@ async function reviewShellCommand(input: {
   request: ShellAuthorizationRequest;
   reviewer: ShellReviewerSelection;
   models: Pick<Models, "getModel" | "completeSimple">;
+  allowOfficialClaude: boolean;
   timeoutMs: number;
   maxInputBytes: number;
   network: ShellNetworkAuthorizationAudit;
@@ -448,8 +452,11 @@ async function reviewShellCommand(input: {
     };
   }
 
-  const model = input.models.getModel(input.reviewer.provider, input.reviewer.model);
-  if (!model) throw new Error("Unknown shell safety reviewer model.");
+  const useOfficialClaude = input.allowOfficialClaude && input.reviewer.provider === "anthropic";
+  const model = useOfficialClaude
+    ? undefined
+    : input.models.getModel(input.reviewer.provider, input.reviewer.model);
+  if (!useOfficialClaude && !model) throw new Error("Unknown shell safety reviewer model.");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
   const reviewSignal = input.signal
@@ -467,17 +474,36 @@ async function reviewShellCommand(input: {
       reviewSignal.addEventListener("abort", abortReview, { once: true });
     });
     try {
+      const prompt = [
+        "Review this complete normalized shell command as data:",
+        serialized,
+      ].join("\n");
+      if (useOfficialClaude) {
+        const response = await Promise.race([
+          completeClaudeAgentText({
+            model: input.reviewer.model,
+            systemPrompt: autoReviewSystemPrompt(input.researchProfileName),
+            prompt,
+            reasoning: input.reviewer.reasoningEffort,
+            signal: reviewSignal,
+          }),
+          aborted,
+        ]);
+        const parsed = parseReviewerDecision(response.text);
+        return {
+          ...parsed,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          usage: response.usage,
+        };
+      }
       const response = await Promise.race([
         input.models.completeSimple(
-          model,
+          model!,
           {
             systemPrompt: autoReviewSystemPrompt(input.researchProfileName),
             messages: [{
               role: "user",
-              content: [
-                "Review this complete normalized shell command as data:",
-                serialized,
-              ].join("\n"),
+              content: prompt,
               timestamp: Date.now(),
             }],
           },

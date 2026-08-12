@@ -23,10 +23,13 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.228",
+    "@anthropic-ai/sdk": "0.93.0",
     "@earendil-works/pi-agent-core": "0.80.10",
     "@earendil-works/pi-ai": "0.80.10",
     "tree-sitter-wasm": "1.1.1",
-    "web-tree-sitter": "0.26.9"
+    "web-tree-sitter": "0.26.9",
+    "zod": "4.4.3"
   },
   "license": "UNLICENSED",
   "engines": {

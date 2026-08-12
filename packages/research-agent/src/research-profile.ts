@@ -381,7 +381,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.2.0",
+  version: "1.3.0",
   name: "Security Research",
   description: "Authorized open-ended vulnerability discovery, chaining, verification, and reporting.",
   agent: {
@@ -407,7 +407,8 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     ],
     reportInstructions: [
       "List existing workspace reports before creating one.",
-      "Create or revise a report when a reportable vulnerability chain is ready to share with triagers and its important claims have tool-, artifact-, or verifier-backed evidence.",
+      "Do not create a report from observations, hypotheses, or primitives. First persist an independently proven primitive, then upgrade it to a chain with demonstrated reachability and impact.",
+      "Create a report only for a confirmed chain that meets the chain's proof-of-vulnerability and independent-review requirements. Pass that chain as sourceChainId to report.create; the tool rejects premature reports.",
       "Write in clear, casual, blog-like language where possible. Avoid semantic cramming, unnecessary jargon, and overusing security vocabulary.",
       "Reports are Markdown artifacts, not memories. Keep each one coherent and standalone, and mark it stale when superseded or no longer accurate.",
     ],

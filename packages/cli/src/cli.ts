@@ -19,6 +19,8 @@ import {
   compileMemoryModelContext,
   createPiAgentExecutor,
   extractCompatiblePiAgentResumableState,
+  createClaudeAgentExecutor,
+  extractCompatibleClaudeAgentResumableState,
   createRepositorySearchTool,
   createResearchAgentFlowCapture,
   createResearchStorageLayout,
@@ -80,6 +82,7 @@ import type {
   ResearchAgentExecutor,
   ResearchModelConfigPreference,
   PiAgentResumableState,
+  ClaudeAgentResumableState,
   MemoryEvidenceRef,
   MemoryNodeStatus,
   MemoryNodeType,
@@ -1782,7 +1785,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         resolvedResearchProfile,
       });
       const dispositionRecorder = runtimeConfig.dispositionRecorder;
-      let resumableState: PiAgentResumableState | undefined;
+      let resumableState: PiAgentResumableState | ClaudeAgentResumableState | undefined;
       let effectivePrompt = args.resumeFallbackPrompt ?? args.prompt;
       const agentExecutor = args.mock
         ? createDeterministicAgentExecutor()
@@ -1810,6 +1813,15 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
               : undefined),
           );
       if (resumableState) effectivePrompt = args.prompt;
+      if (
+        !args.mock
+        && resolvedResearchProfile.profile.id === "security-research"
+        && !runtimeConfig.workspaceContext.authorization
+      ) {
+        throw new Error(
+          "Cybersecurity research requires a recorded authorization boundary. Record the authorized scope before starting this session.",
+        );
+      }
       const sessionTitleRoute = args.mock
         ? undefined
         : resolveSessionTitleRoute(args, resolvedResearchProfile, modelConfig);
@@ -1943,16 +1955,22 @@ async function loadCompatibleResumeState(
   modelConfig: ResolvedResearchModelConfig,
   researchProfileHash: string,
   workflowId: string,
-): Promise<PiAgentResumableState | undefined> {
+): Promise<PiAgentResumableState | ClaudeAgentResumableState | undefined> {
   try {
     const capture = JSON.parse(await readFile(resolve(capturePath), "utf8")) as unknown;
     if (!isRecord(capture) || !isRecord(capture.agent)) return undefined;
-    return extractCompatiblePiAgentResumableState(
-      capture.agent.raw,
-      modelConfig.provider,
-      modelConfig.model,
-      { researchProfileHash, workflowId },
-    );
+    return modelConfig.provider === "anthropic"
+      ? extractCompatibleClaudeAgentResumableState(
+          capture.agent.raw,
+          modelConfig.model,
+          { researchProfileHash, workflowId },
+        )
+      : extractCompatiblePiAgentResumableState(
+          capture.agent.raw,
+          modelConfig.provider,
+          modelConfig.model,
+          { researchProfileHash, workflowId },
+        );
   } catch {
     return undefined;
   }
@@ -1966,7 +1984,7 @@ function createRealAgentExecutor(
   modelConfig: ResolvedResearchModelConfig,
   dispositionRecorder: ResearchDispositionRecorder,
   controlStream: HoneycrispControlStream | undefined,
-  resumableState?: PiAgentResumableState,
+  resumableState?: PiAgentResumableState | ClaudeAgentResumableState,
 ): ResearchAgentExecutor {
   const providerSessionId = args.sessionId?.trim() || resumableState?.providerSessionId;
   const executorInput = {
@@ -1978,6 +1996,29 @@ function createRealAgentExecutor(
     ...(toolRegistry ? { toolRegistry } : {}),
   };
 
+  if (modelConfig.provider === "anthropic") {
+    const claudeResumableState = resumableState && !("api" in resumableState)
+      ? resumableState
+      : undefined;
+    return createClaudeAgentExecutor({
+      model: modelConfig.model,
+      workspaceRoot: args.workspaceRoot,
+      ...(modelConfig.effort ? { reasoning: modelConfig.effort } : {}),
+      ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
+      ...(toolRegistry ? { toolRegistry } : {}),
+      researchProfile: resolvedResearchProfile.profile,
+      workflowId,
+      ...(claudeResumableState ? { resumableState: claudeResumableState } : {}),
+      ...(controlStream
+        ? {
+            waitForSteeringMessages: (signal?: AbortSignal) =>
+              controlStream.waitForSteeringInstructions(signal),
+          }
+        : {}),
+    });
+  }
+
+  const piResumableState = resumableState && "api" in resumableState ? resumableState : undefined;
   return createPiAgentExecutor({
     ...executorInput,
     ...(args.goal
@@ -1985,7 +2026,7 @@ function createRealAgentExecutor(
           goal: {
             objective: selectResearchGoalObjective({
               ...(args.goalObjective !== undefined ? { explicitObjective: args.goalObjective } : {}),
-              ...(resumableState?.goal ? { resumedGoal: resumableState.goal } : {}),
+              ...(piResumableState?.goal ? { resumedGoal: piResumableState.goal } : {}),
               prompt: args.prompt!,
             }),
             getDisposition: () => dispositionRecorder.get(),
@@ -1999,7 +2040,7 @@ function createRealAgentExecutor(
     ...(resolvedResearchProfile.profile.capabilities.collaborationEnabled
       ? {}
       : { subagents: false as const }),
-    ...(resumableState ? { resumableState } : {}),
+    ...(piResumableState ? { resumableState: piResumableState } : {}),
     ...(controlStream
       ? {
           getModelSelection: () => controlStream.getModelSelection(),
@@ -2987,7 +3028,11 @@ async function createRuntimeConfig(args: {
       storageLayout,
       memoryGraph.getContext(),
     );
-    const reportTools = createReportTools(reports);
+    const reportTools = createReportTools(reports, {
+      ...(resolvedResearchProfile.profile.id === "security-research"
+        ? { requireConfirmedChain: true, memoryGraph }
+        : {}),
+    });
     executableTools.push(...reportTools);
     toolDescriptors.push(...reportTools.map((tool) => tool.descriptor));
     cleanupCallbacks.push(async () => reports.close());

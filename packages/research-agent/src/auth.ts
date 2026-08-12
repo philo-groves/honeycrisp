@@ -1,6 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type {
   Api,
@@ -69,6 +71,7 @@ export interface ProviderModelCatalog {
 }
 
 type CredentialFile = Record<string, Credential>;
+const execFileAsync = promisify(execFile);
 
 const ADDITIONAL_PROVIDER_MODELS: Readonly<Record<string, readonly Model<Api>[]>> = {
   anthropic: [
@@ -365,6 +368,14 @@ export async function getAuthStatus(
     authFile: store.authFile,
     providers: await Promise.all(
       providers.map(async (provider) => {
+        if (provider.id === "anthropic") {
+          const claudeStatus = shouldUseClaudeCliAuth(options)
+            ? await getClaudeCliAuthStatus()
+            : { loggedIn: false };
+          return claudeStatus.loggedIn
+            ? { ...provider, storedCredentialType: "oauth" as const }
+            : provider;
+        }
         const credential = await store.read(provider.id);
         return credential
           ? {
@@ -390,6 +401,19 @@ export async function loginAuthProvider(
     throw new Error(`Unknown provider: ${providerId}`);
   }
 
+  if (providerId === "anthropic") {
+    await store.delete(providerId);
+    await runClaudeCliAuthCommand("login");
+    const status = await getClaudeCliAuthStatus();
+    if (!status.loggedIn) throw new Error("Claude CLI authentication did not complete.");
+    return {
+      authFile: "Claude Code credential store",
+      providerId,
+      providerName: provider.name,
+      credentialType: "oauth",
+    };
+  }
+
   const credential = provider.auth.oauth
     ? await provider.auth.oauth.login(callbacks)
     : await provider.auth.apiKey?.login?.(callbacks);
@@ -413,6 +437,9 @@ export async function logoutAuthProvider(
   options: FileCredentialStoreOptions = {},
 ): Promise<void> {
   const store = createCredentialStore(options);
+  if (providerId === "anthropic") {
+    await runClaudeCliAuthCommand("logout");
+  }
   await store.delete(providerId);
 }
 
@@ -440,6 +467,24 @@ export async function verifyProviderAuth(
         ? `Unknown model for ${providerId}: ${modelId}`
         : `No built-in models found for provider: ${providerId}`,
     );
+  }
+
+  if (providerId === "anthropic") {
+    const apiKeyConfigured = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+    const cliStatus = apiKeyConfigured || !shouldUseClaudeCliAuth(options)
+      ? { loggedIn: false }
+      : await getClaudeCliAuthStatus();
+    return {
+      providerId: provider.id,
+      providerName: provider.name,
+      modelId: model.id,
+      configured: apiKeyConfigured || cliStatus.loggedIn,
+      ...(apiKeyConfigured
+        ? { source: "ANTHROPIC_API_KEY" }
+        : cliStatus.loggedIn
+          ? { source: "Claude CLI subscription" }
+          : {}),
+    };
   }
 
   const auth = await models.getAuth(model);
@@ -554,6 +599,56 @@ function honeycrispModels(
   }
 
   return models;
+}
+
+interface ClaudeCliAuthStatus {
+  loggedIn: boolean;
+}
+
+function shouldUseClaudeCliAuth(options: FileCredentialStoreOptions): boolean {
+  return !options.authFile && !process.env.HONEYCRISP_AUTH_FILE?.trim();
+}
+
+async function getClaudeCliAuthStatus(): Promise<ClaudeCliAuthStatus> {
+  try {
+    const invocation = claudeCliInvocation(["auth", "status", "--json"]);
+    const { stdout } = await execFileAsync(invocation.command, invocation.args, {
+      windowsHide: true,
+      timeout: 10_000,
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(stdout) as unknown;
+    return { loggedIn: recordValue(parsed)?.loggedIn === true };
+  } catch {
+    return { loggedIn: false };
+  }
+}
+
+async function runClaudeCliAuthCommand(command: "login" | "logout"): Promise<void> {
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    const invocation = claudeCliInvocation(["auth", command]);
+    const child = spawn(invocation.command, invocation.args, {
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    child.once("error", (error) => {
+      rejectPromise(new Error(`Unable to start the official Claude CLI. Install Claude Code first: ${errorMessage(error)}`));
+    });
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolvePromise();
+      else rejectPromise(new Error(`Claude CLI auth ${command} failed (${signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`}).`));
+    });
+  });
+}
+
+function claudeCliInvocation(args: readonly string[]): { command: string; args: string[] } {
+  if (process.platform === "win32") {
+    return {
+      command: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", "claude", ...args],
+    };
+  }
+  return { command: "claude", args: [...args] };
 }
 
 function mergeProviderModels(

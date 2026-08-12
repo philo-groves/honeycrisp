@@ -35,6 +35,17 @@ test("main CLI defaults to real mode and preflights auth", async () => {
   assert.match(result.stderr, /--config <path>/);
 });
 
+test("real cybersecurity runs require a recorded authorization boundary", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const result = runTopCli(["--provider", "anthropic", "-p", "Inspect the authorized target."], {
+    HONEYCRISP_AUTH_FILE: authFile,
+    ANTHROPIC_API_KEY: "test-only-key",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Cybersecurity research requires a recorded authorization boundary/);
+});
+
 test("main CLI supports deterministic mock mode without auth", async () => {
   const authFile = await createEmptyAuthFilePath();
   const result = runTopCli(

@@ -1,4 +1,5 @@
 import { nowIso } from "./ids.js";
+import type { MemoryGraphStore, MemoryNode } from "./memory-graph.js";
 import { REPORT_STATUSES, ReportStore, type ReportStatus } from "./reports.js";
 import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
 import type { ResearchArtifactRef, ResearchToolAction } from "./types.js";
@@ -8,13 +9,22 @@ const GET_PARAMETERS = { type: "object", required: ["id"], properties: { id: { t
 const CREATE_PARAMETERS = { type: "object", required: ["title", "summary", "content"], properties: {
   title: { type: "string" }, summary: { type: "string", description: "A concise catalog description." },
   content: { type: "string", description: "The complete Markdown report." }, status: { type: "string", enum: [...REPORT_STATUSES] },
+  sourceChainId: { type: "string", description: "The confirmed, reportable chain this report documents." },
 } };
 const REVISE_PARAMETERS = { type: "object", required: ["id", "expectedRevision", "content"], properties: {
   id: { type: "string" }, expectedRevision: { type: "number" }, content: { type: "string", description: "The complete replacement Markdown report." },
   summary: { type: "string" }, status: { type: "string", enum: [...REPORT_STATUSES] },
 } };
 
-export function createReportTools(store: ReportStore): ResearchExecutableTool[] {
+export interface ReportToolPolicy {
+  requireConfirmedChain?: boolean;
+  memoryGraph?: Pick<MemoryGraphStore, "get" | "getContext">;
+}
+
+export function createReportTools(store: ReportStore, policy: ReportToolPolicy = {}): ResearchExecutableTool[] {
+  const createParameters = policy.requireConfirmedChain
+    ? { ...CREATE_PARAMETERS, required: [...CREATE_PARAMETERS.required, "sourceChainId"] }
+    : CREATE_PARAMETERS;
   return [
     tool("report.list", "report_list", "List workspace reports before creating or revising a shareable result.", "read", LIST_PARAMETERS, (input) => ({ output: store.list({
       ...(text(input.query) ? { query: text(input.query)! } : {}),
@@ -22,7 +32,10 @@ export function createReportTools(store: ReportStore): ResearchExecutableTool[] 
       ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
     }) })),
     tool("report.get", "report_get", "Read the full Markdown content of one workspace report.", "read", GET_PARAMETERS, (input) => ({ output: store.get(requiredText(input.id, "id")) })),
-    tool("report.create", "report_create", "Create a complete, revisioned Markdown report when a result is ready to share. Reports are artifacts, not memories.", "write", CREATE_PARAMETERS, (input) => {
+    tool("report.create", "report_create", policy.requireConfirmedChain
+      ? "Create a complete, revisioned Markdown report for a confirmed, reportable vulnerability chain. Observations, hypotheses, and primitives are not report-ready."
+      : "Create a complete, revisioned Markdown report when a result is ready to share. Reports are artifacts, not memories.", "write", createParameters, (input) => {
+      if (policy.requireConfirmedChain) requireReportableSecurityChain(input.sourceChainId, policy.memoryGraph);
       const created = store.create({ title: requiredText(input.title, "title"), summary: requiredText(input.summary, "summary"), content: requiredText(input.content, "content"), ...(text(input.status) ? { status: text(input.status)! as ReportStatus } : {}) });
       return { output: created.report, artifactRefs: [created.artifactRef] };
     }),
@@ -31,6 +44,29 @@ export function createReportTools(store: ReportStore): ResearchExecutableTool[] 
       return { output: revised.report, artifactRefs: [revised.artifactRef] };
     }),
   ];
+}
+
+function requireReportableSecurityChain(
+  value: unknown,
+  memoryGraph: ReportToolPolicy["memoryGraph"],
+): MemoryNode {
+  if (!memoryGraph) throw new Error("Security report eligibility requires the active memory graph.");
+  const sourceChainId = requiredText(value, "sourceChainId");
+  const chain = memoryGraph.get(sourceChainId);
+  const workspaceId = memoryGraph.getContext().workspaceId;
+  if (!chain || !chain.workspaces.some((workspace) => workspace.id === workspaceId)) {
+    throw new Error(`Report source chain is not recorded in this workspace: ${sourceChainId}.`);
+  }
+  if (chain.type !== "chain") {
+    throw new Error("Security reports require a primitive upgraded to a chain; observations, hypotheses, and primitives are not report-ready.");
+  }
+  if (chain.status !== "confirmed") {
+    throw new Error("Security reports require a confirmed chain that meets proof-of-vulnerability and independent-review criteria.");
+  }
+  if (!text(chain.attributes.impact) || !text(chain.attributes.reachability) || chain.evidence.length === 0) {
+    throw new Error("Security reports require a confirmed chain with impact, reachability, and proof evidence.");
+  }
+  return chain;
 }
 
 function tool(name: string, transportName: string, description: string, sideEffects: "read" | "write", parameters: Record<string, unknown>, run: (input: Record<string, unknown>) => { output: unknown; artifactRefs?: ResearchArtifactRef[] }): ResearchExecutableTool {
