@@ -16,14 +16,6 @@ import type {
 } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const ALLOWED_NETWORK_ASSET_KINDS = new Set([
-  "domain",
-  "host",
-  "ip_range",
-  "service",
-]);
-const MAX_ALLOWED_NETWORK_DESTINATIONS = 200;
-
 export interface ResolveStoredResearchWorkspaceBindingOptions {
   workspaceRoot?: string;
   databasePath?: string;
@@ -322,13 +314,6 @@ function projectStoredAuthorization(
   );
   if (!recorded) return undefined;
 
-  const networkProfile = readNetworkProfile(scope.network_policy_json);
-  const includesNetworkDestinations =
-    networkProfile === "scoped" || networkProfile === "elevated";
-  const allowedNetworkDestinations =
-    scopeId && includesNetworkDestinations
-      ? readAllowedNetworkDestinations(database, scopeId)
-      : [];
   const activeFrom = nonEmptyText(scope.active_from);
   const expiresAt = nonEmptyText(scope.expires_at);
   return {
@@ -337,10 +322,6 @@ function projectStoredAuthorization(
     ...(scopeId ? { scopeId } : {}),
     ...(scopeName ? { scopeName } : {}),
     ...(scopeOwner ? { scopeOwner } : {}),
-    ...(networkProfile ? { networkProfile } : {}),
-    ...(includesNetworkDestinations
-      ? { allowedNetworkDestinations }
-      : {}),
     ...(activeFrom ? { activeFrom } : {}),
     ...(expiresAt ? { expiresAt } : {}),
   };
@@ -353,55 +334,6 @@ function countScopeAssets(database: DatabaseSync, scopeId: string): number {
     .prepare("SELECT COUNT(*) AS count FROM scope_assets WHERE scope_version_id = ?")
     .get(scopeId) as Record<string, unknown> | undefined;
   return typeof row?.count === "number" ? row.count : 0;
-}
-
-function readAllowedNetworkDestinations(
-  database: DatabaseSync,
-  scopeId: string,
-): string[] {
-  const columns = tableColumns(database, "scope_assets");
-  if (
-    !columns.has("scope_version_id")
-    || !columns.has("direction")
-    || !columns.has("kind")
-    || !columns.has("value")
-  ) {
-    return [];
-  }
-  const orderBy = columns.has("created_at") && columns.has("id")
-    ? "created_at, id"
-    : columns.has("created_at")
-      ? "created_at"
-      : columns.has("id")
-        ? "id"
-        : "rowid";
-  const rows = database
-    .prepare(
-      `SELECT kind, value FROM scope_assets
-       WHERE scope_version_id = ? AND direction = 'in_scope'
-       ORDER BY ${orderBy}`,
-    )
-    .all(scopeId) as Record<string, unknown>[];
-  const destinations = new Set<string>();
-  for (const row of rows) {
-    const kind = nonEmptyText(row.kind);
-    const value = safeProjectedText(row.value);
-    if (!kind || !ALLOWED_NETWORK_ASSET_KINDS.has(kind) || !value) continue;
-    destinations.add(value);
-    if (destinations.size >= MAX_ALLOWED_NETWORK_DESTINATIONS) break;
-  }
-  return [...destinations];
-}
-
-function readNetworkProfile(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) return undefined;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!isRecord(parsed)) return undefined;
-    return safeProjectedText(parsed.defaultProfile);
-  } catch {
-    return undefined;
-  }
 }
 
 function tableColumns(database: DatabaseSync, table: string): Set<string> {

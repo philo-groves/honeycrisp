@@ -96,7 +96,6 @@ import type {
   ResearchToolRegistry,
   ResearchWorkspaceContext,
   ShellCommandAuthorizer,
-  ShellNetworkAuthorization,
   ShellReviewerSelection,
   ShellSafetyMode,
   BundledResearchProfileId,
@@ -1736,11 +1735,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     let runtimeConfig: Awaited<ReturnType<typeof createRuntimeConfig>> | undefined;
     try {
       let modelConfig: ResolvedResearchModelConfig | undefined;
-      let shellNetworkAuthorization = defaultCliShellNetworkAuthorization();
       const shellAuthorizer = createShellSafetyAuthorizer({
         researchProfileName: resolvedResearchProfile.profile.name,
         getMode: () => controlStream?.getShellSafetyMode() ?? args.shellSafetyMode,
-        getNetworkAuthorization: () => shellNetworkAuthorization,
         getReviewerSelection: (): ShellReviewerSelection | undefined => {
           const provider =
             controlStream?.getModelSelection()?.provider ??
@@ -1769,7 +1766,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         shellAuthorizer,
         resolvedResearchProfile,
       });
-      shellNetworkAuthorization = runtimeConfig.shellNetworkAuthorization;
       const dispositionRecorder = runtimeConfig.dispositionRecorder;
       let resumableState: PiAgentResumableState | undefined;
       let effectivePrompt = args.resumeFallbackPrompt ?? args.prompt;
@@ -2888,7 +2884,6 @@ async function createRuntimeConfig(args: {
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
   memoryGraph: MemoryGraphStore;
-  shellNetworkAuthorization: ShellNetworkAuthorization;
   cleanup?: () => Promise<void>;
 }> {
   const workspaceRoot = args.workspaceRoot ?? process.cwd();
@@ -2945,10 +2940,6 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   });
-  const shellNetworkAuthorization = resolveCliShellNetworkAuthorization(
-    workspaceContext,
-    runtimeTools,
-  );
   const memoryGraph = new MemoryGraphStore({
     workspaceRoot,
     resolvedProfile: resolvedResearchProfile,
@@ -3110,7 +3101,6 @@ async function createRuntimeConfig(args: {
     runtimeTools,
     dispositionRecorder,
     memoryGraph,
-    shellNetworkAuthorization,
     capture: createRuntimeCapture({
       families,
       args: runtimeArgs,
@@ -3118,7 +3108,6 @@ async function createRuntimeConfig(args: {
       skills,
       governance,
       workspaceContext,
-      shellNetworkAuthorization,
       toolConfigCapture: resolvedRuntimeTools.capture,
       ...(mcpCapture ? { mcpCapture } : {}),
     }),
@@ -3341,36 +3330,6 @@ function applyResearchProfileCapabilityDefaults(
   };
 }
 
-function defaultCliShellNetworkAuthorization(): ShellNetworkAuthorization {
-  return {
-    sideEffectAllowed: false,
-    authorizationRecorded: false,
-    profile: "offline",
-    allowedDestinations: [],
-  };
-}
-
-function resolveCliShellNetworkAuthorization(
-  workspaceContext: ResearchWorkspaceContext,
-  runtimeTools: RuntimeToolConfig,
-): ShellNetworkAuthorization {
-  const authorization = workspaceContext.authorization;
-  const profile = authorization?.networkProfile === "scoped" || authorization?.networkProfile === "elevated"
-    ? authorization.networkProfile
-    : "offline";
-  return {
-    sideEffectAllowed: runtimeTools.allowedSideEffects.includes("network"),
-    authorizationRecorded: authorization?.recorded === true,
-    profile,
-    allowedDestinations: authorization?.allowedNetworkDestinations ?? [],
-    ...(authorization?.source ? { source: authorization.source } : {}),
-    ...(authorization?.scopeId ? { scopeId: authorization.scopeId } : {}),
-    ...(authorization?.scopeName ? { scopeName: authorization.scopeName } : {}),
-    ...(authorization?.activeFrom ? { activeFrom: authorization.activeFrom } : {}),
-    ...(authorization?.expiresAt ? { expiresAt: authorization.expiresAt } : {}),
-  };
-}
-
 async function configureRuntimeMcpTools(input: {
   runtimeTools: RuntimeToolConfig;
   executableTools: ResearchExecutableTool[];
@@ -3554,7 +3513,6 @@ function createRuntimeCapture(input: {
   skills: readonly ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
-  shellNetworkAuthorization: ShellNetworkAuthorization;
   toolConfigCapture: ResolvedRuntimeToolConfig["capture"];
   mcpCapture?: Record<string, unknown>;
 }): Record<string, unknown> {
@@ -3583,7 +3541,6 @@ function createRuntimeCapture(input: {
     },
     profileSideEffectCeiling: input.args.runtimeTools.profileSideEffectCeiling,
     governance: input.governance ?? null,
-    shellNetworkAuthorization: input.shellNetworkAuthorization,
     mcp:
       input.mcpCapture ??
       {

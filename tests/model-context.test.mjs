@@ -24,7 +24,6 @@ test("model workspace context preserves research identity without storage paths"
       source: "beale",
       scopeName: "Apple OSS Zsh",
       scopeOwner: "Apple",
-      networkProfile: "offline",
     },
     memoryContext: {
       sessionId: "run_zftp",

@@ -309,12 +309,7 @@ test("workspace profiles cannot grant executable capabilities outside explicit h
     assert.equal(payload.tools.some((tool) => tool.name.startsWith("code.")), false);
     assert.equal(payload.tools.some((tool) => tool.name === "experiment.run"), false);
     assert.deepEqual(payload.governance.allowedSideEffects, ["none"]);
-    assert.deepEqual(payload.shellNetworkAuthorization, {
-      sideEffectAllowed: false,
-      authorizationRecorded: false,
-      profile: "offline",
-      allowedDestinations: [],
-    });
+    assert.equal("shellNetworkAuthorization" in payload, false);
     assert.deepEqual(payload.mcp.allowedServers, []);
     assert.deepEqual(payload.skills.selectedIds, []);
 
@@ -422,9 +417,7 @@ test("workspace profiles cannot grant executable capabilities outside explicit h
     assert.equal(hostPayload.tools.some((tool) => tool.name.startsWith("code.")), true);
     assert.equal(hostPayload.tools.some((tool) => tool.name === "experiment.run"), true);
     assert.deepEqual(hostPayload.governance.allowedSideEffects, ["write", "process", "network"]);
-    assert.equal(hostPayload.shellNetworkAuthorization.sideEffectAllowed, true);
-    assert.equal(hostPayload.shellNetworkAuthorization.authorizationRecorded, false);
-    assert.equal(hostPayload.shellNetworkAuthorization.profile, "offline");
+    assert.equal("shellNetworkAuthorization" in hostPayload, false);
 
     const hostDisabled = runCli([
       "tools",
@@ -491,7 +484,7 @@ test("the code-owned bundled security profile deliberately retains its local she
   }
 });
 
-test("explicit network effects compile with structured host authorization independently of profiles", async () => {
+test("explicit network effects compile without application-level network authorization", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-shell-network-context-"));
   const contextPath = join(workspaceRoot, "host-context.json");
   try {
@@ -505,8 +498,6 @@ test("explicit network effects compile with structured host authorization indepe
           source: "beale",
           scopeId: "scope_network",
           scopeName: "Network fixture",
-          networkProfile: "scoped",
-          allowedNetworkDestinations: ["api.example.test", "10.20.0.0/16"],
           activeFrom: "2000-01-01T00:00:00.000Z",
           expiresAt: "2999-01-01T00:00:00.000Z",
         },
@@ -529,17 +520,7 @@ test("explicit network effects compile with structured host authorization indepe
     ]);
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.deepEqual(payload.shellNetworkAuthorization, {
-      sideEffectAllowed: true,
-      authorizationRecorded: true,
-      profile: "scoped",
-      allowedDestinations: ["api.example.test", "10.20.0.0/16"],
-      source: "beale",
-      scopeId: "scope_network",
-      scopeName: "Network fixture",
-      activeFrom: "2000-01-01T00:00:00.000Z",
-      expiresAt: "2999-01-01T00:00:00.000Z",
-    });
+    assert.equal("shellNetworkAuthorization" in payload, false);
     assert.deepEqual(payload.governance.allowedSideEffects, ["process", "network"]);
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });

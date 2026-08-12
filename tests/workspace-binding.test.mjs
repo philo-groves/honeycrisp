@@ -191,8 +191,6 @@ test("stored workspace binding prefers the Beale research subject and redacts cr
       scopeId: "scope_recorded",
       scopeName: "Recorded workspace",
       scopeOwner: "Scope Owner",
-      networkProfile: "scoped",
-      allowedNetworkDestinations: ["example.test", "api.example.test"],
       activeFrom: "2026-01-01T00:00:00Z",
       expiresAt: "2027-01-01T00:00:00Z",
     });
@@ -290,6 +288,8 @@ test("workspace-tools exposes the compatibility surface without generic global a
     "createRunbookTools",
     "createResearchToolRegistry",
     "resolveResearchProfile",
+    "bundledResearchProfile",
+    "researchProfileHash",
     "compileMemoryModelContext",
     "createModelWorkspaceContext",
     "resolveStoredResearchProfile",
@@ -297,6 +297,14 @@ test("workspace-tools exposes the compatibility surface without generic global a
   ]) {
     assert.equal(typeof workspaceTools[exportName], "function", exportName);
   }
+  assert.deepEqual(workspaceTools.BUNDLED_RESEARCH_PROFILE_IDS, [
+    "security-research",
+    "mathematics",
+  ]);
+  assert.equal(
+    workspaceTools.bundledResearchProfile("mathematics").id,
+    "mathematics",
+  );
   assert.equal("listResearchStorageArtifacts" in workspaceTools, false);
   assert.equal("resolveResearchStorageArtifact" in workspaceTools, false);
   assert.equal("getDefaultMemoryDatabasePath" in workspaceTools, false);
