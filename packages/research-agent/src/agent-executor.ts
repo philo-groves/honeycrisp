@@ -220,9 +220,33 @@ export function createDeterministicAgentExecutor(): ResearchAgentExecutor {
   };
 }
 
+function assertPiProvider(provider: string): void {
+  if (provider.trim().toLowerCase() === "anthropic") {
+    throw new Error(
+      "Anthropic execution must use createClaudeAgentExecutor and the official Claude Agent SDK.",
+    );
+  }
+}
+
+function getPiModel(
+  models: Pick<Models, "getModel">,
+  provider: string,
+  model: string,
+): ReturnType<Models["getModel"]> {
+  assertPiProvider(provider);
+  const selected = models.getModel(provider, model);
+  if (selected?.provider.trim().toLowerCase() === "anthropic") {
+    throw new Error(
+      "Anthropic execution must use createClaudeAgentExecutor and the official Claude Agent SDK.",
+    );
+  }
+  return selected;
+}
+
 export function createPiAgentExecutor(
   options: CreatePiAgentExecutorOptions,
 ): ResearchAgentExecutor {
+  assertPiProvider(options.provider);
   const baseProfile = normalizeResearchProfile(options.researchProfile ?? DEFAULT_SECURITY_RESEARCH_PROFILE);
   const bundledSecurityProfile = researchProfileHash(baseProfile) === defaultSecurityProfileHash();
   const researchProfile = options.memoryTypeDescriptions === undefined
@@ -257,7 +281,7 @@ export function createPiAgentExecutor(
         createAuthenticatedModels(
           options.authFile ? { authFile: options.authFile } : {},
         );
-      const model = models.getModel(options.provider, options.model);
+      const model = getPiModel(models, options.provider, options.model);
       if (!model) {
         throw new Error(`Unknown model ${options.provider}/${options.model}`);
       }
@@ -358,7 +382,7 @@ export function createPiAgentExecutor(
       const hasSessionDispositionTool = researchToolNames.has("session_disposition");
 
       runSession = async (request) => {
-        const sessionModel = request.root ? model : models.getModel(options.provider, request.model);
+        const sessionModel = request.root ? model : getPiModel(models, options.provider, request.model);
         if (!sessionModel) throw new Error(`Unknown subagent model ${options.provider}/${request.model}`);
         const toolEvents: ResearchEvent[] = [];
         const agentEvents: Record<string, unknown>[] = [];
@@ -448,7 +472,7 @@ export function createPiAgentExecutor(
             model: sessionModel,
             ...(request.reasoning ? { reasoningEffort: request.reasoning } : options.reasoning ? { reasoningEffort: options.reasoning } : {}),
           };
-          const selectedModel = models.getModel(selection.provider, selection.model);
+          const selectedModel = getPiModel(models, selection.provider, selection.model);
           if (!selectedModel) throw new Error(`Unknown model ${selection.provider}/${selection.model}`);
           if (!getSupportedThinkingLevels(selectedModel).includes(selection.reasoningEffort)) {
             throw new Error(`${selectedModel.name} does not support ${selection.reasoningEffort} reasoning.`);

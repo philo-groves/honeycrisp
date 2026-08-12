@@ -53,6 +53,7 @@
 
 ### Security
 
+- Enforced the official Claude boundary for Anthropic: Pi executors now reject Anthropic, Pi-authenticated model registries omit it, auxiliary title and shell-review jobs always use the Claude Agent SDK, and legacy Honeycrisp Anthropic credentials are cleanup-only.
 - Real cybersecurity-profile runs now fail closed unless their workspace context contains a host-recorded authorization boundary.
 - Kept stored workspace binding and profile results free of database, storage, and profile-source paths so host-held credential references remain withheld.
 - Removed Honeycrisp's application-level network profiles, destination allowlists, temporal network authorization gate, and fail-closed network veto. Network intent remains reviewer-visible audit metadata, while enforceable network isolation is delegated to operator-managed system controls.

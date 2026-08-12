@@ -1,8 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  createPiAgentExecutor,
   extractCompatibleClaudeAgentResumableState,
 } from "../packages/research-agent/dist/index.js";
+
+test("Pi executor rejects Anthropic before model resolution", () => {
+  assert.throws(
+    () => createPiAgentExecutor({ provider: "anthropic", model: "claude-opus-5" }),
+    /official Claude Agent SDK/,
+  );
+  assert.throws(
+    () => createPiAgentExecutor({ provider: " ANTHROPIC ", model: "claude-opus-5" }),
+    /official Claude Agent SDK/,
+  );
+});
 
 test("Claude Agent SDK resume state is pinned to model, profile, and workflow", () => {
   const raw = {

@@ -93,6 +93,7 @@ export interface CreateShellSafetyAuthorizerOptions {
   onRequested?(event: Record<string, unknown>): void | Promise<void>;
   onResolved?(event: Record<string, unknown>): void | Promise<void>;
   models?: Pick<Models, "getModel" | "completeSimple">;
+  completeClaudeText?: typeof completeClaudeAgentText;
   reviewTimeoutMs?: number;
   maxReviewInputBytes?: number;
   researchProfileName?: string;
@@ -297,7 +298,6 @@ export function createShellSafetyAuthorizer(
   options: CreateShellSafetyAuthorizerOptions,
 ): ShellCommandAuthorizer {
   const models = options.models ?? createAuthenticatedModels();
-  const allowOfficialClaude = options.models === undefined;
   return async (request, signal) => {
     const mode = options.getMode();
     const approvalRequestId = createId("shell_approval");
@@ -396,7 +396,7 @@ export function createShellSafetyAuthorizer(
         request,
         reviewer,
         models,
-        allowOfficialClaude,
+        completeClaudeText: options.completeClaudeText ?? completeClaudeAgentText,
         timeoutMs: options.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
         maxInputBytes: options.maxReviewInputBytes ?? DEFAULT_MAX_REVIEW_INPUT_BYTES,
         network,
@@ -423,7 +423,7 @@ async function reviewShellCommand(input: {
   request: ShellAuthorizationRequest;
   reviewer: ShellReviewerSelection;
   models: Pick<Models, "getModel" | "completeSimple">;
-  allowOfficialClaude: boolean;
+  completeClaudeText: typeof completeClaudeAgentText;
   timeoutMs: number;
   maxInputBytes: number;
   network: ShellNetworkAuthorizationAudit;
@@ -452,7 +452,7 @@ async function reviewShellCommand(input: {
     };
   }
 
-  const useOfficialClaude = input.allowOfficialClaude && input.reviewer.provider === "anthropic";
+  const useOfficialClaude = input.reviewer.provider === "anthropic";
   const model = useOfficialClaude
     ? undefined
     : input.models.getModel(input.reviewer.provider, input.reviewer.model);
@@ -480,7 +480,7 @@ async function reviewShellCommand(input: {
       ].join("\n");
       if (useOfficialClaude) {
         const response = await Promise.race([
-          completeClaudeAgentText({
+          input.completeClaudeText({
             model: input.reviewer.model,
             systemPrompt: autoReviewSystemPrompt(input.researchProfileName),
             prompt,

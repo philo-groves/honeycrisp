@@ -56,6 +56,33 @@ test("Danger Mode approves without a reviewer or human decision", async () => {
   assert.equal(resolved[0]?.type, "shell_authorization_resolved");
 });
 
+test("Anthropic Auto-Review always uses the Claude Agent SDK completion route", async () => {
+  const calls = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      reasoningEffort: "low",
+    }),
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: unreachableModels(),
+    async completeClaudeText(options) {
+      calls.push(options);
+      return {
+        text: JSON.stringify({ decision: "approved", reason: "Bounded workspace inspection." }),
+        usage: { inputTokens: 20 },
+      };
+    },
+  });
+
+  const decision = await authorize(BASE_REQUEST);
+  assert.equal(decision.decision, "approved");
+  assert.equal(decision.reviewer?.provider, "anthropic");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.model, "claude-haiku-4-5");
+});
+
 test("network intent is audit metadata and does not create an application-level denial", async () => {
   const baseOptions = {
     getMode: () => "danger",

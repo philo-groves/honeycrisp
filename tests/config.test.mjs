@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -16,19 +16,35 @@ import {
 
 test("authenticated model catalog includes current supplemental models", () => {
   const models = createAuthenticatedModels();
-  const opus = models.getModel("anthropic", "claude-opus-5");
   const daybreak = models.getModel("openai-codex", "gpt-daybreak-blue-latest");
   const grok46 = models.getModel("xai", "grok-4.6");
 
-  assert.equal(opus?.name, "Claude Opus 5");
-  assert.equal(opus?.provider, "anthropic");
-  assert.equal(opus?.contextWindow, 1_000_000);
+  assert.equal(models.getProvider("anthropic"), undefined);
+  assert.equal(models.getModel("anthropic", "claude-opus-5"), undefined);
   assert.equal(daybreak?.name, "Daybreak Blue");
   assert.equal(daybreak?.provider, "openai-codex");
   assert.equal(daybreak?.contextWindow, 272_000);
   assert.equal(grok46?.name, "Grok 4.6");
   assert.equal(grok46?.provider, "xai");
   assert.equal(grok46?.contextWindow, 500_000);
+});
+
+test("credential store treats legacy Anthropic credentials as cleanup-only", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-anthropic-legacy-"));
+  const authFile = join(directory, "auth.json");
+  await writeFile(authFile, JSON.stringify({
+    anthropic: { type: "api_key", key: "legacy-secret" },
+  }), "utf8");
+  const store = createCredentialStore({ authFile });
+
+  assert.equal(await store.read("anthropic"), undefined);
+  assert.equal((await store.list()).some((entry) => entry.providerId === "anthropic"), false);
+  await assert.rejects(
+    store.modify("anthropic", async () => ({ type: "api_key", key: "new-secret" })),
+    /official Claude CLI/,
+  );
+  await store.delete("anthropic");
+  assert.equal("anthropic" in JSON.parse(await readFile(authFile, "utf8")), false);
 });
 
 test("provider catalogs expose current supplemental models to frontends", () => {

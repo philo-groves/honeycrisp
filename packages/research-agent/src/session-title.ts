@@ -22,6 +22,7 @@ export interface GenerateResearchSessionTitleOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   models?: Pick<Models, "getModel" | "completeSimple">;
+  completeClaudeText?: typeof completeClaudeAgentText;
   researchProfile?: Pick<ResearchProfile, "name" | "workspace" | "presentation">;
 }
 
@@ -39,9 +40,9 @@ const MAX_TITLE_WORDS = 6;
 export async function generateResearchSessionTitle(
   options: GenerateResearchSessionTitleOptions,
 ): Promise<string> {
-  const useOfficialClaude = options.provider === "anthropic" && options.models === undefined;
-  const models = options.models ?? createAuthenticatedModels();
-  const model = useOfficialClaude ? undefined : models.getModel(options.provider, options.model);
+  const useOfficialClaude = options.provider === "anthropic";
+  const models = useOfficialClaude ? undefined : options.models ?? createAuthenticatedModels();
+  const model = useOfficialClaude ? undefined : models!.getModel(options.provider, options.model);
   if (!useOfficialClaude && !model) throw new Error(`Unknown title model ${options.provider}/${options.model}`);
 
   const controller = new AbortController();
@@ -67,7 +68,7 @@ export async function generateResearchSessionTitle(
     for (let attempt = 0; attempt <= TITLE_RETRY_DELAYS_MS.length; attempt += 1) {
       try {
         if (useOfficialClaude) {
-          const completion = await completeClaudeAgentText({
+          const completion = await (options.completeClaudeText ?? completeClaudeAgentText)({
             model: options.model,
             systemPrompt,
             prompt: boundedPrompt(options.prompt),
@@ -78,7 +79,7 @@ export async function generateResearchSessionTitle(
           if (!title) throw new Error("Title model returned an empty title.");
           return title;
         }
-        response = await models.completeSimple(
+        response = await models!.completeSimple(
           model!,
           {
             systemPrompt,

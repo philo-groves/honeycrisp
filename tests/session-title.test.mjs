@@ -54,6 +54,32 @@ test("research session title normalization removes response decoration and bound
   );
 });
 
+test("Anthropic session titles always use the Claude Agent SDK completion route", async () => {
+  const calls = [];
+  const title = await generateResearchSessionTitle({
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    prompt: "Inspect a parser state transition.",
+    models: {
+      getModel() {
+        assert.fail("Anthropic titles must not resolve a Pi model.");
+      },
+      async completeSimple() {
+        assert.fail("Anthropic titles must not use Pi completion.");
+      },
+    },
+    async completeClaudeText(options) {
+      calls.push(options);
+      return { text: "Parser State Transition", usage: { inputTokens: 12 } };
+    },
+  });
+
+  assert.equal(title, "Parser State Transition");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.model, "claude-haiku-4-5");
+  assert.match(calls[0]?.prompt, /parser state transition/i);
+});
+
 test("research session titles retry transient provider failures", async () => {
   let attempts = 0;
   const title = await generateResearchSessionTitle({

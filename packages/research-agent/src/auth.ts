@@ -182,13 +182,14 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   async read(providerId: string): Promise<Credential | undefined> {
+    if (providerId === "anthropic") return undefined;
     const credentials = await this.#readAll();
     return this.#currentCredential(credentials, providerId);
   }
 
   async list(): Promise<readonly CredentialInfo[]> {
     const credentials = await this.#readAll();
-    const providerIds = new Set(Object.keys(credentials));
+    const providerIds = new Set(Object.keys(credentials).filter((providerId) => providerId !== "anthropic"));
     if (await this.#readCodexCredential()) providerIds.add("openai-codex");
 
     const result: CredentialInfo[] = [];
@@ -203,6 +204,9 @@ export class FileCredentialStore implements CredentialStore {
     providerId: string,
     fn: (current: Credential | undefined) => Promise<Credential | undefined>,
   ): Promise<Credential | undefined> {
+    if (providerId === "anthropic") {
+      throw new Error("Anthropic subscription credentials are managed by the official Claude CLI.");
+    }
     const previous = this.#chains.get(providerId) ?? Promise.resolve();
     const next = previous.then(async () => {
       const credentials = await this.#readAll();
@@ -273,6 +277,7 @@ export class FileCredentialStore implements CredentialStore {
     credentials: CredentialFile,
     providerId: string,
   ): Promise<Credential | undefined> {
+    if (providerId === "anthropic") return undefined;
     const stored = credentials[providerId];
     if (providerId !== "openai-codex") return stored;
 
@@ -319,9 +324,11 @@ export function createCredentialStore(
 export function createAuthenticatedModels(
   options: FileCredentialStoreOptions = {},
 ): Models {
-  return honeycrispModels({
+  const models = honeycrispModels({
     credentials: createCredentialStore(options),
   });
+  models.deleteProvider("anthropic");
+  return models;
 }
 
 export function listAuthProviders(): AuthProviderSummary[] {
