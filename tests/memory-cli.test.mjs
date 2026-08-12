@@ -156,7 +156,10 @@ test("main CLI uses reconstructed context when a resume capture is unavailable",
   const authFile = await createEmptyAuthFilePath();
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-resume-fallback-"));
   const capturePath = join(workspaceRoot, "continued.json");
+  const fallbackPromptPath = join(workspaceRoot, "resume-fallback.md");
+  const fallbackPrompt = `Reconstructed prior context.\n${"x".repeat(40_000)}\nContinue with the new instruction.`;
   try {
+    await writeFile(fallbackPromptPath, fallbackPrompt, "utf8");
     const result = runTopCli(
       [
         "--mock",
@@ -166,8 +169,8 @@ test("main CLI uses reconstructed context when a resume capture is unavailable",
         capturePath,
         "--resume-capture",
         join(workspaceRoot, "missing.json"),
-        "--resume-fallback-prompt",
-        "Reconstructed prior context plus the new instruction.",
+        "--resume-fallback-prompt-file",
+        fallbackPromptPath,
         "-p",
         "New instruction only.",
       ],
@@ -176,7 +179,7 @@ test("main CLI uses reconstructed context when a resume capture is unavailable",
 
     assert.equal(result.status, 0, result.stderr);
     const capture = JSON.parse(await readFile(capturePath, "utf8"));
-    assert.equal(capture.request.prompt, "Reconstructed prior context plus the new instruction.");
+    assert.equal(capture.request.prompt, fallbackPrompt);
     assert.deepEqual(capture.agent.finalDisposition, {
       outcome: "inconclusive",
       summary: capture.agent.outputText,

@@ -37,6 +37,7 @@
 
 ### Fixed
 
+- Added a file-backed resume fallback prompt option so host frontends can continue large sessions without exceeding operating-system process command-line limits.
 - Retried transient provider and transport failures during background session-title generation before reporting the title job as failed.
 - Aligned memory tool schemas and research-agent guidance on lowercase-hyphenated root-cause keys while treating source, sink, and asset links as recommended rather than required for confirmed chains.
 - Prevented long research turns from retaining full-context deep copies for ordinary and parallel tool calls; spawn inheritance uses bounded structural snapshots, while model-visible tool details omit full outputs that remain available in canonical observed events and artifacts.

@@ -216,6 +216,7 @@ interface ParsedArgs {
   sessionId: string | undefined;
   resumeCapturePath: string | undefined;
   resumeFallbackPrompt: string | undefined;
+  resumeFallbackPromptPath: string | undefined;
   eventStream: boolean;
   controlStream: boolean;
   workspaceRoot: string;
@@ -317,6 +318,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let sessionId: string | undefined;
   let resumeCapturePath: string | undefined;
   let resumeFallbackPrompt: string | undefined;
+  let resumeFallbackPromptPath: string | undefined;
   let eventStream = false;
   let controlStream = false;
   let workspaceRoot = process.cwd();
@@ -553,6 +555,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--resume-fallback-prompt") {
       resumeFallbackPrompt = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--resume-fallback-prompt-file") {
+      resumeFallbackPromptPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--event-stream") {
       eventStream = true;
     } else if (arg === "--control-stream") {
@@ -643,6 +648,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     sessionId,
     resumeCapturePath,
     resumeFallbackPrompt,
+    resumeFallbackPromptPath,
     eventStream,
     controlStream,
     workspaceRoot,
@@ -1419,6 +1425,7 @@ function usage(): string {
     "  --session-id <id>     Stable provider affinity ID for this research session",
     "  --resume-capture <p>  Resume compatible model context from a prior capture",
     "  --resume-fallback-prompt <text>  Prompt used when prior state is unavailable",
+    "  --resume-fallback-prompt-file <p> Read that fallback prompt from a UTF-8 file",
     "  --event-stream         Write prefixed live JSON events to stdout",
     "  --control-stream       Read host control JSONL from stdin",
     "  --workspace-root <p>   Workspace root for durable runtime memory",
@@ -1715,6 +1722,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       console.error(usage());
       process.exitCode = 1;
       return;
+    }
+    if (args.resumeFallbackPrompt && args.resumeFallbackPromptPath) {
+      throw new Error("--resume-fallback-prompt and --resume-fallback-prompt-file cannot be used together.");
+    }
+    if (args.resumeFallbackPromptPath) {
+      args.resumeFallbackPrompt = await readFile(resolve(args.resumeFallbackPromptPath), "utf8");
     }
     if (args.goal && args.mock) {
       throw new Error("--goal requires the Pi agent executor and cannot be combined with --mock.");
