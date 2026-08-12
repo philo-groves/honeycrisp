@@ -98,6 +98,33 @@ const ADDITIONAL_PROVIDER_MODELS: Readonly<Record<string, readonly Model<Api>[]>
       maxTokens: 128_000,
     },
   ],
+  xai: [
+    {
+      id: "grok-4.6",
+      name: "Grok 4.6",
+      api: "openai-responses",
+      provider: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      compat: {
+        supportsLongCacheRetention: false,
+      },
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        xhigh: "xhigh",
+      },
+      input: ["text", "image"],
+      cost: {
+        input: 2,
+        output: 6,
+        cacheRead: 0.5,
+        cacheWrite: 0,
+      },
+      contextWindow: 500_000,
+      maxTokens: 500_000,
+    },
+  ],
   "openai-codex": [
     {
       id: "gpt-daybreak-blue-latest",

@@ -14,6 +14,7 @@
 
 ### Changed
 
+- Extended the xAI provider catalog with Grok 4.6, including its 500k context window and low-through-xhigh reasoning controls.
 - Research profiles can now define a session-heat palette and status-specific heat for each memory type; the bundled Security Research and Mathematics profiles include distinct defaults.
 - Standardized the bundled Mathematics profile presentation labels on Memory and Runbooks.
 - Extended the built-in provider catalog with Claude Opus 5 and the OpenAI Codex `gpt-daybreak-blue-latest` model for runtime selection and host frontends.

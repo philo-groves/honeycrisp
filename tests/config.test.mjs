@@ -18,6 +18,7 @@ test("authenticated model catalog includes current supplemental models", () => {
   const models = createAuthenticatedModels();
   const opus = models.getModel("anthropic", "claude-opus-5");
   const daybreak = models.getModel("openai-codex", "gpt-daybreak-blue-latest");
+  const grok46 = models.getModel("xai", "grok-4.6");
 
   assert.equal(opus?.name, "Claude Opus 5");
   assert.equal(opus?.provider, "anthropic");
@@ -25,6 +26,9 @@ test("authenticated model catalog includes current supplemental models", () => {
   assert.equal(daybreak?.name, "Daybreak Blue");
   assert.equal(daybreak?.provider, "openai-codex");
   assert.equal(daybreak?.contextWindow, 272_000);
+  assert.equal(grok46?.name, "Grok 4.6");
+  assert.equal(grok46?.provider, "xai");
+  assert.equal(grok46?.contextWindow, 500_000);
 });
 
 test("provider catalogs expose current supplemental models to frontends", () => {
@@ -43,9 +47,13 @@ test("provider catalog reports Pi model names and model-specific effort levels",
   assert.equal(catalog?.providerId, "xai");
   const grok43 = catalog?.models.find((model) => model.id === "grok-4.3");
   const grok45 = catalog?.models.find((model) => model.id === "grok-4.5");
+  const grok46 = catalog?.models.find((model) => model.id === "grok-4.6");
   assert.equal(grok43?.name, "Grok 4.3");
   assert.deepEqual(grok43?.effortLevels, ["off", "minimal", "low", "medium", "high"]);
   assert.deepEqual(grok45?.effortLevels, ["low", "medium", "high"]);
+  assert.equal(grok46?.name, "Grok 4.6");
+  assert.deepEqual(grok46?.effortLevels, ["low", "medium", "high", "xhigh"]);
+  assert.equal(grok46?.contextWindow, 500_000);
 });
 
 test("research model config accepts Pi max effort", async () => {
