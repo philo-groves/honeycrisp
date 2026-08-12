@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
@@ -65,6 +66,21 @@ test("runbooks persist revisioned nbformat artifacts within one workspace", asyn
     assert.equal(notebook.nbformat_minor, 5);
     assert.equal(notebook.metadata.honeycrisp.artifactFamily, "runbook");
     assert.equal(notebook.metadata.honeycrisp.revision, 2);
+
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      assert.deepEqual(
+        database.prepare(`SELECT artifact_kind, artifact_id, session_id, revision
+          FROM honeycrisp_artifact_revisions
+          WHERE artifact_id = ? ORDER BY revision`).all(created.runbook.id).map((row) => ({ ...row })),
+        [
+          { artifact_kind: "runbook", artifact_id: created.runbook.id, session_id: "run_one", revision: 1 },
+          { artifact_kind: "runbook", artifact_id: created.runbook.id, session_id: "run_one", revision: 2 },
+        ],
+      );
+    } finally {
+      database.close();
+    }
 
     const otherWorkspace = new RunbookStore(databasePath, layout, { workspaceId: "workspace_mdns", workspaceName: "mDNSResponder" });
     try {

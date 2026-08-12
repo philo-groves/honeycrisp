@@ -1142,6 +1142,39 @@ export class MemoryGraphStore {
           `);
         },
       },
+      {
+        version: 9,
+        name: "workspace_artifact_revision_events",
+        up(database) {
+          database.exec(`
+            CREATE TABLE IF NOT EXISTS honeycrisp_artifact_revisions (
+              artifact_kind TEXT NOT NULL CHECK (artifact_kind IN ('runbook', 'report')),
+              artifact_id TEXT NOT NULL,
+              workspace_id TEXT NOT NULL,
+              session_id TEXT,
+              revision INTEGER NOT NULL CHECK (revision > 0),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (artifact_kind, artifact_id, revision)
+            );
+            CREATE INDEX IF NOT EXISTS honeycrisp_artifact_revisions_workspace_created_idx
+              ON honeycrisp_artifact_revisions(workspace_id, created_at);
+            CREATE INDEX IF NOT EXISTS honeycrisp_artifact_revisions_session_created_idx
+              ON honeycrisp_artifact_revisions(session_id, created_at);
+
+            INSERT OR IGNORE INTO honeycrisp_artifact_revisions (
+              artifact_kind, artifact_id, workspace_id, session_id, revision, created_at
+            )
+            SELECT 'runbook', id, workspace_id, session_id, revision, updated_at
+            FROM honeycrisp_runbooks;
+
+            INSERT OR IGNORE INTO honeycrisp_artifact_revisions (
+              artifact_kind, artifact_id, workspace_id, session_id, revision, created_at
+            )
+            SELECT 'report', id, workspace_id, session_id, revision, updated_at
+            FROM honeycrisp_reports;
+          `);
+        },
+      },
     ]);
   }
 

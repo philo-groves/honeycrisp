@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
@@ -17,7 +18,8 @@ import {
 test("reports persist revisioned Markdown artifacts within one workspace", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-report-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
-  const store = new ReportStore(getDefaultMemoryDatabasePath(workspaceRoot), layout, {
+  const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
+  const store = new ReportStore(databasePath, layout, {
     sessionId: "run_one", workspaceId: "workspace_one", workspaceName: "One",
   });
   try {
@@ -34,6 +36,20 @@ test("reports persist revisioned Markdown artifacts within one workspace", async
     const artifacts = listResearchStorageArtifacts(layout, { kind: "report" });
     assert.equal(artifacts.length, 1);
     assert.match(await readFile(artifacts[0].path, "utf8"), /clearer explanation/);
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      assert.deepEqual(
+        database.prepare(`SELECT artifact_kind, artifact_id, session_id, revision
+          FROM honeycrisp_artifact_revisions
+          WHERE artifact_id = ? ORDER BY revision`).all(created.report.id).map((row) => ({ ...row })),
+        [
+          { artifact_kind: "report", artifact_id: created.report.id, session_id: "run_one", revision: 1 },
+          { artifact_kind: "report", artifact_id: created.report.id, session_id: "run_one", revision: 2 },
+        ],
+      );
+    } finally {
+      database.close();
+    }
   } finally {
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });

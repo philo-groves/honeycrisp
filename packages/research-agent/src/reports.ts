@@ -108,6 +108,7 @@ export class ReportStore {
         this.context.subjectName ?? null, this.context.sessionId ?? null, title, summary, status,
         id, relativePath, entry.contentHash, entry.sizeBytes, 1, now, now,
       );
+      this.recordRevision(id, 1, now);
       this.database.exec("COMMIT");
       const row = this.readRow(id);
       if (!row) throw new Error(`Report was not persisted: ${id}`);
@@ -139,6 +140,7 @@ export class ReportStore {
         summary, status, entry.contentHash, entry.sizeBytes, revision, updatedAt,
         id, this.context.workspaceId, input.expectedRevision,
       );
+      this.recordRevision(id, revision, updatedAt);
       this.database.exec("COMMIT");
       const updated = this.readRow(id);
       if (!updated) throw new Error(`Report disappeared after revision: ${id}`);
@@ -152,6 +154,18 @@ export class ReportStore {
   private readRow(id: string): ReportRow | null {
     return (this.database.prepare("SELECT * FROM honeycrisp_reports WHERE id = ? AND workspace_id = ?")
       .get(id, this.context.workspaceId) as unknown as ReportRow | undefined) ?? null;
+  }
+
+  private recordRevision(artifactId: string, revision: number, createdAt: string): void {
+    this.database.prepare(`INSERT INTO honeycrisp_artifact_revisions (
+      artifact_kind, artifact_id, workspace_id, session_id, revision, created_at
+    ) VALUES ('report', ?, ?, ?, ?, ?)`).run(
+      artifactId,
+      this.context.workspaceId,
+      this.context.sessionId ?? null,
+      revision,
+      createdAt,
+    );
   }
 
   private toRecord(row: ReportRow): ReportRecord {

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added migration 9 artifact revision events so Runbook and Report revisions retain their session and timestamp for workspace activity timelines; existing artifacts receive a conservative latest-known revision event.
 - Added first-class revisioned Markdown reports with Complete and Stale states, dedicated `report.*` tools, and workspace artifact storage. Migration 8 adds report metadata, and bundled Security Research and Mathematics profiles advance to 1.2.0 with domain-specific report guidance.
 - Added a bundled Mathematics research profile with domain-specific memory types, evidence rules, relations, and exploration, proof, verification, and synthesis workflows; `profile resolve --profile-id mathematics` exposes it to host frontends.
 - Exposed the bundled profile ID catalog, profile resolver, Mathematics default, and deterministic profile hash through the narrow `@honeycrisp/research-agent/workspace-tools` compatibility surface for local agent bridges.
