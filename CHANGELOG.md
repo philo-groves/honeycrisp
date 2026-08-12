@@ -14,6 +14,7 @@
 
 ### Changed
 
+- Runs under the bundled Security Research profile now require the selected provider's host-recorded policy-risk acknowledgement during authorization preflight: Trusted Access for Cyber plus policy risk for OpenAI, Cyber Verification Program plus policy risk for Anthropic, and policy risk for xAI.
 - Anthropic execution now uses the official Claude Agent SDK and its Claude Code agent process, with Honeycrisp's governed research tools bridged through an in-process MCP server. Subscription sign-in and status delegate to the installed official Claude CLI instead of storing or replaying Anthropic OAuth tokens; API-key use remains available through `ANTHROPIC_API_KEY`.
 - Cybersecurity report creation now requires an explicit confirmed chain with recorded reachability, impact, and proof evidence; observations, hypotheses, and primitives must be upgraded before they can become reports. The bundled Security Research profile advances to 1.3.0.
 - Extended the xAI provider catalog with Grok 4.6, including its 500k context window and low-through-xhigh reasoning controls.
@@ -40,6 +41,7 @@
 
 ### Fixed
 
+- Anthropic re-authentication now clears an existing Claude CLI session before starting an explicit Claude.ai subscription login, preventing the action from silently retaining the previous authentication.
 - Added a file-backed resume fallback prompt option so host frontends can continue large sessions without exceeding operating-system process command-line limits.
 - Retried transient provider and transport failures during background session-title generation before reporting the title job as failed.
 - Aligned memory tool schemas and research-agent guidance on lowercase-hyphenated root-cause keys while treating source, sink, and asset links as recommended rather than required for confirmed chains.

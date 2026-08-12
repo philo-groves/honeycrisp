@@ -195,6 +195,9 @@ interface ParsedArgs {
   mock: boolean;
   configPath: string | undefined;
   provider: string | undefined;
+  openAiTrustedAccessCyberRiskAcknowledged: boolean;
+  anthropicCvpRiskAcknowledged: boolean;
+  xaiPolicyRiskAcknowledged: boolean;
   model: string | undefined;
   titleModel: string | undefined;
   titleEffort: ResearchModelEffort | undefined;
@@ -300,6 +303,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let mock = false;
   let configPath: string | undefined;
   let provider: string | undefined;
+  let openAiTrustedAccessCyberRiskAcknowledged = false;
+  let anthropicCvpRiskAcknowledged = false;
+  let xaiPolicyRiskAcknowledged = false;
   let model: string | undefined;
   let titleModel: string | undefined;
   let titleEffort: ResearchModelEffort | undefined;
@@ -406,6 +412,12 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--provider") {
       provider = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--openai-trusted-access-cyber-risk-acknowledged") {
+      openAiTrustedAccessCyberRiskAcknowledged = true;
+    } else if (arg === "--anthropic-cvp-risk-acknowledged") {
+      anthropicCvpRiskAcknowledged = true;
+    } else if (arg === "--xai-policy-risk-acknowledged") {
+      xaiPolicyRiskAcknowledged = true;
     } else if (arg === "--model") {
       model = readOptionValue(argv, index, arg);
       index += 1;
@@ -601,6 +613,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     mock,
     configPath,
     provider,
+    openAiTrustedAccessCyberRiskAcknowledged,
+    anthropicCvpRiskAcknowledged,
+    xaiPolicyRiskAcknowledged,
     model,
     titleModel,
     titleEffort,
@@ -1379,6 +1394,9 @@ function usage(): string {
     "  --config <path>        JSON provider/model/effort preference config for real mode",
     "                         Defaults to .honeycrisp/config.json under --workspace-root when present",
     "  --provider <provider>  Override configured/default provider for real mode",
+    "  --openai-trusted-access-cyber-risk-acknowledged  Confirm host-recorded OpenAI Trusted Access for Cyber and policy-risk acceptance",
+    "  --anthropic-cvp-risk-acknowledged  Confirm host-recorded Anthropic CVP risk acceptance",
+    "  --xai-policy-risk-acknowledged  Confirm host-recorded xAI policy-risk acceptance",
     "  --model <model>        Override configured/default model for real mode",
     "  --title-model <model>  Generate a session title with this model from the selected provider",
     "  --title-effort <level> Reasoning effort for session title generation (default: medium)",
@@ -1785,43 +1803,73 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         resolvedResearchProfile,
       });
       const dispositionRecorder = runtimeConfig.dispositionRecorder;
+      const isCybersecurityRun = !args.mock
+        && resolvedResearchProfile.profile.id === "security-research";
       let resumableState: PiAgentResumableState | ClaudeAgentResumableState | undefined;
       let effectivePrompt = args.resumeFallbackPrompt ?? args.prompt;
-      const agentExecutor = args.mock
-        ? createDeterministicAgentExecutor()
-        : createRealAgentExecutor(
+      let agentExecutor: ResearchAgentExecutor;
+      if (args.mock) {
+        agentExecutor = createDeterministicAgentExecutor();
+      } else {
+        modelConfig = await resolveResearchModelConfig({
+          workspaceRoot: args.workspaceRoot,
+          ...(args.configPath ? { configPath: args.configPath } : {}),
+          ...(args.provider ? { provider: args.provider } : {}),
+          ...(args.model ? { model: args.model } : {}),
+          ...(args.reasoning ? { effort: args.reasoning } : {}),
+        });
+        if (isCybersecurityRun && !runtimeConfig.workspaceContext.authorization) {
+          throw new Error(
+            "Cybersecurity research requires a recorded authorization boundary. Record the authorized scope before starting this session.",
+          );
+        }
+        if (
+          isCybersecurityRun
+          && modelConfig.provider === "openai-codex"
+          && !args.openAiTrustedAccessCyberRiskAcknowledged
+        ) {
+          throw new Error(
+            "OpenAI cybersecurity research requires Trusted Access for Cyber membership and policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
+          );
+        }
+        if (
+          isCybersecurityRun
+          && modelConfig.provider === "anthropic"
+          && !args.anthropicCvpRiskAcknowledged
+        ) {
+          throw new Error(
+            "Anthropic cybersecurity research requires the Cyber Verification Program usage-risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
+          );
+        }
+        if (
+          isCybersecurityRun
+          && modelConfig.provider === "xai"
+          && !args.xaiPolicyRiskAcknowledged
+        ) {
+          throw new Error(
+            "xAI cybersecurity research requires policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
+          );
+        }
+        resumableState = args.resumeCapturePath
+          ? await loadCompatibleResumeState(
+              args.resumeCapturePath,
+              modelConfig,
+              resolvedResearchProfile.hash,
+              workflow.id,
+            )
+          : undefined;
+        agentExecutor = createRealAgentExecutor(
             args,
             resolvedResearchProfile,
             workflow.id,
             runtimeConfig.toolRegistry,
-            (modelConfig = await resolveResearchModelConfig({
-              workspaceRoot: args.workspaceRoot,
-              ...(args.configPath ? { configPath: args.configPath } : {}),
-              ...(args.provider ? { provider: args.provider } : {}),
-              ...(args.model ? { model: args.model } : {}),
-              ...(args.reasoning ? { effort: args.reasoning } : {}),
-            })),
+            modelConfig,
             runtimeConfig.dispositionRecorder,
             controlStream,
-            (resumableState = args.resumeCapturePath
-              ? await loadCompatibleResumeState(
-                  args.resumeCapturePath,
-                  modelConfig,
-                  resolvedResearchProfile.hash,
-                  workflow.id,
-                )
-              : undefined),
+            resumableState,
           );
-      if (resumableState) effectivePrompt = args.prompt;
-      if (
-        !args.mock
-        && resolvedResearchProfile.profile.id === "security-research"
-        && !runtimeConfig.workspaceContext.authorization
-      ) {
-        throw new Error(
-          "Cybersecurity research requires a recorded authorization boundary. Record the authorized scope before starting this session.",
-        );
       }
+      if (resumableState) effectivePrompt = args.prompt;
       const sessionTitleRoute = args.mock
         ? undefined
         : resolveSessionTitleRoute(args, resolvedResearchProfile, modelConfig);

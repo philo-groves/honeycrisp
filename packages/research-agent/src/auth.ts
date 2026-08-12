@@ -403,6 +403,8 @@ export async function loginAuthProvider(
 
   if (providerId === "anthropic") {
     await store.delete(providerId);
+    const existingStatus = await getClaudeCliAuthStatus();
+    if (existingStatus.loggedIn) await runClaudeCliAuthCommand("logout");
     await runClaudeCliAuthCommand("login");
     const status = await getClaudeCliAuthStatus();
     if (!status.loggedIn) throw new Error("Claude CLI authentication did not complete.");
@@ -626,7 +628,11 @@ async function getClaudeCliAuthStatus(): Promise<ClaudeCliAuthStatus> {
 
 async function runClaudeCliAuthCommand(command: "login" | "logout"): Promise<void> {
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    const invocation = claudeCliInvocation(["auth", command]);
+    const invocation = claudeCliInvocation([
+      "auth",
+      command,
+      ...(command === "login" ? ["--claudeai"] : []),
+    ]);
     const child = spawn(invocation.command, invocation.args, {
       stdio: "inherit",
       windowsHide: true,

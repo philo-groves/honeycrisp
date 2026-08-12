@@ -46,6 +46,98 @@ test("real cybersecurity runs require a recorded authorization boundary", async 
   assert.match(result.stderr, /Cybersecurity research requires a recorded authorization boundary/);
 });
 
+test("Anthropic cybersecurity runs require the host-recorded CVP risk acknowledgement", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-anthropic-cvp-"));
+  const contextPath = join(workspaceRoot, "workspace-context.json");
+  try {
+    await writeFile(
+      contextPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        workspaceRoot,
+        authorization: {
+          recorded: true,
+          source: "beale",
+          scopeId: "scope_anthropic_cvp",
+          scopeName: "Authorized Anthropic fixture",
+        },
+      }),
+      "utf8",
+    );
+    const result = runTopCli([
+      "--provider",
+      "anthropic",
+      "--workspace-root",
+      workspaceRoot,
+      "--workspace-context",
+      contextPath,
+      "-p",
+      "Inspect the authorized target.",
+    ], {
+      HONEYCRISP_AUTH_FILE: authFile,
+      ANTHROPIC_API_KEY: "test-only-key",
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requires the Cyber Verification Program usage-risk acknowledgement/);
+    assert.match(result.stderr, /Beale Settings > Providers/);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("OpenAI cybersecurity runs require Trusted Access for Cyber and policy-use acknowledgement", async () => {
+  const authFile = await createOpenAiAuthFilePath();
+  const { workspaceRoot, contextPath } = await createAuthorizedWorkspaceContext("openai-policy");
+  try {
+    const result = runTopCli([
+      "--provider",
+      "openai-codex",
+      "--workspace-root",
+      workspaceRoot,
+      "--workspace-context",
+      contextPath,
+      "-p",
+      "Inspect the authorized target.",
+    ], {
+      HONEYCRISP_AUTH_FILE: authFile,
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requires Trusted Access for Cyber membership and policy-use risk acknowledgement/);
+    assert.match(result.stderr, /Beale Settings > Providers/);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("xAI cybersecurity runs require policy-use risk acknowledgement", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const { workspaceRoot, contextPath } = await createAuthorizedWorkspaceContext("xai-policy");
+  try {
+    const result = runTopCli([
+      "--provider",
+      "xai",
+      "--workspace-root",
+      workspaceRoot,
+      "--workspace-context",
+      contextPath,
+      "-p",
+      "Inspect the authorized target.",
+    ], {
+      HONEYCRISP_AUTH_FILE: authFile,
+      XAI_API_KEY: "test-only-key",
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /xAI cybersecurity research requires policy-use risk acknowledgement/);
+    assert.match(result.stderr, /Beale Settings > Providers/);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("main CLI supports deterministic mock mode without auth", async () => {
   const authFile = await createEmptyAuthFilePath();
   const result = runTopCli(
@@ -886,6 +978,42 @@ function runTopCli(args, env = {}) {
 async function createEmptyAuthFilePath() {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-auth-empty-"));
   return join(root, "auth.json");
+}
+
+async function createOpenAiAuthFilePath() {
+  const authFile = await createEmptyAuthFilePath();
+  const expiresAtSeconds = Math.floor(Date.now() / 1000) + 3600;
+  const access = `header.${Buffer.from(JSON.stringify({ exp: expiresAtSeconds })).toString("base64url")}.signature`;
+  await writeFile(authFile, JSON.stringify({
+    "openai-codex": {
+      type: "oauth",
+      access,
+      refresh: "test-refresh",
+      expires: expiresAtSeconds * 1000,
+      accountId: "test-account",
+    },
+  }), "utf8");
+  return authFile;
+}
+
+async function createAuthorizedWorkspaceContext(label) {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), `honeycrisp-${label}-`));
+  const contextPath = join(workspaceRoot, "workspace-context.json");
+  await writeFile(
+    contextPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      workspaceRoot,
+      authorization: {
+        recorded: true,
+        source: "beale",
+        scopeId: `scope_${label}`,
+        scopeName: `Authorized ${label} fixture`,
+      },
+    }),
+    "utf8",
+  );
+  return { workspaceRoot, contextPath };
 }
 
 async function createCliSkillFixture() {
