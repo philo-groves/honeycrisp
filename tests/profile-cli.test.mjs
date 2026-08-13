@@ -782,6 +782,7 @@ function createCustomProfile(id, name) {
       default: true,
     },
   ];
+  profile.collaboration = { protocolInstructions: [], recipes: [] };
   profile.capabilities = {
     ...profile.capabilities,
     defaultToolFamilies: [],

@@ -55,12 +55,16 @@ const FAUX_MODEL = {
   maxTokens: 4096,
 };
 const COLLABORATION_TOOL_NAMES = [
+  "create_room",
   "spawn_agent",
   "send_message",
   "followup_task",
   "interrupt_agent",
   "list_agents",
   "wait_agent",
+  "room_status",
+  "room_publish",
+  "room_wait",
 ];
 const WORKSPACE_AGENT_INSTRUCTIONS = agentInstructions(
   "Security workspace guidance: use the Tart VM with SIP enabled for target execution.",

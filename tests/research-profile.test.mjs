@@ -63,6 +63,25 @@ test("bundled profiles give reports domain-specific share-readiness guidance", (
   assert.match(mathematicsPrompt, /casual, blog-like language/);
 });
 
+test("bundled profiles gate collaboration recipes by domain and workflow", () => {
+  const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
+  assert.deepEqual(security.collaboration.recipes.map((recipe) => recipe.workflowIds), [["discovery"], ["chaining"], ["reporting"]]);
+  assert.deepEqual(mathematics.collaboration.recipes.map((recipe) => recipe.workflowIds), [["exploration"], ["proof"], ["verification"], ["synthesis"]]);
+  assert.ok(security.collaboration.recipes.every((recipe) => recipe.roles.length >= 2));
+  assert.ok(mathematics.collaboration.recipes.every((recipe) => recipe.roles.length >= 2));
+});
+
+test("profile collaboration guidance selects only the active workflow recipe", () => {
+  const securityPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE, workflowId: "chaining" });
+  const mathematicsPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_MATHEMATICS_RESEARCH_PROFILE, workflowId: "proof" });
+  assert.match(securityPrompt, /Exploit-chain cell/);
+  assert.match(securityPrompt, /reachability-analyst/);
+  assert.doesNotMatch(securityPrompt, /Construction Explorer/);
+  assert.match(mathematicsPrompt, /Proof development cell/);
+  assert.match(mathematicsPrompt, /assumption-auditor/);
+  assert.doesNotMatch(mathematicsPrompt, /Mitigation Challenger/);
+});
 test("research profile validation rejects silent schema drift", () => {
   const unknownRootField = { ...structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE), typoedWorkflows: [] };
   assert.throws(() => normalizeResearchProfile(unknownRootField), /unknown field: typoedWorkflows/);
@@ -84,6 +103,14 @@ test("research profile validation rejects silent schema drift", () => {
   const invalidHeatColor = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
   invalidHeatColor.presentation.sessionHeatPalette.low = "red";
   assert.throws(() => normalizeResearchProfile(invalidHeatColor), /must be a six-digit hex color/);
+
+  const unknownRecipeWorkflow = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  unknownRecipeWorkflow.collaboration.recipes[0].workflowIds = ["typoed-workflow"];
+  assert.throws(() => normalizeResearchProfile(unknownRecipeWorkflow), /references unknown workflow typoed-workflow/);
+
+  const duplicateRecipeWorkflow = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  duplicateRecipeWorkflow.collaboration.recipes[1].workflowIds = ["discovery"];
+  assert.throws(() => normalizeResearchProfile(duplicateRecipeWorkflow), /assigned to multiple collaboration recipes/);
 
   const emptyEnabledMemory = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
   emptyEnabledMemory.memory.types = [];

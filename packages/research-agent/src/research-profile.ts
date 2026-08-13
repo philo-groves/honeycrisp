@@ -108,6 +108,26 @@ export interface ResearchProfileAgentPrompt {
   reportInstructions?: readonly string[];
 }
 
+export interface ResearchProfileCollaborationRole {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface ResearchProfileCollaborationRecipe {
+  id: string;
+  name: string;
+  workflowIds: readonly string[];
+  roomKind: "exploration" | "validation" | "proving" | "synthesis" | "general";
+  roles: readonly ResearchProfileCollaborationRole[];
+  synthesisInstructions: readonly string[];
+}
+
+export interface ResearchProfileCollaboration {
+  protocolInstructions: readonly string[];
+  recipes: readonly ResearchProfileCollaborationRecipe[];
+}
+
 export interface ResearchProfileWorkflow {
   id: string;
   name: string;
@@ -172,6 +192,7 @@ export interface ResearchProfile {
   agent: ResearchProfileAgentPrompt;
   memory: ResearchProfileMemory;
   workflows: readonly ResearchProfileWorkflow[];
+  collaboration: ResearchProfileCollaboration;
   capabilities: ResearchProfileCapabilities;
   workspace: ResearchProfileWorkspace;
   modelJobs: ResearchProfileModelJobs;
@@ -381,7 +402,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.3.0",
+  version: "1.4.0",
   name: "Security Research",
   description: "Authorized open-ended vulnerability discovery, chaining, verification, and reporting.",
   agent: {
@@ -484,6 +505,49 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       outputRequirements: ["A triage-ready proof of concept and submission.zip containing the proof and necessary evidence."],
     },
   ],
+  collaboration: {
+    protocolInstructions: [
+      "Keep exploit claims tied to inspected code, bounded experiments, artifacts, or verifier results; a peer assertion is not target evidence.",
+      "Preserve competing root-cause and reachability explanations until a discriminating check resolves them.",
+    ],
+    recipes: [
+      {
+        id: "security-discovery-cell",
+        name: "Security discovery cell",
+        workflowIds: ["discovery"],
+        roomKind: "exploration",
+        roles: [
+          { id: "surface-explorer", name: "Surface Explorer", description: "Map trust boundaries and pursue non-obvious bug classes without anchoring on the first lead." },
+          { id: "dataflow-analyst", name: "Dataflow Analyst", description: "Trace attacker influence through validation, transformations, mitigations, and dangerous operations." },
+          { id: "skeptic-verifier", name: "Skeptic Verifier", description: "Challenge reachability and impact assumptions with the smallest decisive experiments." },
+        ],
+        synthesisInstructions: ["Rank leads by evidence strength and discriminating value, preserving refuted paths and unresolved mitigation questions."],
+      },
+      {
+        id: "security-chaining-cell",
+        name: "Exploit-chain cell",
+        workflowIds: ["chaining"],
+        roomKind: "proving",
+        roles: [
+          { id: "reachability-analyst", name: "Reachability Analyst", description: "Establish whether authorized attacker-controlled input reaches the recorded primitive." },
+          { id: "mitigation-challenger", name: "Mitigation Challenger", description: "Test exploitability assumptions and identify defenses, environmental constraints, and broken links." },
+          { id: "chain-verifier", name: "Chain Verifier", description: "Independently reproduce the complete chain and validate its evidence references." },
+        ],
+        synthesisInstructions: ["Separate confirmed links from assumptions and require verifier-backed evidence for the final chain and impact."],
+      },
+      {
+        id: "security-reporting-cell",
+        name: "Security reporting review",
+        workflowIds: ["reporting"],
+        roomKind: "validation",
+        roles: [
+          { id: "independent-reproducer", name: "Independent Reproducer", description: "Reproduce the issue from the documented prerequisites without relying on the original investigator's unstated context." },
+          { id: "evidence-reviewer", name: "Evidence and Overclaim Reviewer", description: "Audit every material claim, scope statement, impact conclusion, and proof artifact for support." },
+        ],
+        synthesisInstructions: ["Retain reproduction failures, limitations, and dissent in the report instead of smoothing them into consensus."],
+      },
+    ],
+  },
   capabilities: {
     defaultToolFamilies: ["shell"],
     disabledToolFamilies: [],
@@ -779,7 +843,7 @@ const MATHEMATICS_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = [
 export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "mathematics",
-  version: "1.2.0",
+  version: "1.3.0",
   name: "Mathematics",
   description: "Open-ended mathematical research through conjecture exploration, proof construction, counterexample search, computation, literature synthesis, and rigorous verification.",
   agent: {
@@ -888,6 +952,61 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
       outputRequirements: ["A self-contained research artifact whose claims are traceable to proofs, computations, formalizations, or cited literature."],
     },
   ],
+  collaboration: {
+    protocolInstructions: [
+      "Keep exact statements, assumptions, quantifiers, and proof obligations visible in every collaborative claim.",
+      "Treat peer arguments as proposals to verify; disagreement should trigger a counterexample, derivation, formalization, computation, or literature check.",
+    ],
+    recipes: [
+      {
+        id: "mathematics-exploration-cell",
+        name: "Mathematical exploration cell",
+        workflowIds: ["exploration"],
+        roomKind: "exploration",
+        roles: [
+          { id: "construction-explorer", name: "Construction Explorer", description: "Generate examples, equivalent formulations, and structural connections." },
+          { id: "counterexample-searcher", name: "Counterexample Searcher", description: "Stress conjectures on boundary cases, small instances, and adversarial constructions." },
+          { id: "literature-mapper", name: "Literature Mapper", description: "Compare proposed statements and methods with known results while tracking citation uncertainty." },
+        ],
+        synthesisInstructions: ["Distinguish verified patterns from conjectures and rank the next proof or counterexample obligations."],
+      },
+      {
+        id: "mathematics-proof-cell",
+        name: "Proof development cell",
+        workflowIds: ["proof"],
+        roomKind: "proving",
+        roles: [
+          { id: "proof-builder", name: "Proof Builder", description: "Develop a rigorous argument with explicit dependencies and lemmas." },
+          { id: "assumption-auditor", name: "Assumption Auditor", description: "Search for hidden assumptions, invalid implications, and counterexamples to intermediate claims." },
+          { id: "formal-checker", name: "Formal or Computational Checker", description: "Independently verify decisive steps using formalization or reproducible computation where practical." },
+        ],
+        synthesisInstructions: ["Preserve every open gap and accept a theorem only when its complete dependency chain is checkable."],
+      },
+      {
+        id: "mathematics-verification-cell",
+        name: "Mathematical verification cell",
+        workflowIds: ["verification"],
+        roomKind: "validation",
+        roles: [
+          { id: "independent-deriver", name: "Independent Deriver", description: "Re-derive the result without relying on the target proof's internal narrative." },
+          { id: "edge-case-auditor", name: "Edge-case Auditor", description: "Test definitions, quantifiers, degenerate cases, and the first unsupported step." },
+          { id: "certificate-checker", name: "Certificate Checker", description: "Validate formal proofs, computations, or literature references and their reproducibility." },
+        ],
+        synthesisInstructions: ["Issue an auditable verdict that separates correctness, novelty, and reproducibility."],
+      },
+      {
+        id: "mathematics-synthesis-cell",
+        name: "Mathematical synthesis review",
+        workflowIds: ["synthesis"],
+        roomKind: "synthesis",
+        roles: [
+          { id: "exposition-architect", name: "Exposition Architect", description: "Organize definitions, results, dependencies, and motivation into a coherent artifact." },
+          { id: "provenance-reviewer", name: "Proof and Provenance Reviewer", description: "Audit that each claim is linked to a proof, computation, formalization, or citation with limitations intact." },
+        ],
+        synthesisInstructions: ["Keep new contributions, known results, conjectures, and unresolved limitations explicitly separated."],
+      },
+    ],
+  },
   capabilities: {
     defaultToolFamilies: ["shell"],
     disabledToolFamilies: [],
@@ -981,7 +1100,7 @@ export function normalizeResearchProfile(value: unknown): ResearchProfile {
   const input = record(value, "Research profile");
   assertKnownKeys(input, [
     "schemaVersion", "id", "version", "name", "description", "agent", "memory", "workflows",
-    "capabilities", "workspace", "modelJobs", "presentation",
+    "collaboration", "capabilities", "workspace", "modelJobs", "presentation",
   ], "Research profile");
   if (input.schemaVersion !== RESEARCH_PROFILE_SCHEMA_VERSION) {
     throw new Error(`Unsupported research profile schemaVersion: ${String(input.schemaVersion)}`);
@@ -995,6 +1114,7 @@ export function normalizeResearchProfile(value: unknown): ResearchProfile {
     agent: normalizeAgentPrompt(input.agent),
     memory: normalizeMemory(input.memory),
     workflows: normalizeWorkflows(input.workflows),
+    collaboration: normalizeCollaboration(input.collaboration),
     capabilities: normalizeCapabilities(input.capabilities),
     workspace: normalizeWorkspace(input.workspace),
     modelJobs: normalizeModelJobs(input.modelJobs),
@@ -1005,6 +1125,17 @@ export function normalizeResearchProfile(value: unknown): ResearchProfile {
     && !profile.memory.types.some((type) => type.lifecycle === "active" && type.creatable)
   ) {
     throw new Error("A memory-enabled research profile requires at least one active, creatable memory type.");
+  }
+  const workflowIds = new Set(profile.workflows.map((workflow) => workflow.id));
+  const recipeByWorkflow = new Map<string, string>();
+  for (const recipe of profile.collaboration.recipes) {
+    if (recipe.workflowIds.length === 0) throw new Error(`Collaboration recipe ${recipe.id} requires at least one workflow id.`);
+    for (const workflowId of recipe.workflowIds) {
+      if (!workflowIds.has(workflowId)) throw new Error(`Collaboration recipe ${recipe.id} references unknown workflow ${workflowId}.`);
+      const existing = recipeByWorkflow.get(workflowId);
+      if (existing) throw new Error(`Workflow ${workflowId} is assigned to multiple collaboration recipes: ${existing}, ${recipe.id}.`);
+      recipeByWorkflow.set(workflowId, recipe.id);
+    }
   }
   return deepFreeze(profile);
 }
@@ -1046,6 +1177,13 @@ export function researchProfileWorkflow(
     : profile.workflows.find((workflow) => workflow.default) ?? profile.workflows[0];
   if (!selected) throw new Error(`Unknown research workflow: ${workflowId ?? "default"}`);
   return selected;
+}
+
+export function researchProfileCollaborationRecipe(
+  profile: Pick<ResearchProfile, "collaboration">,
+  workflowId: string,
+): ResearchProfileCollaborationRecipe | undefined {
+  return profile.collaboration.recipes.find((recipe) => recipe.workflowIds.includes(workflowId));
 }
 
 export function overrideResearchProfileMemoryDescriptions(
@@ -1313,6 +1451,44 @@ function normalizeWorkflows(value: unknown): ResearchProfileWorkflow[] {
   uniqueIds(workflows, "research workflow");
   if (workflows.filter((workflow) => workflow.default).length > 1) throw new Error("Research profile may define only one default workflow.");
   return workflows;
+}
+
+function normalizeCollaboration(value: unknown): ResearchProfileCollaboration {
+  if (value === undefined) return { protocolInstructions: [], recipes: [] };
+  const input = record(value, "Research profile collaboration");
+  assertKnownKeys(input, ["protocolInstructions", "recipes"], "Research profile collaboration");
+  const recipes = array(input.recipes, "collaboration recipes").map((rawRecipe, recipeIndex) => {
+    const recipe = record(rawRecipe, `collaboration recipe ${recipeIndex}`);
+    const id = identifier(recipe.id, `collaboration recipe ${recipeIndex} id`);
+    assertKnownKeys(recipe, ["id", "name", "workflowIds", "roomKind", "roles", "synthesisInstructions"], `collaboration recipe ${id}`);
+    if (!["exploration", "validation", "proving", "synthesis", "general"].includes(String(recipe.roomKind))) {
+      throw new Error(`Collaboration recipe ${id} has invalid roomKind.`);
+    }
+    const roles = array(recipe.roles, `collaboration recipe ${id} roles`).map((rawRole, roleIndex) => {
+      const role = record(rawRole, `collaboration recipe ${id} role ${roleIndex}`);
+      assertKnownKeys(role, ["id", "name", "description"], `collaboration recipe ${id} role ${roleIndex}`);
+      return {
+        id: identifier(role.id, `collaboration recipe ${id} role ${roleIndex} id`),
+        name: nonEmptyString(role.name, `collaboration recipe ${id} role ${roleIndex} name`),
+        description: nonEmptyString(role.description, `collaboration recipe ${id} role ${roleIndex} description`),
+      } satisfies ResearchProfileCollaborationRole;
+    });
+    if (roles.length < 2) throw new Error(`Collaboration recipe ${id} requires at least two roles.`);
+    uniqueIds(roles, `collaboration recipe ${id} role`);
+    return {
+      id,
+      name: nonEmptyString(recipe.name, `collaboration recipe ${id} name`),
+      workflowIds: stringArray(recipe.workflowIds, `collaboration recipe ${id} workflowIds`).map((workflowId) => identifier(workflowId, `collaboration recipe ${id} workflow id`)),
+      roomKind: recipe.roomKind as ResearchProfileCollaborationRecipe["roomKind"],
+      roles,
+      synthesisInstructions: stringArray(recipe.synthesisInstructions, `collaboration recipe ${id} synthesisInstructions`),
+    } satisfies ResearchProfileCollaborationRecipe;
+  });
+  uniqueIds(recipes, "collaboration recipe");
+  return {
+    protocolInstructions: stringArray(input.protocolInstructions, "collaboration protocol instructions"),
+    recipes,
+  };
 }
 
 function normalizeCapabilities(value: unknown): ResearchProfileCapabilities {

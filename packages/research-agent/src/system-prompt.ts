@@ -4,6 +4,7 @@ import {
   type MemoryTypeDescriptionsInput,
 } from "./memory-taxonomy.js";
 import {
+  researchProfileCollaborationRecipe,
   researchProfileWorkflow,
   type ResearchProfile,
 } from "./research-profile.js";
@@ -29,6 +30,9 @@ export function createResearchSystemPrompt(
 ): string {
   const profile = options.researchProfile;
   const workflow = profile ? researchProfileWorkflow(profile, options.workflowId) : undefined;
+  const collaborationRecipe = profile && workflow
+    ? researchProfileCollaborationRecipe(profile, workflow.id)
+    : undefined;
   const memoryTypeDescriptions = profile
     ? profile.memory.types.map((type) => `- ${type.id} (${type.name})${type.lifecycle === "retired" || !type.creatable ? " [read-only]" : ""}: ${type.description}`)
     : formatMemoryTypeDescriptions(options.memoryTypeDescriptions);
@@ -72,8 +76,15 @@ export function createResearchSystemPrompt(
     ...(options.hasCollaborationTools ? [
       "Use collaboration tools for independent work and inter-agent communication; wait for requested subagent results before concluding.",
       "Breakout rooms are bounded evidence cells, not majority votes. Preserve dissent, cite tool or artifact evidence, and let verification decide disputed claims.",
-      "Do not create a breakout room for one worker. Omit room_name for ordinary single-subagent delegation; use one shared room_name only when at least two subagents need to collaborate.",
-      "The lead agent cannot be a breakout-room member. When its perspective is needed inside a room, delegate that perspective to a separate subagent using the lead provider/model.",
+      "Use create_room to form every breakout room atomically with at least two members. Use spawn_agent only for ordinary independent delegation.",
+      "Room members must use room_publish and room_wait: independent memos remain blind until every member submits, then bounded challenge and response phases advance only after every member participates.",
+      "The lead agent cannot be a breakout-room member. It must read the released room packets, preserve adopted and rejected claims plus dissent, and publish the structured outcome before its final response.",
+      ...(profile?.collaboration.protocolInstructions.map((instruction) => `Profile collaboration protocol: ${instruction}`) ?? []),
+      ...(collaborationRecipe ? [
+        `Preferred profile collaboration recipe for this workflow: ${collaborationRecipe.name} (${collaborationRecipe.id}); room kind ${collaborationRecipe.roomKind}.`,
+        ...collaborationRecipe.roles.map((role) => `- ${role.id} (${role.name}): ${role.description}`),
+        ...collaborationRecipe.synthesisInstructions.map((instruction) => `Profile synthesis requirement: ${instruction}`),
+      ] : []),
       ...(options.collaborationGuidance ? [options.collaborationGuidance] : []),
     ] : []),
     ...(options.goalEnabled ? [

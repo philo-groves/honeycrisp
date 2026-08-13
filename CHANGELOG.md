@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added atomic, provider-neutral collaboration rooms with phase-gated independent memos, targeted peer challenges, responses, lead-owned synthesis, structured evidence/confidence/uncertainty packets, and bounded continuation recovery. Research profiles now own workflow-specific collaboration recipes; bundled Security Research 1.4.0 and Mathematics 1.3.0 define separate domain roles and review protocols.
 - Added the access-restricted `gpt-daybreak-red-latest` OpenAI Codex model with the same runtime capabilities as Daybreak Blue; host frontends may gate its visibility behind an explicit opt-in.
 - Added bounded heterogeneous breakout-room orchestration across OpenAI, Anthropic, and xAI, including provider-aware agent identities, room metadata, independent-first-pass guidance, peer challenges, lifecycle activity, and strict host-written collaboration configuration.
 - Added migration 9 artifact revision events so Runbook and Report revisions retain their session and timestamp for workspace activity timelines; existing artifacts receive a conservative latest-known revision event.

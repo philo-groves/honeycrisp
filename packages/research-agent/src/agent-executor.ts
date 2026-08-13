@@ -98,6 +98,7 @@ export interface CreatePiAgentExecutorOptions {
     maxDepth?: number;
   };
   collaboration?: ResearchCollaborationConfig;
+  collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
     request: SubagentRunRequest,
     rootInput: ResearchAgentExecutionInput,
@@ -127,7 +128,7 @@ function collaborationSystemGuidance(config: ResearchCollaborationConfig): strin
     `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
     "For an explicit collaborator route, pass provider and model as separate fields with fork_turns set to none or a bounded number. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the parent route.",
     `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations across the session.`,
-    "A single delegated worker is a normal subagent: omit room_name and all room metadata. Create a breakout room only when at least two subagents need to communicate, and give those peers the same room_name.",
+    "A single delegated worker is a normal subagent. Use create_room to form every breakout room atomically with at least two role-defined members.",
     "The lead agent is not a breakout-room member. If the lead perspective is needed in a room, spawn a separate subagent on the lead provider/model to represent it; use partial or no inheritance when explicit routing overrides are required.",
     config.independentFirstPass
       ? "Require each room member to produce an independent evidence memo before peer messages or convergence."
@@ -344,6 +345,8 @@ export function createPiAgentExecutor(
             ...(options.subagents?.maxDepth !== undefined ? { maxDepth: options.subagents.maxDepth } : {}),
             ...(collaboration ? {
               maxThreads: collaboration.maxMembersPerRoom * collaboration.maxConcurrentRooms,
+              peerChallengeRounds: collaboration.peerChallengeRounds,
+              requireRoomBeforeFinal: collaboration.mode === "always",
               maxConcurrentRooms: collaboration.maxConcurrentRooms,
               maxMembersPerRoom: collaboration.maxMembersPerRoom,
               maxTotalInvocations: collaboration.maxTotalInvocations,
@@ -506,7 +509,12 @@ export function createPiAgentExecutor(
             executionRecords.set(record.action.id, record);
           },
         });
-        const collaborationTools = subagents?.createTools(request.id) ?? [];
+        const collaborationTools = [
+          ...(request.root
+            ? subagents?.createTools(request.id) ?? []
+            : request.collaborationTools.length > 0 ? request.collaborationTools : subagents?.createTools(request.id) ?? []),
+          ...(options.collaborationTools ?? []),
+        ];
         const tools = [
           ...researchTools.filter((tool) => request.root || tool.name !== "session_disposition"),
           ...collaborationTools,
@@ -708,7 +716,7 @@ export function createPiAgentExecutor(
               hasReportTools,
               hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,
               ...(request.root && !options.agentIdentity ? {} : { agentPath: request.path }),
-              hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),
+              hasCollaborationTools: collaborationTools.some((tool) => tool.name === "create_room" || tool.name === "room_publish"),
               ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
               goalEnabled: request.root === true && goalRuntime !== null,
               researchProfile,
@@ -726,7 +734,7 @@ export function createPiAgentExecutor(
             toolExecution,
             beforeToolCall: async (hookContext, signal) => {
               const toolCall = createToolCallFromHook(hookContext);
-              if (toolCall.name === "spawn_agent") {
+              if (toolCall.name === "spawn_agent" || toolCall.name === "create_room") {
                 subagents?.captureContext(request.id, toolCall.id, hookContext.context.messages);
               }
               const researchTool = options.toolRegistry?.find(toolCall.name);
@@ -918,9 +926,11 @@ export function createPiAgentExecutor(
             },
             getFollowUpMessages: async () => {
               const mailboxMessages = subagents?.takeMailbox(request.id) ?? [];
-              if (mailboxMessages.length > 0) researchFocus.notePotentialExternalChange();
+              const collaborationMessages = subagents?.collaborationFollowUp(request.id) ?? [];
+              if (mailboxMessages.length > 0 || collaborationMessages.length > 0) researchFocus.notePotentialExternalChange();
               return [
                 ...mailboxMessages,
+                ...collaborationMessages,
                 ...await goalFollowUpMessages({
                   root: request.root === true,
                   goalRuntime,
@@ -999,6 +1009,7 @@ export function createPiAgentExecutor(
           ...(options.reasoning ? { reasoning: options.reasoning } : {}),
           prompt: input.modelInput.prompt,
           inheritedMessages: [...inheritedRootMessages],
+          collaborationTools: [],
           signal: rootTreeSignal,
           root: true,
         });

@@ -118,81 +118,72 @@ test("single-worker delegation remains a normal subagent without breakout metada
   );
 });
 
-test("subagent runtime routes heterogeneous room members and enforces room concurrency", async () => {
+test("subagent runtime creates heterogeneous rooms atomically", async () => {
   const requests = [];
-  const activities = [];
+  const releases = [];
   const manager = new SubagentManager({
-    rootProvider: "openai",
-    rootModel: "gpt-5.6-sol",
-    maxConcurrentRooms: 1,
-    maxMembersPerRoom: 2,
+    rootProvider: "openai", rootModel: "gpt-5.6-sol", maxConcurrentRooms: 1, maxMembersPerRoom: 3, peerChallengeRounds: 1,
     providerPreferences: [
       { provider: "openai", model: "gpt-5.6-sol", reasoning: "high", enabled: true },
       { provider: "anthropic", model: "claude-opus-5", reasoning: "high", enabled: true },
     ],
-    onActivity(activity) {
-      activities.push(activity);
-    },
-    async run(request) {
-      requests.push(request);
-      return resultFor(request, `completed ${request.provider}`);
-    },
-  });
-  const tools = toolsByName(manager, "root");
-  await tools.spawn_agent.execute("spawn_anthropic", {
-    task_name: "anthropic_review",
-    message: "Review independently.",
-    fork_turns: "none",
-    room_name: "parser_review",
-    room_title: "Parser review",
-    room_kind: "challenge",
-    role: "challenger",
-  });
-  await manager.settle();
-
-  assert.equal(requests[0].provider, "anthropic");
-  assert.equal(requests[0].model, "claude-opus-5");
-  assert.ok(activities.some((activity) =>
-    activity.type === "spawned"
-    && activity.provider === "anthropic"
-    && activity.roomName === "parser_review"
-    && activity.role === "challenger"
-  ));
-
-  let activeRequest;
-  const active = new SubagentManager({
-    rootProvider: "openai",
-    rootModel: "gpt-5.6-sol",
-    maxConcurrentRooms: 1,
-    maxMembersPerRoom: 2,
     run(request) {
-      activeRequest = request;
-      return new Promise((_resolve, reject) => {
-        request.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      });
+      requests.push(request);
+      return new Promise((resolve) => releases.push(() => resolve(resultFor(request, `completed ${request.provider}`))));
     },
   });
-  const activeTools = toolsByName(active, "root");
-  const spawned = await activeTools.spawn_agent.execute("spawn_first_room", {
-    task_name: "first_room",
-    message: "Hold the first room.",
-    fork_turns: "none",
-    room_name: "room_one",
-  });
-  assert.equal(activeRequest.path, "/root/first_room");
-  await assert.rejects(
-    activeTools.spawn_agent.execute("spawn_second_room", {
-      task_name: "second_room",
-      message: "This exceeds the room cap.",
-      fork_turns: "none",
-      room_name: "room_two",
-    }),
-    /room concurrency limit reached \(1\)/i,
-  );
-  await activeTools.interrupt_agent.execute("interrupt_first_room", { target: spawned.details.agent_id });
-  await active.settle();
-});
+  const rootTools = toolsByName(manager, "root");
+  await assert.rejects(rootTools.create_room.execute("create_invalid_room", {
+    room_name: "invalid_room", purpose: "Every member must validate before any launch.", members: [
+      { task_name: "valid_member", message: "Must not launch.", role: "reviewer", fork_turns: "none", provider: "openai", model: "gpt-5.6-sol" },
+      { task_name: "invalid_member", message: "Must not launch.", role: "reviewer", fork_turns: "none", provider: "anthropic", model: "claude-disabled" },
+    ],
+  }), /not enabled.*Enabled routes/);
+  assert.equal(requests.length, 0);
+  assert.deepEqual((await rootTools.room_status.execute("rooms_after_failed_create", {})).details.rooms, []);
 
+  const created = await rootTools.create_room.execute("create_parser_room", {
+    room_name: "parser_review", room_title: "Parser review", room_kind: "validation",
+    purpose: "Independently inspect and challenge the parser boundary.",
+    members: [
+      { task_name: "explorer", message: "Trace the boundary.", role: "explorer", fork_turns: "none", provider: "openai", model: "gpt-5.6-sol" },
+      { task_name: "skeptic", message: "Challenge the boundary.", role: "skeptic", fork_turns: "none", provider: "anthropic", model: "claude-opus-5" },
+    ],
+  });
+  assert.equal(created.details.phase, "independent");
+  assert.deepEqual(requests.map((request) => request.provider), ["openai", "anthropic"]);
+  assert.ok(requests.every((request) => request.roomName === "parser_review" && request.collaborationTools.some((tool) => tool.name === "room_publish")));
+  await assert.rejects(rootTools.create_room.execute("second_room", {
+    room_name: "second", purpose: "Exceed the cap.", members: [
+      { task_name: "one", message: "One.", role: "one" },
+      { task_name: "two", message: "Two.", role: "two" },
+    ],
+  }), /room concurrency limit reached/i);
+
+  const explorer = toolsFromRequest(requests[0]);
+  const skeptic = toolsFromRequest(requests[1]);
+  await assert.rejects(explorer.room_publish.execute("invalid_confidence", {
+    kind: "independent_memo", content: "Invalid confidence must not be stored.", confidence: "certain",
+  }), /Unsupported room packet confidence/);
+  await explorer.room_publish.execute("explorer_memo", { kind: "independent_memo", content: "Length reaches the allocation.", evidence_refs: ["code:parser:41"], confidence: "high", uncertainty: "Caller validation is unresolved.", next_experiment: "Exercise the maximum accepted length." });
+  const blind = await skeptic.room_status.execute("skeptic_blind", {});
+  assert.equal(blind.details.packets.length, 0);
+  await skeptic.room_publish.execute("skeptic_memo", { kind: "independent_memo", content: "The caller may cap the length.", evidence_refs: ["code:caller:18"], confidence: "medium", uncertainty: "Alternate entry points are unreviewed.", next_experiment: "Enumerate all parser callers." });
+  const releasedMemos = await explorer.room_status.execute("released_memos", {});
+  assert.equal(releasedMemos.details.phase, "challenge");
+  assert.equal(releasedMemos.details.packets.length, 2);
+
+  await explorer.room_publish.execute("explorer_challenge", { kind: "challenge", recipient: "/root/skeptic", content: "Does the cap cover the streaming entry point?" });
+  await skeptic.room_publish.execute("skeptic_challenge", { kind: "challenge", recipient: "/root/explorer", content: "Show the exact allocation mismatch." });
+  assert.equal((await explorer.room_status.execute("response_phase", {})).details.phase, "response");
+  await explorer.room_publish.execute("explorer_response", { kind: "response", content: "The allocation omits the terminator.", evidence_refs: ["code:parser:44"] });
+  await skeptic.room_publish.execute("skeptic_response", { kind: "response", content: "The streaming entry point bypasses the cap.", evidence_refs: ["code:stream:27"] });
+  assert.equal((await rootTools.room_status.execute("synthesis_phase", { room_name: "parser_review" })).details.phase, "synthesis");
+  await rootTools.room_publish.execute("room_outcome", { room_name: "parser_review", kind: "outcome", content: "Adopted: allocation mismatch. Rejected: universal caller cap. Dissent: impact remains unverified.", evidence_refs: ["code:parser:44", "code:stream:27"], confidence: "high", uncertainty: "Impact is unresolved.", next_experiment: "Run the bounded reproducer." });
+  assert.equal((await rootTools.room_status.execute("completed_room", { room_name: "parser_review" })).details.phase, "completed");
+  releases.forEach((release) => release());
+  await manager.settle();
+});
 test("subagent runtime normalizes exact routes and validates same-provider models", async () => {
   const requests = [];
   const manager = new SubagentManager({
@@ -563,6 +554,10 @@ test("host steering broadcasts to the root and every active child", async () => 
   });
   await manager.settle();
 });
+
+function toolsFromRequest(request) {
+  return Object.fromEntries(request.collaborationTools.map((tool) => [tool.name, tool]));
+}
 
 function toolsByName(manager, agentId) {
   return Object.fromEntries(manager.createTools(agentId).map((tool) => [tool.name, tool]));

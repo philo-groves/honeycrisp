@@ -51,6 +51,7 @@ export interface CreateClaudeAgentExecutorOptions {
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<readonly string[]>;
   subagents?: false;
   collaboration?: ResearchCollaborationConfig;
+  collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
     request: SubagentRunRequest,
     rootInput: ResearchAgentExecutionInput,
@@ -233,6 +234,8 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             ...(options.reasoning ? { rootReasoning: options.reasoning as never } : {}),
             ...(collaboration ? {
               maxThreads: collaboration.maxMembersPerRoom * collaboration.maxConcurrentRooms,
+              peerChallengeRounds: collaboration.peerChallengeRounds,
+              requireRoomBeforeFinal: collaboration.mode === "always",
               maxConcurrentRooms: collaboration.maxConcurrentRooms,
               maxMembersPerRoom: collaboration.maxMembersPerRoom,
               maxTotalInvocations: collaboration.maxTotalInvocations,
@@ -260,9 +263,10 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             },
             onToolEvent: (event) => emitResearchEvents(input.eventSink, [event], options.agentIdentity),
           });
-      const collaborationMcpTools = (collaborationManager?.createTools("root") ?? []).map((candidate) =>
-        agentToolAsSdkTool(candidate, abortController.signal)
-      );
+      const collaborationMcpTools = [
+        ...(collaborationManager?.createTools("root") ?? []),
+        ...(options.collaborationTools ?? []),
+      ].map((candidate) => agentToolAsSdkTool(candidate, abortController.signal));
       const allMcpTools = [...mcpTools, ...collaborationMcpTools];
       const allMcpServer = createSdkMcpServer({
         name: "honeycrisp",
@@ -314,7 +318,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                       hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
                       hasReportTools: hasTool(options.toolRegistry, "report_list"),
                       hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
-                      hasCollaborationTools: collaborationManager !== null,
+                      hasCollaborationTools: collaborationMcpTools.length > 0,
                       ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
                       goalEnabled: false,
                       ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
@@ -358,40 +362,113 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             && authenticationRouter.tryFallback("anthropic", errors);
           if (!canRetryWithAlternateAuthentication) break;
         }
+        assertSuccessfulClaudeResult(result);
+        sessionId = result.session_id || sessionId;
+        if (!sessionId) throw new Error("Claude Agent SDK did not return a resumable session ID.");
+
+        await collaborationManager?.settle();
+        let collaborationFollowUp = collaborationManager?.collaborationFollowUp("root") ?? [];
+        const maxCollaborationContinuations = Math.max(2, (collaboration?.maxTotalInvocations ?? 0) + 2);
+        let collaborationContinuationCount = 0;
+        while (collaborationFollowUp.length > 0) {
+          if (collaborationContinuationCount >= maxCollaborationContinuations) {
+            throw new Error("Claude collaboration did not reach a synthesized room outcome within the continuation limit.");
+          }
+          collaborationContinuationCount += 1;
+          const continuationPrompt = collaborationFollowUp
+            .map((message) => isRecord(message) && typeof message.content === "string" ? message.content : JSON.stringify(message))
+            .join("\n\n");
+          result = undefined;
+          const stream = query({
+            prompt: continuationPrompt,
+            options: {
+              abortController,
+              cwd: options.workspaceRoot,
+              model: options.model,
+              resume: sessionId,
+              mcpServers: { honeycrisp: allMcpServer },
+              tools: [],
+              allowedTools: allMcpToolNames,
+              permissionMode: "dontAsk",
+              settingSources: [],
+              systemPrompt: {
+                type: "preset",
+                preset: "claude_code",
+                append: appendClaudeAgentProgressGuidance(
+                  createResearchSystemPrompt({
+                    hasTools: mcpTools.length > 0,
+                    hasMemoryTools: hasTool(options.toolRegistry, "memory_search"),
+                    hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
+                    hasReportTools: hasTool(options.toolRegistry, "report_list"),
+                    hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
+                    hasCollaborationTools: collaborationMcpTools.length > 0,
+                    ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
+                    goalEnabled: false,
+                    ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
+                    researchProfile: options.researchProfile,
+                    workflowId: workflow.id,
+                    ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
+                  }),
+                ),
+              },
+              includePartialMessages: true,
+              forwardSubagentText: true,
+              ...(effort ? { effort } : {}),
+              ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
+              ...(options.maxTokens ? { taskBudget: { total: options.maxTokens } } : {}),
+              env: authenticationRouter.claudeEnvironment(),
+            },
+          });
+          for await (const message of stream) {
+            sessionId = message.session_id || sessionId;
+            if (message.type === "assistant") {
+              const output = projectClaudeAgentAssistantOutput(message, options.model, options.agentIdentity);
+              if (output) assistantText.push(output.text);
+              await emitAssistantMessage(input.eventSink, output);
+            } else if (message.type === "result") {
+              result = message;
+            }
+          }
+          assertSuccessfulClaudeResult(result);
+          sessionId = result.session_id || sessionId;
+          await collaborationManager?.settle();
+          collaborationFollowUp = collaborationManager?.collaborationFollowUp("root") ?? [];
+        }
+
+        return {
+          text: result.result || assistantText.at(-1) || "",
+          ...(toolEvents.length > 0 ? { toolEvents } : {}),
+          raw: {
+            provider: "anthropic",
+            model: options.model,
+            api: "claude-agent-sdk",
+            lifecycle: "claude-agent-sdk",
+            toolCallCount,
+            result,
+            resumableState: {
+              schemaVersion: 1,
+              provider: "anthropic",
+              model: options.model,
+              providerSessionId: sessionId,
+              researchProfileHash: profileHash,
+              workflowId: workflow.id,
+            } satisfies ClaudeAgentResumableState,
+          },
+        };
       } finally {
         finishInput();
         await collaborationManager?.settle();
         input.signal?.removeEventListener("abort", abort);
       }
-
-      if (!result) throw new Error("Claude Agent SDK ended without a result message.");
-      if (result.subtype !== "success") {
-        throw new Error(result.errors.join("\n") || `Claude Agent SDK stopped with ${result.subtype}.`);
-      }
-      sessionId = result.session_id || sessionId;
-      if (!sessionId) throw new Error("Claude Agent SDK did not return a resumable session ID.");
-      return {
-        text: result.result || assistantText.at(-1) || "",
-        ...(toolEvents.length > 0 ? { toolEvents } : {}),
-        raw: {
-          provider: "anthropic",
-          model: options.model,
-          api: "claude-agent-sdk",
-          lifecycle: "claude-agent-sdk",
-          toolCallCount,
-          result,
-          resumableState: {
-            schemaVersion: 1,
-            provider: "anthropic",
-            model: options.model,
-            providerSessionId: sessionId,
-            researchProfileHash: profileHash,
-            workflowId: workflow.id,
-          } satisfies ClaudeAgentResumableState,
-        },
-      };
     },
   };
+}
+
+function assertSuccessfulClaudeResult(result: SDKResultMessage | undefined): asserts result is SDKResultMessage & { subtype: "success" } {
+  if (!result) throw new Error("Claude Agent SDK ended without a result message.");
+  if (result.subtype !== "success") {
+    throw new Error(result.errors.join("\n") || "Claude Agent SDK stopped with " + result.subtype + ".");
+  }
 }
 
 async function* streamUserMessages(
@@ -483,7 +560,7 @@ function collaborationSystemGuidance(config: ResearchCollaborationConfig): strin
     config.independentFirstPass
       ? "Require an independent evidence memo from each member before peer messaging."
       : "Independent first passes are optional.",
-    `Use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"} per room.`,
+    `Use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"} per room; create rooms atomically with create_room and publish structured evidence packets.`,
     config.mode === "adaptive"
       ? "Create rooms only for decomposable coverage, meaningful disagreement, evidence review, or proving work."
       : "Use rooms for every materially separable research stage.",
