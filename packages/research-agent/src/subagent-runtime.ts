@@ -25,6 +25,7 @@ export interface SubagentRunRequest {
   path: string;
   parentId: string;
   depth: number;
+  provider: string;
   model: string;
   reasoning?: SimpleStreamOptions["reasoning"];
   prompt: string;
@@ -42,14 +43,26 @@ export interface SubagentRunResult {
 }
 
 export interface CreateSubagentManagerOptions {
+  rootProvider: string;
   rootModel: string;
   rootReasoning?: SimpleStreamOptions["reasoning"];
   maxThreads?: number;
   maxDepth?: number;
+  maxConcurrentRooms?: number;
+  maxMembersPerRoom?: number;
+  maxTotalInvocations?: number;
+  providerPreferences?: readonly SubagentProviderPreference[];
   signal?: AbortSignal;
   run(request: SubagentRunRequest): Promise<SubagentRunResult>;
   onActivity?: (activity: SubagentActivity) => void | Promise<void>;
   onToolEvent?: (event: ResearchEvent) => void | Promise<void>;
+}
+
+export interface SubagentProviderPreference {
+  provider: string;
+  model: string;
+  reasoning?: SimpleStreamOptions["reasoning"];
+  enabled: boolean;
 }
 
 export interface SubagentActivity {
@@ -58,6 +71,16 @@ export interface SubagentActivity {
   agentPath: string;
   parentId: string | null;
   status: SubagentStatus;
+  activityId?: string;
+  timestamp?: string;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string | null;
+  roomName?: string;
+  roomTitle?: string;
+  roomKind?: string;
+  role?: string;
+  authorAgentPath?: string;
   message?: string;
 }
 
@@ -67,9 +90,14 @@ interface SubagentSession {
   taskName: string;
   parentId: string | null;
   depth: number;
+  provider: string;
   model: string;
   reasoning?: SimpleStreamOptions["reasoning"];
   forkTurns: string;
+  roomName: string;
+  roomTitle: string;
+  roomKind: string;
+  role: string;
   status: SubagentStatus;
   createdAt: string;
   startedAt?: string;
@@ -110,20 +138,36 @@ export class SubagentManager {
   private readonly waiters = new Set<Waiter>();
   private readonly maxThreads: number;
   private readonly maxDepth: number;
+  private readonly maxConcurrentRooms: number;
+  private readonly maxMembersPerRoom: number;
+  private readonly maxTotalInvocations: number;
+  private totalInvocations = 0;
+  private readonly providerPreferences: readonly SubagentProviderPreference[];
+  private providerPreferenceCursor = 0;
   private activityVersion = 0;
+  private activityQueue: Promise<void> = Promise.resolve();
 
   public constructor(private readonly options: CreateSubagentManagerOptions) {
     this.maxThreads = positiveInteger(options.maxThreads) ?? DEFAULT_MAX_THREADS;
     this.maxDepth = nonNegativeInteger(options.maxDepth) ?? DEFAULT_MAX_DEPTH;
+    this.maxConcurrentRooms = positiveInteger(options.maxConcurrentRooms) ?? this.maxThreads;
+    this.maxMembersPerRoom = positiveInteger(options.maxMembersPerRoom) ?? this.maxThreads;
+    this.maxTotalInvocations = positiveInteger(options.maxTotalInvocations) ?? Number.MAX_SAFE_INTEGER;
+    this.providerPreferences = (options.providerPreferences ?? []).filter((preference) => preference.enabled);
     this.sessions.set("root", {
       id: "root",
       path: "/root",
       taskName: "root",
       parentId: null,
       depth: 0,
+      provider: options.rootProvider,
       model: options.rootModel,
       ...(options.rootReasoning ? { reasoning: options.rootReasoning } : {}),
       forkTurns: "all",
+      roomName: "main",
+      roomTitle: "Main session",
+      roomKind: "general",
+      role: "lead",
       status: "running",
       createdAt: new Date().toISOString(),
       startedAt: new Date().toISOString(),
@@ -197,9 +241,14 @@ export class SubagentManager {
         parentId: session.parentId,
         depth: session.depth,
         status: session.status,
+        provider: session.provider,
         model: session.model,
         reasoningEffort: session.reasoning ?? null,
         forkTurns: session.forkTurns,
+        roomName: session.roomName,
+        roomTitle: session.roomTitle,
+        roomKind: session.roomKind,
+        role: session.role,
         createdAt: session.createdAt,
         startedAt: session.startedAt ?? null,
         completedAt: session.completedAt ?? null,
@@ -219,6 +268,7 @@ export class SubagentManager {
   public async settle(): Promise<void> {
     const pending = [...this.sessions.values()].flatMap((session) => session.promise ? [session.promise] : []);
     await Promise.allSettled(pending);
+    await this.activityQueue;
   }
 
   public interruptAll(): void {
@@ -228,13 +278,7 @@ export class SubagentManager {
         session.status = "interrupted";
         session.completedAt = new Date().toISOString();
         session.controller?.abort();
-        void this.emitActivity({
-          type: "interrupted",
-          agentId: session.id,
-          agentPath: session.path,
-          parentId: session.parentId,
-          status: session.status,
-        });
+        void this.emitSessionActivity(session, { type: "interrupted" });
       }
     }
     this.notifyActivity();
@@ -245,7 +289,7 @@ export class SubagentManager {
       agentId,
       "spawn_agent",
       "Spawn agent",
-      "Spawn a bounded subagent for an independent task. The child shares this authorized workspace and tool policy. fork_turns accepts none, all, or a positive integer string. Full-history children inherit the parent model and reasoning effort; partial or fresh children may override them.",
+      "Spawn a bounded subagent in a breakout room. The child shares this authorized workspace and tool policy. Agents with the same room_name share one durable room transcript. Prefer independent first passes before messaging peers. fork_turns accepts none, all, or a positive integer string.",
       {
         type: "object",
         required: ["task_name", "message"],
@@ -253,6 +297,11 @@ export class SubagentManager {
         properties: {
           task_name: { type: "string", description: "Lowercase letters, digits, and underscores." },
           message: { type: "string", description: "Concrete bounded task for the child." },
+          room_name: { type: "string", description: "Stable lowercase room name. Use the same name for agents collaborating in one room." },
+          room_title: { type: "string", description: "Short user-facing breakout room title." },
+          room_kind: { type: "string", enum: ["exploration", "validation", "proving", "synthesis", "general"] },
+          role: { type: "string", description: "Agent's evidence-oriented role in the room, such as explorer, skeptic, or prover." },
+          provider: { type: "string", description: "Optional enabled collaborator provider. Omit to let Honeycrisp select a diverse provider." },
           fork_turns: { type: "string", description: "none, all, or a positive integer string. Defaults to all." },
           model: { type: "string", description: "Optional model override for partial or fresh inheritance." },
           reasoning_effort: { type: "string", enum: [...REASONING_LEVELS] },
@@ -398,6 +447,26 @@ export class SubagentManager {
       throw new Error("Full-history children inherit the parent model and reasoning effort. Omit overrides or use partial/no inheritance.");
     }
     const inheritedMessages = inheritMessages(parentMessages, toolCallId, forkTurns);
+    const preference = this.selectProviderPreference(optionalString(input.provider), parent);
+    const roomName = normalizeRoomName(optionalString(input.room_name) ?? taskName);
+    const roomTitle = optionalString(input.room_title) ?? titleFromRoomName(roomName);
+    const roomKind = normalizeRoomKind(optionalString(input.room_kind));
+    const role = optionalString(input.role) ?? "researcher";
+    const activeRoomNames = new Set(
+      [...this.sessions.values()]
+        .filter((session) => session.id !== "root" && session.status === "running")
+        .map((session) => session.roomName),
+    );
+    if (!activeRoomNames.has(roomName) && activeRoomNames.size >= this.maxConcurrentRooms) {
+      throw new Error(`Breakout room concurrency limit reached (${this.maxConcurrentRooms}).`);
+    }
+    const roomMemberCount = [...this.sessions.values()].filter((session) => session.id !== "root" && session.roomName === roomName).length;
+    if (roomMemberCount >= this.maxMembersPerRoom) {
+      throw new Error(`Breakout room ${roomName} member limit reached (${this.maxMembersPerRoom}).`);
+    }
+    if (this.totalInvocations >= this.maxTotalInvocations) {
+      throw new Error(`Session collaborator invocation limit reached (${this.maxTotalInvocations}).`);
+    }
     const id = `agent_${randomUUID().replaceAll("-", "")}`;
     const child: SubagentSession = {
       id,
@@ -405,9 +474,14 @@ export class SubagentManager {
       taskName,
       parentId,
       depth: parent.depth + 1,
-      model: modelOverride ?? parent.model,
-      ...(reasoningOverride ?? parent.reasoning ? { reasoning: reasoningOverride ?? parent.reasoning } : {}),
+      provider: preference?.provider ?? parent.provider,
+      model: modelOverride ?? preference?.model ?? parent.model,
+      ...(reasoningOverride ?? preference?.reasoning ?? parent.reasoning ? { reasoning: reasoningOverride ?? preference?.reasoning ?? parent.reasoning } : {}),
       forkTurns,
+      roomName,
+      roomTitle,
+      roomKind,
+      role,
       status: "pending",
       createdAt: new Date().toISOString(),
       messages: inheritedMessages,
@@ -418,12 +492,18 @@ export class SubagentManager {
       toolEvents: [],
     };
     this.sessions.set(id, child);
+    this.totalInvocations += 1;
     this.launch(child, message, inheritedMessages);
-    void this.emitActivity({ type: "spawned", agentId: id, agentPath: path, parentId, status: child.status, message });
+    void this.emitSessionActivity(child, { type: "spawned", message });
     return {
       agent_id: id,
       task_name: path,
       model: child.model,
+      provider: child.provider,
+      room_name: child.roomName,
+      room_title: child.roomTitle,
+      room_kind: child.roomKind,
+      role: child.role,
       reasoning_effort: child.reasoning ?? null,
       fork_turns: forkTurns,
     };
@@ -446,17 +526,18 @@ export class SubagentManager {
     const envelope = agentMessages(author.path, author.model, message);
     const wasIdle = target.status !== "running";
     if (triggerTurn && wasIdle) {
+      if (this.totalInvocations >= this.maxTotalInvocations) {
+        throw new Error(`Session collaborator invocation limit reached (${this.maxTotalInvocations}).`);
+      }
+      this.totalInvocations += 1;
       this.launch(target, message, target.messages);
     } else {
       target.mailbox.push(...envelope);
     }
     this.notifyActivity();
-    void this.emitActivity({
+    void this.emitSessionActivity(target, {
       type: triggerTurn ? "followup" : "message",
-      agentId: target.id,
-      agentPath: target.path,
-      parentId: target.parentId,
-      status: target.status,
+      authorAgentPath: author.path,
       message,
     });
     return { delivered: true, target: target.path, triggered_turn: triggerTurn && wasIdle };
@@ -477,7 +558,7 @@ export class SubagentManager {
       this.enqueueParentNotification(target, `Agent ${target.path} was interrupted.`);
       this.notifyActivity();
     }
-    void this.emitActivity({ type: "interrupted", agentId: target.id, agentPath: target.path, parentId: target.parentId, status: target.status });
+    void this.emitSessionActivity(target, { type: "interrupted", authorAgentPath: author.path });
     return { target: target.path, previous_status: previousStatus };
   }
 
@@ -492,9 +573,14 @@ export class SubagentManager {
           path: session.path,
           parent_id: session.parentId,
           status: session.status,
+          provider: session.provider,
           model: session.model,
           reasoning_effort: session.reasoning ?? null,
           fork_turns: session.forkTurns,
+          room_name: session.roomName,
+          room_title: session.roomTitle,
+          room_kind: session.roomKind,
+          role: session.role,
           output: session.status === "completed" ? session.output ?? "" : null,
           error: session.error ?? null,
         })),
@@ -557,6 +643,7 @@ export class SubagentManager {
       path: session.path,
       parentId: session.parentId ?? "root",
       depth: session.depth,
+      provider: session.provider,
       model: session.model,
       ...(session.reasoning ? { reasoning: session.reasoning } : {}),
       prompt,
@@ -573,14 +660,14 @@ export class SubagentManager {
       session.modelCalls = [...session.modelCalls, ...result.modelCalls];
       session.toolEvents = [...session.toolEvents, ...result.toolEvents];
       this.enqueueParentNotification(session, `Agent ${session.path} completed.\n\n${result.text}`);
-      void this.emitActivity({ type: "completed", agentId: session.id, agentPath: session.path, parentId: session.parentId, status: session.status, message: result.text });
+      void this.emitSessionActivity(session, { type: "completed", message: result.text });
     }).catch((error) => {
       if (session.status === "interrupted" || controller.signal.aborted) return;
       session.status = "errored";
       session.completedAt = new Date().toISOString();
       session.error = error instanceof Error ? error.message : String(error);
       this.enqueueParentNotification(session, `Agent ${session.path} failed: ${session.error}`);
-      void this.emitActivity({ type: "errored", agentId: session.id, agentPath: session.path, parentId: session.parentId, status: session.status, message: session.error });
+      void this.emitSessionActivity(session, { type: "errored", message: session.error });
     }).finally(() => {
       this.releaseContextsForAgent(session.id);
       delete session.promise;
@@ -630,12 +717,66 @@ export class SubagentManager {
   }
 
   private async emitActivity(activity: SubagentActivity): Promise<void> {
-    try {
-      await this.options.onActivity?.(activity);
-    } catch {
-      // Activity streaming is observational and must not alter orchestration.
-    }
+    const emission = this.activityQueue.then(async () => {
+      try {
+        await this.options.onActivity?.(activity);
+      } catch {
+        // Activity streaming is observational and must not alter orchestration.
+      }
+    });
+    this.activityQueue = emission;
+    await emission;
   }
+
+  private emitSessionActivity(
+    session: SubagentSession,
+    activity: Pick<SubagentActivity, "type" | "message" | "authorAgentPath">,
+  ): Promise<void> {
+    return this.emitActivity({
+      ...activity,
+      activityId: `activity_${randomUUID().replaceAll("-", "")}`,
+      timestamp: new Date().toISOString(),
+      agentId: session.id,
+      agentPath: session.path,
+      parentId: session.parentId,
+      status: session.status,
+      provider: session.provider,
+      model: session.model,
+      reasoningEffort: session.reasoning ?? null,
+      roomName: session.roomName,
+      roomTitle: session.roomTitle,
+      roomKind: session.roomKind,
+      role: session.role,
+    });
+  }
+
+  private selectProviderPreference(provider: string | undefined, parent: SubagentSession): SubagentProviderPreference | undefined {
+    if (this.providerPreferences.length === 0) return undefined;
+    if (provider) {
+      const selected = this.providerPreferences.find((preference) => preference.provider === provider);
+      if (!selected) throw new Error(`Provider ${provider} is not enabled for this session's breakout rooms.`);
+      return selected;
+    }
+    const alternatives = this.providerPreferences.filter((preference) => preference.provider !== parent.provider);
+    const candidates = alternatives.length > 0 ? alternatives : this.providerPreferences;
+    const selected = candidates[this.providerPreferenceCursor % candidates.length];
+    this.providerPreferenceCursor += 1;
+    return selected;
+  }
+}
+
+function normalizeRoomName(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!normalized) throw new Error("room_name must contain a letter or number.");
+  return normalized.slice(0, 64);
+}
+
+function titleFromRoomName(value: string): string {
+  return value.split("_").map((part) => part ? `${part[0]!.toUpperCase()}${part.slice(1)}` : part).join(" ");
+}
+
+function normalizeRoomKind(value: string | undefined): string {
+  return ["exploration", "validation", "proving", "synthesis", "general"].includes(value ?? "") ? value! : "general";
 }
 
 function collaborationRequestedEvent(toolCallId: string, toolName: string, normalizedInputs: Record<string, unknown>): ResearchEvent {

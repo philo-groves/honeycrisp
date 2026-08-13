@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import {
   createAnalysisTool,
@@ -19,10 +21,12 @@ import {
   createSynthesisTool,
   ensureResearchStorageLayout,
   modelToolResultDetails,
+  projectModelToolResult,
   registerResearchStorageArtifact,
 } from "../packages/research-agent/dist/index.js";
 
 const allowShell = async (request) => approvedAuthorization(request);
+const execFileAsync = promisify(execFile);
 
 function approvedAuthorization(request) {
   return {
@@ -392,7 +396,7 @@ test("shell capture events and tool results omit stdin and redact credential arg
   }
 });
 
-test("tool-result details retain bounded metadata without the full execution payload", () => {
+test("model tool results retain readable output separately from bounded metadata", () => {
   const result = {
     action: {
       id: "bounded_details",
@@ -426,6 +430,11 @@ test("tool-result details retain bounded metadata without the full execution pay
   };
 
   assert.deepEqual(modelToolResultDetails(result), expectedDetails);
+
+  const projection = projectModelToolResult(result);
+  assert.deepEqual(projection.details, expectedDetails);
+  assert.equal(projection.isError, true);
+  assert.match(projection.content[0].text, /full-output-remains-in-content/);
 
   const message = createToolResultMessage(
     result,
@@ -494,6 +503,8 @@ test("repository search finds bounded local source matches", async () => {
     "parse_context_save stale interface state hit\n",
   );
   await writeFile(join(root, "README.md"), "no parser symbol here\n");
+  await execFileAsync("git", ["init", "--quiet", root]);
+  await execFileAsync("git", ["-C", root, "add", "Src/parse.c", "README.md"]);
 
   try {
     const tool = createRepositorySearchTool({
@@ -541,6 +552,43 @@ test("repository search finds bounded local source matches", async () => {
       recursive: true,
       force: true,
     });
+  }
+});
+
+test("repository search bounds and interrupts non-Git traversal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-bounds-"));
+  await writeFile(join(root, "first.txt"), "unrelated first file\n");
+  await writeFile(join(root, "second.txt"), "unrelated second file\n");
+  try {
+    const boundedTool = createRepositorySearchTool({
+      root,
+      maxVisitedFiles: 1,
+    });
+    const bounded = await createResearchToolRegistry([boundedTool]).execute({
+      id: "search_bounded_walk",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "not-present" },
+    });
+    assert.equal(bounded.result.status, "error");
+    assert.match(bounded.result.summary, /stopped after inspecting 1 files/);
+
+    const controller = new AbortController();
+    controller.abort();
+    const interrupted = await createResearchToolRegistry([
+      createRepositorySearchTool({ root }),
+    ]).execute({
+      id: "search_interrupted_walk",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "not-present" },
+    }, {
+      signal: controller.signal,
+    });
+    assert.equal(interrupted.result.status, "error");
+    assert.match(interrupted.result.summary, /search was interrupted/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

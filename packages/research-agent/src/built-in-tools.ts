@@ -4,8 +4,10 @@ import {
   realpath,
   stat,
 } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import {
   basename,
+  join,
   relative,
   resolve,
   sep,
@@ -32,6 +34,9 @@ import type {
 
 const DEFAULT_MAX_RESULTS = 20;
 const DEFAULT_MAX_BYTES = 16_384;
+const DEFAULT_REPOSITORY_SEARCH_TIMEOUT_MS = 10_000;
+const DEFAULT_REPOSITORY_SEARCH_MAX_VISITED_FILES = 50_000;
+const GIT_SEARCH_CANDIDATE_MULTIPLIER = 4;
 const REPOSITORY_SEARCH_IGNORED_DIRECTORIES = new Set([
   ".git",
   ".hg",
@@ -97,6 +102,8 @@ export interface BuiltInRepositorySearchToolOptions {
   roots?: readonly string[];
   maxResults?: number;
   maxFileBytes?: number;
+  maxDurationMs?: number;
+  maxVisitedFiles?: number;
 }
 
 export interface BuiltInStructuredFileReadToolOptions {
@@ -135,7 +142,7 @@ export function createRepositorySearchTool(
     name: "repository.search",
     transportName: "repository_search",
     description:
-      "Search text files under repository and source context paths. Use during inspection to locate concrete files before reading them.",
+      "Search for a case-insensitive literal text phrase under repository and source context paths. Use during inspection to locate concrete files before reading them.",
     actionClasses: ["search", "inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
@@ -155,7 +162,7 @@ export function createRepositorySearchTool(
   return {
     descriptor,
     parameters: REPOSITORY_SEARCH_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
-    async execute(action) {
+    async execute(action, context) {
       const startedAt = nowIso();
       return completeOrError(action, startedAt, async () => {
         const query = readRequiredString(action.input, "query");
@@ -169,6 +176,14 @@ export function createRepositorySearchTool(
             "repository.search has no readable repository or source context paths.",
           );
         }
+        const maxDurationMs = options.maxDurationMs ?? DEFAULT_REPOSITORY_SEARCH_TIMEOUT_MS;
+        const searchState = {
+          deadline: Date.now() + maxDurationMs,
+          maxDurationMs,
+          maxVisitedFiles: options.maxVisitedFiles ?? DEFAULT_REPOSITORY_SEARCH_MAX_VISITED_FILES,
+          visitedFiles: 0,
+          ...(context?.signal ? { signal: context.signal } : {}),
+        };
         const matches: {
           root: string;
           path: string;
@@ -182,6 +197,7 @@ export function createRepositorySearchTool(
           const rootMatches = await searchRepository(root, query, {
             maxResults: maxResults - matches.length,
             maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
+            state: searchState,
           });
           matches.push(...rootMatches.map((match) => ({ ...match, root })));
         }
@@ -552,8 +568,13 @@ async function searchRepository(
   options: {
     maxResults: number;
     maxFileBytes: number;
+    state: RepositorySearchState;
   },
 ) {
+  assertRepositorySearchActive(options.state);
+  const gitMatches = await searchGitRepository(root, query, options);
+  if (gitMatches !== undefined) return gitMatches;
+
   const matches: {
     path: string;
     line: number;
@@ -562,12 +583,14 @@ async function searchRepository(
   const needle = query.toLowerCase();
 
   async function visit(directory: string): Promise<void> {
+    assertRepositorySearchActive(options.state);
     if (matches.length >= options.maxResults) {
       return;
     }
 
     const entries = await opendir(directory);
     for await (const entry of entries) {
+      assertRepositorySearchActive(options.state);
       if (
         matches.length >= options.maxResults ||
         REPOSITORY_SEARCH_IGNORED_DIRECTORIES.has(entry.name)
@@ -579,6 +602,12 @@ async function searchRepository(
       if (entry.isDirectory()) {
         await visit(path);
       } else if (entry.isFile()) {
+        options.state.visitedFiles += 1;
+        if (options.state.visitedFiles > options.state.maxVisitedFiles) {
+          throw new Error(
+            `Repository search stopped after inspecting ${options.state.maxVisitedFiles} files. Narrow the query or repository roots.`,
+          );
+        }
         const fileStat = await stat(path);
         if (fileStat.size > options.maxFileBytes) {
           continue;
@@ -609,6 +638,164 @@ async function searchRepository(
 
   await visit(root);
   return matches;
+}
+
+interface RepositorySearchState {
+  deadline: number;
+  maxDurationMs: number;
+  maxVisitedFiles: number;
+  visitedFiles: number;
+  signal?: AbortSignal;
+}
+
+async function searchGitRepository(
+  root: string,
+  query: string,
+  options: {
+    maxResults: number;
+    maxFileBytes: number;
+    state: RepositorySearchState;
+  },
+): Promise<{ path: string; line: number; preview: string }[] | undefined> {
+  const gitMarker = await stat(join(root, ".git")).catch(() => undefined);
+  if (!gitMarker) return undefined;
+
+  const maxCandidates = Math.max(
+    options.maxResults + 8,
+    options.maxResults * GIT_SEARCH_CANDIDATE_MULTIPLIER,
+  );
+  const candidates = await gitGrepCandidatePaths(
+    root,
+    query,
+    maxCandidates,
+    options.state,
+  );
+  if (candidates === undefined) return undefined;
+
+  const matches: { path: string; line: number; preview: string }[] = [];
+  const needle = query.toLowerCase();
+  for (const candidate of candidates) {
+    assertRepositorySearchActive(options.state);
+    const path = resolve(root, candidate);
+    const relativePath = relative(root, path);
+    if (relativePath === ".." || relativePath.startsWith(`..${sep}`)) continue;
+    const fileStat = await stat(path).catch(() => undefined);
+    if (!fileStat?.isFile() || fileStat.size > options.maxFileBytes) continue;
+    const text = await readFile(path, "utf8").catch(() => undefined);
+    if (!text) continue;
+    const lines = text.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index] ?? "";
+      if (!line.toLowerCase().includes(needle)) continue;
+      matches.push({
+        path: portableRelativePath(root, path),
+        line: index + 1,
+        preview: line.trim().slice(0, 240),
+      });
+      if (matches.length >= options.maxResults) return matches;
+    }
+  }
+  return matches;
+}
+
+function gitGrepCandidatePaths(
+  root: string,
+  query: string,
+  maxCandidates: number,
+  state: RepositorySearchState,
+): Promise<string[] | undefined> {
+  assertRepositorySearchActive(state);
+  return new Promise((resolveCandidates, reject) => {
+    const child = spawn("git", [
+      "-c",
+      "color.grep=false",
+      "-c",
+      `safe.directory=${root}`,
+      "-C",
+      root,
+      "grep",
+      "-l",
+      "-z",
+      "-I",
+      "-i",
+      "-F",
+      "-e",
+      query,
+      "--",
+      ".",
+      ":(glob,exclude)**/.beale/**",
+      ":(glob,exclude)**/.honeycrisp/**",
+      ":(glob,exclude)**/.hg/**",
+      ":(glob,exclude)**/.svn/**",
+      ":(glob,exclude)**/node_modules/**",
+    ], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const candidates: string[] = [];
+    let pending = "";
+    let settled = false;
+    let reachedLimit = false;
+    const remainingMs = Math.max(1, state.deadline - Date.now());
+    const finish = (value: string[] | undefined, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      state.signal?.removeEventListener("abort", abort);
+      if (error) reject(error);
+      else resolveCandidates(value);
+    };
+    const stopAtLimit = () => {
+      if (candidates.length < maxCandidates) return;
+      reachedLimit = true;
+      child.kill();
+    };
+    const consume = (chunk: string) => {
+      pending += chunk;
+      let separator = pending.indexOf("\0");
+      while (separator >= 0 && !reachedLimit) {
+        const candidate = pending.slice(0, separator);
+        pending = pending.slice(separator + 1);
+        if (candidate) candidates.push(candidate);
+        stopAtLimit();
+        separator = pending.indexOf("\0");
+      }
+    };
+    const abort = () => {
+      child.kill();
+      finish(undefined, new Error("Repository search was interrupted."));
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish(
+        undefined,
+        new Error(
+          `Repository search timed out after ${state.maxDurationMs}ms. Narrow the query or repository roots.`,
+        ),
+      );
+    }, remainingMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", consume);
+    child.once("error", () => finish(undefined));
+    child.once("close", (code) => {
+      if (!reachedLimit && pending) candidates.push(pending);
+      finish(code === 0 || code === 1 || reachedLimit ? candidates : undefined);
+    });
+    state.signal?.addEventListener("abort", abort, { once: true });
+    if (state.signal?.aborted) abort();
+  });
+}
+
+function assertRepositorySearchActive(state: RepositorySearchState): void {
+  if (state.signal?.aborted) {
+    throw new Error("Repository search was interrupted.");
+  }
+  if (Date.now() >= state.deadline) {
+    throw new Error(
+      `Repository search timed out after ${state.maxDurationMs}ms. Narrow the query or repository roots.`,
+    );
+  }
 }
 
 function portableRelativePath(root: string, path: string): string {

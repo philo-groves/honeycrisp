@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added bounded heterogeneous breakout-room orchestration across OpenAI, Anthropic, and xAI, including provider-aware agent identities, room metadata, independent-first-pass guidance, peer challenges, lifecycle activity, and strict host-written collaboration configuration.
 - Added migration 9 artifact revision events so Runbook and Report revisions retain their session and timestamp for workspace activity timelines; existing artifacts receive a conservative latest-known revision event.
 - Added first-class revisioned Markdown reports with Complete and Stale states, dedicated `report.*` tools, and workspace artifact storage. Migration 8 adds report metadata, and bundled Security Research and Mathematics profiles advance to 1.2.0 with domain-specific report guidance.
 - Added a bundled Mathematics research profile with domain-specific memory types, evidence rules, relations, and exploration, proof, verification, and synthesis workflows; `profile resolve --profile-id mathematics` exposes it to host frontends.
@@ -14,6 +15,7 @@
 
 ### Changed
 
+- Anthropic breakout workers run through the official Claude Agent SDK, while OpenAI and xAI workers use their native Pi adapters; all routes share the lead session's governed workspace tools and authorization boundary without sharing provider-native conversation state.
 - Runs under the bundled Security Research profile now require the selected provider's host-recorded policy-risk acknowledgement during authorization preflight: Trusted Access for Cyber plus policy risk for OpenAI, Cyber Verification Program plus policy risk for Anthropic, and policy risk for xAI.
 - Anthropic execution now uses the official Claude Agent SDK and its Claude Code agent process, with Honeycrisp's governed research tools bridged through an in-process MCP server. Subscription sign-in and status delegate to the installed official Claude CLI instead of storing or replaying Anthropic OAuth tokens; API-key use remains available through `ANTHROPIC_API_KEY`.
 - Cybersecurity report creation now requires an explicit confirmed chain with recorded reachability, impact, and proof evidence; observations, hypotheses, and primitives must be upgraded before they can become reports. The bundled Security Research profile advances to 1.3.0.
@@ -41,6 +43,8 @@
 
 ### Fixed
 
+- Repository search now uses Git's native working-tree search path for Git repositories and enforces cooperative cancellation, elapsed-time, and file-traversal bounds for fallbacks, preventing low-match searches in large multi-repository workspaces from running indefinitely.
+- Claude Agent SDK runs now receive bounded, redacted governed-tool output as readable model content instead of status-only audit metadata, restoring evidence access for Anthropic lead and breakout agents.
 - Anthropic re-authentication now clears an existing Claude CLI session before starting an explicit Claude.ai subscription login, preventing the action from silently retaining the previous authentication.
 - Added a file-backed resume fallback prompt option so host frontends can continue large sessions without exceeding operating-system process command-line limits.
 - Retried transient provider and transport failures during background session-title generation before reporting the title job as failed.

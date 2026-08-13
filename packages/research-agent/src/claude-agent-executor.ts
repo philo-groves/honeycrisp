@@ -7,12 +7,14 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z, type ZodType } from "zod";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createId, nowIso } from "./ids.js";
 import { researchProfileHash, researchProfileWorkflow, type ResearchProfile } from "./research-profile.js";
 import { createResearchSystemPrompt } from "./system-prompt.js";
+import { SubagentManager, type SubagentRunRequest, type SubagentRunResult } from "./subagent-runtime.js";
 import {
   getToolTransportName,
-  modelToolResultDetails,
+  projectModelToolResult,
   type ResearchToolRegistry,
 } from "./tool-registry.js";
 import type {
@@ -21,6 +23,7 @@ import type {
   ResearchAgentModelInput,
   ResearchEvent,
   ResearchLiveEventSink,
+  ResearchCollaborationConfig,
 } from "./types.js";
 
 export interface ClaudeAgentResumableState {
@@ -42,6 +45,13 @@ export interface CreateClaudeAgentExecutorOptions {
   workflowId?: string;
   resumableState?: ClaudeAgentResumableState;
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<readonly string[]>;
+  subagents?: false;
+  collaboration?: ResearchCollaborationConfig;
+  runAlternateSubagent?: (
+    request: SubagentRunRequest,
+    rootInput: ResearchAgentExecutionInput,
+  ) => Promise<SubagentRunResult>;
+  agentIdentity?: { id: string; path: string; parentId: string };
 }
 
 export interface CompleteClaudeAgentTextOptions {
@@ -182,26 +192,67 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               ...(input.signal ? { signal: input.signal } : {}),
             });
             toolEvents.push(...record.events);
-            await emitResearchEvents(input.eventSink, record.events);
-            const details = modelToolResultDetails(record.result);
+            await emitResearchEvents(input.eventSink, record.events, options.agentIdentity);
+            const projection = projectModelToolResult(record.result);
             return {
-              content: [{ type: "text" as const, text: JSON.stringify(details) }],
-              isError: record.result.status === "error",
+              content: projection.content,
+              isError: projection.isError,
             };
           },
         ));
-      const mcpServer = createSdkMcpServer({
-        name: "honeycrisp",
-        version: "1.0.0",
-        instructions: "These are Honeycrisp's governed research tools. Use them for all durable memory, runbook, report, shell, repository, and workspace operations.",
-        tools: mcpTools,
-        alwaysLoad: true,
-      });
-      const mcpToolNames = mcpTools.map((candidate) => `mcp__honeycrisp__${candidate.name}`);
       const abortController = new AbortController();
       const abort = () => abortController.abort(input.signal?.reason);
       if (input.signal?.aborted) abort();
       else input.signal?.addEventListener("abort", abort, { once: true });
+
+      const collaboration = options.collaboration;
+      const collaborationManager = options.subagents === false || collaboration?.mode === "solo"
+        ? null
+        : new SubagentManager({
+            rootProvider: "anthropic",
+            rootModel: options.model,
+            ...(options.reasoning ? { rootReasoning: options.reasoning as never } : {}),
+            ...(collaboration ? {
+              maxThreads: collaboration.maxMembersPerRoom * collaboration.maxConcurrentRooms,
+              maxConcurrentRooms: collaboration.maxConcurrentRooms,
+              maxMembersPerRoom: collaboration.maxMembersPerRoom,
+              maxTotalInvocations: collaboration.maxTotalInvocations,
+              providerPreferences: collaboration.providers.map((preference) => ({
+                provider: preference.provider,
+                model: preference.model,
+                ...(preference.reasoningEffort ? { reasoning: preference.reasoningEffort as never } : {}),
+                enabled: preference.enabled,
+              })),
+            } : {}),
+            signal: abortController.signal,
+            run: (request) => {
+              if (!options.runAlternateSubagent) throw new Error("No provider-neutral breakout worker is configured.");
+              return options.runAlternateSubagent(request, input);
+            },
+            onActivity: async (activity) => {
+              if (!input.eventSink) return;
+              const { type: action, ...details } = activity;
+              await safeEmit(input.eventSink, {
+                schemaVersion: 1,
+                kind: "agent.event",
+                timestamp: nowIso(),
+                payload: { type: "subagent.activity", action, ...details },
+              });
+            },
+            onToolEvent: (event) => emitResearchEvents(input.eventSink, [event], options.agentIdentity),
+          });
+      const collaborationMcpTools = (collaborationManager?.createTools("root") ?? []).map((candidate) =>
+        agentToolAsSdkTool(candidate, abortController.signal)
+      );
+      const allMcpTools = [...mcpTools, ...collaborationMcpTools];
+      const allMcpServer = createSdkMcpServer({
+        name: "honeycrisp",
+        version: "1.0.0",
+        instructions: "These are Honeycrisp's governed research and breakout-room tools. Use them for durable research work and bounded collaboration.",
+        tools: allMcpTools,
+        alwaysLoad: true,
+      });
+      const allMcpToolNames = allMcpTools.map((candidate) => `mcp__honeycrisp__${candidate.name}`);
 
       let sessionId = options.resumableState?.providerSessionId;
       let result: SDKResultMessage | undefined;
@@ -226,29 +277,9 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             cwd: options.workspaceRoot,
             model: options.model,
             ...(options.resumableState ? { resume: options.resumableState.providerSessionId } : {}),
-            mcpServers: { honeycrisp: mcpServer },
-            agents: {
-              researcher: {
-                description: "Investigate a concrete independent research subtask inside the recorded workspace boundary and return evidence-grounded results to the parent agent.",
-                prompt: createResearchSystemPrompt({
-                  hasTools: mcpTools.length > 0,
-                  hasMemoryTools: hasTool(options.toolRegistry, "memory_search"),
-                  hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
-                  hasReportTools: hasTool(options.toolRegistry, "report_list"),
-                  agentPath: "/root/researcher",
-                  hasCollaborationTools: false,
-                  goalEnabled: false,
-                  researchProfile: options.researchProfile,
-                  workflowId: workflow.id,
-                  ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
-                }),
-                tools: mcpToolNames,
-                model: "inherit",
-                permissionMode: "dontAsk",
-              },
-            },
-            tools: ["Agent"],
-            allowedTools: ["Agent", ...mcpToolNames],
+            mcpServers: { honeycrisp: allMcpServer },
+            tools: [],
+            allowedTools: allMcpToolNames,
             permissionMode: "dontAsk",
             settingSources: [],
             systemPrompt: {
@@ -259,9 +290,11 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                 hasMemoryTools: hasTool(options.toolRegistry, "memory_search"),
                 hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
                 hasReportTools: hasTool(options.toolRegistry, "report_list"),
-                hasSessionDispositionTool: hasTool(options.toolRegistry, "session_disposition"),
-                hasCollaborationTools: true,
+                hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
+                hasCollaborationTools: collaborationManager !== null,
+                ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
                 goalEnabled: false,
+                ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
                 researchProfile: options.researchProfile,
                 workflowId: workflow.id,
                 ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
@@ -280,7 +313,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
           if (message.type === "assistant") {
             const text = assistantMessageText(message);
             if (text) assistantText.push(text);
-            await emitAssistantMessage(input.eventSink, message, text);
+            await emitAssistantMessage(input.eventSink, message, text, options.agentIdentity);
           } else if (message.type === "result") {
             result = message;
             finishInput();
@@ -288,6 +321,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
         }
       } finally {
         finishInput();
+        await collaborationManager?.settle();
         input.signal?.removeEventListener("abort", abort);
       }
 
@@ -380,6 +414,42 @@ function claudeEffort(value: string | undefined): "low" | "medium" | "high" | "x
   return undefined;
 }
 
+function agentToolAsSdkTool(candidate: AgentTool, signal: AbortSignal) {
+  return tool(
+    candidate.name,
+    candidate.description,
+    jsonObjectShape(candidate.parameters),
+    async (args) => {
+      const result = await candidate.execute(
+        createId("claude_collaboration"),
+        isRecord(args) ? args : {},
+        signal,
+        () => undefined,
+      );
+      const text = result.content.flatMap((item) => {
+        if (!isRecord(item) || item.type !== "text" || typeof item.text !== "string") return [];
+        return [item.text];
+      }).join("\n");
+      return { content: [{ type: "text" as const, text: text || "{}" }] };
+    },
+  );
+}
+
+function collaborationSystemGuidance(config: ResearchCollaborationConfig): string {
+  const enabled = config.providers.filter((provider) => provider.enabled);
+  return [
+    `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
+    `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations.`,
+    config.independentFirstPass
+      ? "Require an independent evidence memo from each member before peer messaging."
+      : "Independent first passes are optional.",
+    `Use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"} per room.`,
+    config.mode === "adaptive"
+      ? "Create rooms only for decomposable coverage, meaningful disagreement, evidence review, or proving work."
+      : "Use rooms for every materially separable research stage.",
+  ].join(" ");
+}
+
 function assistantMessageText(message: SDKAssistantMessage): string {
   return message.message.content
     .flatMap((block) => block.type === "text" ? [block.text] : [])
@@ -390,6 +460,7 @@ async function emitAssistantMessage(
   sink: ResearchLiveEventSink | undefined,
   message: SDKAssistantMessage,
   text: string,
+  identity?: { id: string; path: string; parentId: string },
 ): Promise<void> {
   if (!sink || !text) return;
   await safeEmit(sink, {
@@ -397,9 +468,9 @@ async function emitAssistantMessage(
     kind: "model.output",
     timestamp: nowIso(),
     payload: {
-      agentId: message.parent_tool_use_id ? message.parent_tool_use_id : "root",
-      agentPath: message.parent_tool_use_id ? `/root/${message.parent_tool_use_id}` : "/root",
-      parentAgentId: message.parent_tool_use_id ? "root" : "",
+      agentId: identity?.id ?? (message.parent_tool_use_id ? message.parent_tool_use_id : "root"),
+      agentPath: identity?.path ?? (message.parent_tool_use_id ? `/root/${message.parent_tool_use_id}` : "/root"),
+      parentAgentId: identity?.parentId ?? (message.parent_tool_use_id ? "root" : ""),
       phase: "completed",
       eventType: "text_end",
       text,
@@ -407,14 +478,23 @@ async function emitAssistantMessage(
   });
 }
 
-async function emitResearchEvents(sink: ResearchLiveEventSink | undefined, events: readonly ResearchEvent[]): Promise<void> {
+async function emitResearchEvents(
+  sink: ResearchLiveEventSink | undefined,
+  events: readonly ResearchEvent[],
+  identity?: { id: string; path: string; parentId: string },
+): Promise<void> {
   if (!sink) return;
   for (const event of events) {
     await safeEmit(sink, {
       schemaVersion: 1,
       kind: "research.event",
       timestamp: nowIso(),
-      payload: { event, agentId: "root", agentPath: "/root", parentAgentId: "" },
+      payload: {
+        event,
+        agentId: identity?.id ?? "root",
+        agentPath: identity?.path ?? "/root",
+        parentAgentId: identity?.parentId ?? "",
+      },
     });
   }
 }

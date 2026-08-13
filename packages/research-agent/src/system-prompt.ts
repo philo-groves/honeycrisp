@@ -16,6 +16,7 @@ export interface CreateResearchSystemPromptOptions {
   hasSessionDispositionTool?: boolean;
   agentPath?: string;
   hasCollaborationTools?: boolean;
+  collaborationGuidance?: string;
   goalEnabled?: boolean;
   agentInstructions?: ResearchAgentInstructions;
   memoryTypeDescriptions?: MemoryTypeDescriptionsInput;
@@ -64,7 +65,11 @@ export function createResearchSystemPrompt(
         : []),
     ] : []),
     ...(options.agentPath ? [`You are subagent ${options.agentPath}. Complete the assigned task and return a concise result to the parent agent.`] : []),
-    ...(options.hasCollaborationTools ? ["Use collaboration tools for independent work and inter-agent communication; wait for requested subagent results before concluding."] : []),
+    ...(options.hasCollaborationTools ? [
+      "Use collaboration tools for independent work and inter-agent communication; wait for requested subagent results before concluding.",
+      "Breakout rooms are bounded evidence cells, not majority votes. Preserve dissent, cite tool or artifact evidence, and let verification decide disputed claims.",
+      ...(options.collaborationGuidance ? [options.collaborationGuidance] : []),
+    ] : []),
     ...(options.goalEnabled ? [
       "Continue researching the supplied objective until evidence supports a final disposition; goal persistence and terminal state are handled by the host.",
     ] : []),

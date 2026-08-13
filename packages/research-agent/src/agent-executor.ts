@@ -28,9 +28,8 @@ import { createId, nowIso } from "./ids.js";
 import {
   createToolRequestedEvent,
   getToolTransportName,
-  modelToolResultDetails,
+  projectModelToolResult,
   type ResearchToolExecutionRecord,
-  type ResearchToolExecutionResult,
   type ResearchToolRegistry,
 } from "./tool-registry.js";
 import {
@@ -72,6 +71,7 @@ import type {
   ResearchLiveEventSink,
   ResearchToolAction,
   ResearchWorkspaceAuthorizationContext,
+  ResearchCollaborationConfig,
 } from "./types.js";
 
 export interface CreatePiAgentExecutorOptions {
@@ -93,6 +93,12 @@ export interface CreatePiAgentExecutorOptions {
     maxThreads?: number;
     maxDepth?: number;
   };
+  collaboration?: ResearchCollaborationConfig;
+  runAlternateSubagent?: (
+    request: SubagentRunRequest,
+    rootInput: ResearchAgentExecutionInput,
+  ) => Promise<SubagentRunResult>;
+  agentIdentity?: { id: string; path: string; parentId: string };
   goal?: CreateResearchGoalRuntimeOptions;
   resumableState?: PiAgentResumableState;
   memoryTypeDescriptions?: MemoryTypeDescriptionsInput;
@@ -105,11 +111,25 @@ const NATIVE_COMPACTION_RESERVE_TOKENS = 64_000;
 const DEFAULT_NATIVE_COMPACTION_THRESHOLD = 200_000;
 const MIN_ACTIVE_CONTEXT_TOKENS = 32_000;
 const RECENT_TOOL_RESULTS_TO_KEEP = 8;
-const MODEL_TOOL_RESULT_MAX_CHARS = 48_000;
 const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
 const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
 const MAX_TRANSIENT_MODEL_RETRIES = 4;
 const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition"]);
+
+function collaborationSystemGuidance(config: ResearchCollaborationConfig): string {
+  const enabled = config.providers.filter((provider) => provider.enabled);
+  return [
+    `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
+    `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations across the session.`,
+    config.independentFirstPass
+      ? "Require each room member to produce an independent evidence memo before peer messages or convergence."
+      : "Independent first passes are optional for this session.",
+    `After independent work, use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"} per room.`,
+    config.mode === "adaptive"
+      ? "Create breakout rooms only for decomposable coverage, meaningful disagreement, evidence review, or proving work; keep tightly sequential work in the lead session."
+      : "Use breakout rooms for every materially separable research stage.",
+  ].join(" ");
+}
 
 export interface PiAgentResumableState {
   schemaVersion: 1 | 2 | 3;
@@ -303,15 +323,32 @@ export function createPiAgentExecutor(
         resumableCheckpoints: { local: string; native: string; contextWindowRetry: string };
         contextWindowRetryCheckpointed: boolean;
       }>;
-      const subagents = options.subagents === false
+      const collaboration = options.collaboration;
+      const collaborationEnabled = collaboration?.mode !== "solo";
+      const subagents = options.subagents === false || collaborationEnabled === false
         ? null
         : new SubagentManager({
+            rootProvider: options.provider,
             rootModel: model.id,
             ...(options.reasoning ? { rootReasoning: options.reasoning } : {}),
             ...(options.subagents?.maxThreads ? { maxThreads: options.subagents.maxThreads } : {}),
             ...(options.subagents?.maxDepth !== undefined ? { maxDepth: options.subagents.maxDepth } : {}),
+            ...(collaboration ? {
+              maxThreads: collaboration.maxMembersPerRoom * collaboration.maxConcurrentRooms,
+              maxConcurrentRooms: collaboration.maxConcurrentRooms,
+              maxMembersPerRoom: collaboration.maxMembersPerRoom,
+              maxTotalInvocations: collaboration.maxTotalInvocations,
+              providerPreferences: collaboration.providers.map((preference) => ({
+                provider: preference.provider,
+                model: preference.model,
+                ...(preference.reasoningEffort ? { reasoning: preference.reasoningEffort as SimpleStreamOptions["reasoning"] } : {}),
+                enabled: preference.enabled,
+              })),
+            } : {}),
             ...(input.signal ? { signal: input.signal } : {}),
-            run: (request) => runSession(request),
+            run: (request) => request.provider === "anthropic" && options.runAlternateSubagent
+              ? options.runAlternateSubagent(request, input)
+              : runSession(request),
             onActivity: async (activity) => {
               if (!input.eventSink) return;
               const { type: action, ...details } = activity;
@@ -382,8 +419,8 @@ export function createPiAgentExecutor(
       const hasSessionDispositionTool = researchToolNames.has("session_disposition");
 
       runSession = async (request) => {
-        const sessionModel = request.root ? model : getPiModel(models, options.provider, request.model);
-        if (!sessionModel) throw new Error(`Unknown subagent model ${options.provider}/${request.model}`);
+        const sessionModel = request.root ? model : getPiModel(models, request.provider, request.model);
+        if (!sessionModel) throw new Error(`Unknown subagent model ${request.provider}/${request.model}`);
         const toolEvents: ResearchEvent[] = [];
         const agentEvents: Record<string, unknown>[] = [];
         const executionRecords = new Map<string, ResearchToolExecutionRecord>();
@@ -646,9 +683,10 @@ export function createPiAgentExecutor(
               hasMemoryTools,
               hasRunbookTools,
               hasReportTools,
-              hasSessionDispositionTool: request.root === true && hasSessionDispositionTool,
-              ...(request.root ? {} : { agentPath: request.path }),
+              hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,
+              ...(request.root && !options.agentIdentity ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "spawn_agent"),
+              ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
               goalEnabled: request.root === true && goalRuntime !== null,
               researchProfile,
               workflowId: workflow.id,
@@ -739,13 +777,8 @@ export function createPiAgentExecutor(
                   });
                 }
                 researchFocus.afterToolCall(researchFocusOutcome(hookContext, record));
-                return record
-                  ? {
-                      content: toolResultContent(record.result),
-                      details: modelToolResultDetails(record.result),
-                      isError: record.result.status !== "complete",
-                    }
-                  : undefined;
+                if (!record) return undefined;
+                return projectModelToolResult(record.result);
               } finally {
                 executionRecords.delete(hookContext.toolCall.id);
                 subagents?.releaseContext(hookContext.toolCall.id);
@@ -934,10 +967,11 @@ export function createPiAgentExecutor(
       let rootResult: Awaited<ReturnType<typeof runSession>>;
       try {
         rootResult = await runSession({
-          id: "root",
-          path: "/root",
-          parentId: "",
+          id: options.agentIdentity?.id ?? "root",
+          path: options.agentIdentity?.path ?? "/root",
+          parentId: options.agentIdentity?.parentId ?? "",
           depth: 0,
+          provider: options.provider,
           model: model.id,
           ...(options.reasoning ? { reasoning: options.reasoning } : {}),
           prompt: input.modelInput.prompt,
@@ -1619,9 +1653,10 @@ function createAgentTools(input: {
           input.recordExecutionStart(input.toolRegistry!.createActionFromToolCall(toolCall, executionOptions));
           const record = await input.toolRegistry!.executeToolCall(toolCall, executionOptions);
           input.recordExecution(record);
+          const projection = projectModelToolResult(record.result);
           return {
-            content: toolResultContent(record.result),
-            details: modelToolResultDetails(record.result),
+            content: projection.content,
+            details: projection.details,
             terminate: false,
           };
         },
@@ -1913,28 +1948,6 @@ async function goalFollowUpMessages(input: {
   return messages;
 }
 
-function toolResultContent(
-  result: ResearchToolExecutionResult,
-): [{ type: "text"; text: string }] {
-  const serialized = JSON.stringify(
-    {
-      status: result.status,
-      summary: result.summary,
-      output: result.output,
-      error: result.error,
-      followUpActions: result.followUpActions,
-    },
-    null,
-    2,
-  );
-  return [
-    {
-      type: "text",
-      text: truncateModelToolResult(serialized),
-    },
-  ];
-}
-
 export function compactAgentContext(
   messages: AgentMessage[],
   contextWindow = 128_000,
@@ -2046,16 +2059,6 @@ function compactToolResultMessage(message: AgentMessage): AgentMessage {
 
 function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateTokens(message), 0);
-}
-
-function truncateModelToolResult(text: string): string {
-  if (text.length <= MODEL_TOOL_RESULT_MAX_CHARS) return text;
-  const half = Math.floor(MODEL_TOOL_RESULT_MAX_CHARS / 2);
-  return [
-    text.slice(0, half),
-    `\n\n[Tool result truncated for model context: ${text.length - MODEL_TOOL_RESULT_MAX_CHARS} characters omitted. Re-run a narrower command if the omitted section is needed.]\n\n`,
-    text.slice(-half),
-  ].join("");
 }
 
 function assistantText(

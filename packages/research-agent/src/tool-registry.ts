@@ -62,6 +62,14 @@ export interface ModelToolResultDetails {
   };
 }
 
+export interface ModelToolResultProjection {
+  content: ToolResultMessage["content"];
+  details: ModelToolResultDetails;
+  isError: boolean;
+}
+
+const MODEL_TOOL_RESULT_MAX_CHARS = 48_000;
+
 export interface ResearchExecutableTool {
   descriptor: ResearchToolDescriptor;
   parameters?: Tool["parameters"];
@@ -323,30 +331,45 @@ export function createToolResultMessage(
   toolCallId: string,
   toolName: string,
 ): ToolResultMessage {
-  const projectedResult = projectToolResult(result);
+  const projection = projectModelToolResult(result);
   return {
     role: "toolResult",
     toolCallId,
     toolName,
-    isError: projectedResult.status !== "complete",
     timestamp: Date.now(),
-    details: modelToolResultDetails(projectedResult),
+    ...projection,
+  };
+}
+
+/**
+ * Builds the bounded, host-safe result projection passed back to a model.
+ * Provider adapters must use content for readable evidence and details only
+ * for compact audit metadata.
+ */
+export function projectModelToolResult(
+  result: ResearchToolExecutionResult,
+): ModelToolResultProjection {
+  const projectedResult = projectToolResult(result);
+  const serialized = JSON.stringify(
+    {
+      status: projectedResult.status,
+      summary: projectedResult.summary,
+      output: projectedResult.output,
+      error: projectedResult.error,
+      followUpActions: projectedResult.followUpActions,
+    },
+    null,
+    2,
+  );
+  return {
     content: [
       {
         type: "text",
-        text: JSON.stringify(
-          {
-            status: projectedResult.status,
-            summary: projectedResult.summary,
-            output: projectedResult.output,
-            error: projectedResult.error,
-            followUpActions: projectedResult.followUpActions,
-          },
-          null,
-          2,
-        ),
+        text: truncateModelToolResult(serialized),
       },
     ],
+    details: modelToolResultDetails(projectedResult),
+    isError: projectedResult.status !== "complete",
   };
 }
 
@@ -908,6 +931,16 @@ function projectShellToolOutput(output: unknown): unknown {
     projected.args = redactShellArguments(projected.args);
   }
   return projected;
+}
+
+function truncateModelToolResult(text: string): string {
+  if (text.length <= MODEL_TOOL_RESULT_MAX_CHARS) return text;
+  const half = Math.floor(MODEL_TOOL_RESULT_MAX_CHARS / 2);
+  return [
+    text.slice(0, half),
+    `\n\n[Tool result truncated for model context: ${text.length - MODEL_TOOL_RESULT_MAX_CHARS} characters omitted. Re-run a narrower command if the omitted section is needed.]\n\n`,
+    text.slice(-half),
+  ].join("");
 }
 
 function isShellToolName(toolName: string): boolean {

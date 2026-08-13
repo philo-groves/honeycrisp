@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SubagentManager } from "../packages/research-agent/dist/index.js";
+import { decodeResearchCollaborationConfig, SubagentManager } from "../packages/research-agent/dist/index.js";
 
 test("subagent runtime sanitizes partial inheritance and applies explicit overrides", async () => {
   const requests = [];
@@ -80,6 +80,106 @@ test("subagent runtime sanitizes partial inheritance and applies explicit overri
   });
   await manager.settle();
   assert.deepEqual(requests[3].inheritedMessages, []);
+});
+
+test("subagent runtime routes heterogeneous room members and enforces room concurrency", async () => {
+  const requests = [];
+  const activities = [];
+  const manager = new SubagentManager({
+    rootProvider: "openai",
+    rootModel: "gpt-5.6-sol",
+    maxConcurrentRooms: 1,
+    maxMembersPerRoom: 2,
+    providerPreferences: [
+      { provider: "openai", model: "gpt-5.6-sol", reasoning: "high", enabled: true },
+      { provider: "anthropic", model: "claude-opus-5", reasoning: "high", enabled: true },
+    ],
+    onActivity(activity) {
+      activities.push(activity);
+    },
+    async run(request) {
+      requests.push(request);
+      return resultFor(request, `completed ${request.provider}`);
+    },
+  });
+  const tools = toolsByName(manager, "root");
+  await tools.spawn_agent.execute("spawn_anthropic", {
+    task_name: "anthropic_review",
+    message: "Review independently.",
+    fork_turns: "none",
+    room_name: "parser_review",
+    room_title: "Parser review",
+    room_kind: "challenge",
+    role: "challenger",
+  });
+  await manager.settle();
+
+  assert.equal(requests[0].provider, "anthropic");
+  assert.equal(requests[0].model, "claude-opus-5");
+  assert.ok(activities.some((activity) =>
+    activity.type === "spawned"
+    && activity.provider === "anthropic"
+    && activity.roomName === "parser_review"
+    && activity.role === "challenger"
+  ));
+
+  let activeRequest;
+  const active = new SubagentManager({
+    rootProvider: "openai",
+    rootModel: "gpt-5.6-sol",
+    maxConcurrentRooms: 1,
+    maxMembersPerRoom: 2,
+    run(request) {
+      activeRequest = request;
+      return new Promise((_resolve, reject) => {
+        request.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    },
+  });
+  const activeTools = toolsByName(active, "root");
+  const spawned = await activeTools.spawn_agent.execute("spawn_first_room", {
+    task_name: "first_room",
+    message: "Hold the first room.",
+    fork_turns: "none",
+    room_name: "room_one",
+  });
+  assert.equal(activeRequest.path, "/root/first_room");
+  await assert.rejects(
+    activeTools.spawn_agent.execute("spawn_second_room", {
+      task_name: "second_room",
+      message: "This exceeds the room cap.",
+      fork_turns: "none",
+      room_name: "room_two",
+    }),
+    /room concurrency limit reached \(1\)/i,
+  );
+  await activeTools.interrupt_agent.execute("interrupt_first_room", { target: spawned.details.agent_id });
+  await active.settle();
+});
+
+test("collaboration config decoder rejects ambiguous or unbounded routing", () => {
+  const valid = {
+    mode: "adaptive",
+    intensity: "balanced",
+    providers: [
+      { provider: "anthropic", model: "claude-opus-5", reasoningEffort: "high", enabled: true },
+      { provider: "xai", model: "grok-4.6", reasoningEffort: "high", enabled: true },
+    ],
+    independentFirstPass: true,
+    peerChallengeRounds: 1,
+    maxConcurrentRooms: 2,
+    maxMembersPerRoom: 3,
+    maxTotalInvocations: 8,
+  };
+  assert.deepEqual(decodeResearchCollaborationConfig(valid), valid);
+  assert.throws(
+    () => decodeResearchCollaborationConfig({ ...valid, maxConcurrentRooms: 6 }),
+    /maxConcurrentRooms must be an integer from 1 to 5/,
+  );
+  assert.throws(
+    () => decodeResearchCollaborationConfig({ ...valid, providers: [valid.providers[0], valid.providers[0]] }),
+    /configured more than once/,
+  );
 });
 
 test("subagent runtime supports mailboxes, idle follow-ups, waiting, listing, and interruption", async () => {

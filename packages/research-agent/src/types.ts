@@ -274,6 +274,24 @@ export interface ResearchAgentModelInput {
   agentInstructions?: ResearchAgentInstructions;
 }
 
+export interface ResearchCollaborationProviderPreference {
+  provider: string;
+  model: string;
+  reasoningEffort?: string;
+  enabled: boolean;
+}
+
+export interface ResearchCollaborationConfig {
+  mode: "solo" | "adaptive" | "always";
+  intensity: "focused" | "balanced" | "deep";
+  providers: readonly ResearchCollaborationProviderPreference[];
+  independentFirstPass: boolean;
+  peerChallengeRounds: number;
+  maxConcurrentRooms: number;
+  maxMembersPerRoom: number;
+  maxTotalInvocations: number;
+}
+
 export interface ResearchAgentExecutionInput {
   modelInput: ResearchAgentModelInput;
   authorization?: ResearchWorkspaceAuthorizationContext;
