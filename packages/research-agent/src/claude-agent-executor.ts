@@ -285,20 +285,22 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             systemPrompt: {
               type: "preset",
               preset: "claude_code",
-              append: createResearchSystemPrompt({
-                hasTools: mcpTools.length > 0,
-                hasMemoryTools: hasTool(options.toolRegistry, "memory_search"),
-                hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
-                hasReportTools: hasTool(options.toolRegistry, "report_list"),
-                hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
-                hasCollaborationTools: collaborationManager !== null,
-                ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
-                goalEnabled: false,
-                ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
-                researchProfile: options.researchProfile,
-                workflowId: workflow.id,
-                ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
-              }),
+              append: appendClaudeAgentProgressGuidance(
+                createResearchSystemPrompt({
+                  hasTools: mcpTools.length > 0,
+                  hasMemoryTools: hasTool(options.toolRegistry, "memory_search"),
+                  hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
+                  hasReportTools: hasTool(options.toolRegistry, "report_list"),
+                  hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
+                  hasCollaborationTools: collaborationManager !== null,
+                  ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
+                  goalEnabled: false,
+                  ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
+                  researchProfile: options.researchProfile,
+                  workflowId: workflow.id,
+                  ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
+                }),
+              ),
             },
             includePartialMessages: true,
             forwardSubagentText: true,
@@ -311,9 +313,9 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
         for await (const message of stream) {
           sessionId = message.session_id || sessionId;
           if (message.type === "assistant") {
-            const text = assistantMessageText(message);
-            if (text) assistantText.push(text);
-            await emitAssistantMessage(input.eventSink, message, text, options.agentIdentity);
+            const output = projectClaudeAgentAssistantOutput(message, options.model, options.agentIdentity);
+            if (output) assistantText.push(output.text);
+            await emitAssistantMessage(input.eventSink, output);
           } else if (message.type === "result") {
             result = message;
             finishInput();
@@ -450,31 +452,57 @@ function collaborationSystemGuidance(config: ResearchCollaborationConfig): strin
   ].join(" ");
 }
 
-function assistantMessageText(message: SDKAssistantMessage): string {
-  return message.message.content
-    .flatMap((block) => block.type === "text" ? [block.text] : [])
-    .join("");
+export function appendClaudeAgentProgressGuidance(systemPrompt: string): string {
+  return [
+    systemPrompt,
+    "Claude Agent SDK does not expose an OpenAI-style commentary channel. Emit the required concise progress updates as ordinary assistant text before initial tool work and whenever evidence materially changes the plan. Do not leave all user-visible progress inside extended thinking, and do not reveal private chain-of-thought; summarize only the current action, rationale, and material result.",
+  ].join("\n");
 }
 
-async function emitAssistantMessage(
-  sink: ResearchLiveEventSink | undefined,
+export interface ClaudeAgentAssistantOutput {
+  text: string;
+  payload: Record<string, unknown>;
+}
+
+export function projectClaudeAgentAssistantOutput(
   message: SDKAssistantMessage,
-  text: string,
+  model: string,
   identity?: { id: string; path: string; parentId: string },
-): Promise<void> {
-  if (!sink || !text) return;
-  await safeEmit(sink, {
-    schemaVersion: 1,
-    kind: "model.output",
-    timestamp: nowIso(),
+): ClaudeAgentAssistantOutput | undefined {
+  const text = message.message.content
+    .flatMap((block) => block.type === "text" ? [block.text] : [])
+    .join("");
+  if (!text) return undefined;
+  const responseId = message.request_id ?? message.uuid;
+  return {
+    text,
     payload: {
       agentId: identity?.id ?? (message.parent_tool_use_id ? message.parent_tool_use_id : "root"),
       agentPath: identity?.path ?? (message.parent_tool_use_id ? `/root/${message.parent_tool_use_id}` : "/root"),
       parentAgentId: identity?.parentId ?? (message.parent_tool_use_id ? "root" : ""),
       phase: "completed",
       eventType: "text_end",
+      messagePhase: message.message.stop_reason === "end_turn" ? "final_answer" : "commentary",
+      responseId,
+      itemId: `claude-text:${message.uuid}`,
+      provider: "anthropic",
+      model,
+      api: "claude-agent-sdk",
       text,
     },
+  };
+}
+
+async function emitAssistantMessage(
+  sink: ResearchLiveEventSink | undefined,
+  output: ClaudeAgentAssistantOutput | undefined,
+): Promise<void> {
+  if (!sink || !output) return;
+  await safeEmit(sink, {
+    schemaVersion: 1,
+    kind: "model.output",
+    timestamp: nowIso(),
+    payload: output.payload,
   });
 }
 

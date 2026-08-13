@@ -44,6 +44,7 @@
 
 ### Fixed
 
+- Surfaced Claude Agent SDK progress text as phased live commentary, with Claude-specific instructions to emit concise ordinary-text updates without exposing extended thinking.
 - Repository search now uses Git's native working-tree search path for Git repositories and enforces cooperative cancellation, elapsed-time, and file-traversal bounds for fallbacks, preventing low-match searches in large multi-repository workspaces from running indefinitely.
 - Claude Agent SDK runs now receive bounded, redacted governed-tool output as readable model content instead of status-only audit metadata, restoring evidence access for Anthropic lead and breakout agents.
 - Anthropic re-authentication now clears an existing Claude CLI session before starting an explicit Claude.ai subscription login, preventing the action from silently retaining the previous authentication.
