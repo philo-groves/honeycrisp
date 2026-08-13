@@ -145,6 +145,32 @@ test("MCP discovery maps allowlisted tools and resources into executable researc
   assert.equal(resourceResult.result.output.output.text, "resource parser note");
 });
 
+test("MCP capability families are discovered concurrently", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const discover = async (value) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    active -= 1;
+    return value;
+  };
+  const client = {
+    listTools: () => discover([]),
+    listResources: () => discover([]),
+    listResourceTemplates: () => discover([]),
+    async callTool() {
+      return {};
+    },
+    async readResource() {
+      return {};
+    },
+  };
+
+  await createMcpResearchTools({ client, allowedServers: [] });
+
+  assert.equal(maxActive, 3);
+});
 test("MCP discovery denylist defaults to no servers and execution reports timeouts", async () => {
   const deniedClient = {
     async listTools() {

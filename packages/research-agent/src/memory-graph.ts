@@ -190,6 +190,10 @@ interface LocatedMemoryNode {
   node: MemoryNode;
 }
 
+const MEMORY_QUERY_BATCH_SIZE = 400;
+const MEMORY_SEARCH_CANDIDATE_LIMIT = 100;
+const MEMORY_SEARCH_PAGE_SIZE = 128;
+
 interface ActiveMemoryCatalog {
   memory: ResearchProfileMemory;
   hash: string;
@@ -523,41 +527,114 @@ export class MemoryGraphStore {
   }
 
   private getFromDatabase(database: DatabaseSync, id: string): MemoryNode | null {
-    const row = database.prepare("SELECT * FROM memory_nodes WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    const node: Omit<MemoryNode, "provenance"> = {
-      id: text(row.id),
-      sessionIds: this.strings(database, "SELECT session_id AS value FROM memory_node_sessions WHERE node_id = ? ORDER BY session_id", id),
-      workspaces: (database
-        .prepare("SELECT workspace_id, workspace_name FROM memory_node_workspaces WHERE node_id = ? ORDER BY workspace_name, workspace_id")
-        .all(id) as Array<{ workspace_id: unknown; workspace_name: unknown }>).map((membership) => ({
+    return this.getManyFromDatabase(database, [id])[0] ?? null;
+  }
+
+  private getManyFromDatabase(database: DatabaseSync, ids: readonly string[]): MemoryNode[] {
+    const orderedIds = uniqueInOrder(ids.filter(Boolean));
+    if (orderedIds.length === 0) return [];
+    const rows = queryInChunks<Record<string, unknown>>(
+      database,
+      orderedIds,
+      (placeholders) => `SELECT * FROM memory_nodes WHERE id IN (${placeholders})`,
+    );
+    const rowsById = new Map(rows.map((row) => [text(row.id), row]));
+    const sessionIds = groupedStrings(queryInChunks<Record<string, unknown>>(
+      database,
+      orderedIds,
+      (placeholders) =>
+        `SELECT node_id, session_id AS value FROM memory_node_sessions WHERE node_id IN (${placeholders}) ORDER BY session_id`,
+    ));
+    const workspaces = groupedRows(queryInChunks<Record<string, unknown>>(
+      database,
+      orderedIds,
+      (placeholders) =>
+        `SELECT node_id, workspace_id, workspace_name FROM memory_node_workspaces WHERE node_id IN (${placeholders}) ORDER BY workspace_name, workspace_id`,
+    ));
+    const assetIds = groupedStrings(queryInChunks<Record<string, unknown>>(
+      database,
+      orderedIds,
+      (placeholders) =>
+        `SELECT node_id, asset_id AS value FROM memory_node_assets WHERE node_id IN (${placeholders}) ORDER BY asset_id`,
+    ));
+    const tags = groupedStrings(queryInChunks<Record<string, unknown>>(
+      database,
+      orderedIds,
+      (placeholders) =>
+        `SELECT node_id, tag AS value FROM memory_node_tags WHERE node_id IN (${placeholders}) ORDER BY tag`,
+    ));
+    const evidence = groupedRows(queryInChunks<Record<string, unknown>>(
+      database,
+      orderedIds,
+      (placeholders) =>
+        `SELECT * FROM memory_evidence_refs WHERE node_id IN (${placeholders}) ORDER BY created_at, id`,
+    ));
+    const validations = new Map(
+      queryInChunks<Record<string, unknown>>(
+        database,
+        orderedIds,
+        (placeholders) => `
+          SELECT validation.*
+          FROM memory_node_catalog_validations validation
+          JOIN memory_nodes node
+            ON node.id = validation.node_id
+           AND node.revision = validation.node_revision
+           AND node.catalog_hash = validation.catalog_hash
+          WHERE validation.node_id IN (${placeholders})`,
+      ).map((row) => [text(row.node_id), row]),
+    );
+    const catalogHashes = unique(rows.flatMap((row) => {
+      const hash = nullableText(row.catalog_hash);
+      return hash ? [hash] : [];
+    }));
+    const snapshots = new Map(
+      queryInChunks<Record<string, unknown>>(
+        database,
+        catalogHashes,
+        (placeholders) =>
+          `SELECT catalog_hash, schema_version, catalog_json FROM memory_catalog_snapshots WHERE catalog_hash IN (${placeholders})`,
+      ).map((row) => [text(row.catalog_hash), row]),
+    );
+
+    return orderedIds.flatMap((id) => {
+      const row = rowsById.get(id);
+      if (!row) return [];
+      const node: Omit<MemoryNode, "provenance"> = {
+        id,
+        sessionIds: sessionIds.get(id) ?? [],
+        workspaces: (workspaces.get(id) ?? []).map((membership) => ({
           id: text(membership.workspace_id),
           name: text(membership.workspace_name),
         })),
-      subjectId: text(row.subject_id),
-      subjectName: text(row.subject_name),
-      type: text(row.type),
-      title: text(row.title),
-      summary: text(row.summary),
-      body: text(row.body),
-      status: text(row.status),
-      confidence: number(row.confidence),
-      assetIds: this.strings(database, "SELECT asset_id AS value FROM memory_node_assets WHERE node_id = ? ORDER BY asset_id", id),
-      tags: this.strings(database, "SELECT tag AS value FROM memory_node_tags WHERE node_id = ? ORDER BY tag", id),
-      attributes: jsonObject(row.attributes_json),
-      evidence: (database.prepare("SELECT * FROM memory_evidence_refs WHERE node_id = ? ORDER BY created_at, id").all(id) as Record<string, unknown>[]).map(
-        evidenceFromRow,
-      ),
-      createdAt: text(row.created_at),
-      updatedAt: text(row.updated_at),
-      revision: number(row.revision),
-    };
-    return {
-      ...node,
-      provenance: readMemoryNodeProvenance(database, node, nullableText(row.catalog_hash), this.catalog),
-    };
+        subjectId: text(row.subject_id),
+        subjectName: text(row.subject_name),
+        type: text(row.type),
+        title: text(row.title),
+        summary: text(row.summary),
+        body: text(row.body),
+        status: text(row.status),
+        confidence: number(row.confidence),
+        assetIds: assetIds.get(id) ?? [],
+        tags: tags.get(id) ?? [],
+        attributes: jsonObject(row.attributes_json),
+        evidence: (evidence.get(id) ?? []).map(evidenceFromRow),
+        createdAt: text(row.created_at),
+        updatedAt: text(row.updated_at),
+        revision: number(row.revision),
+      };
+      const catalogHash = nullableText(row.catalog_hash);
+      return [{
+        ...node,
+        provenance: memoryNodeProvenanceFromRows(
+          node,
+          catalogHash,
+          this.catalog,
+          catalogHash ? snapshots.get(catalogHash) : undefined,
+          validations.get(id),
+        ),
+      }];
+    });
   }
-
   public search(input: SearchMemoryNodesInput = {}): MemoryNode[] {
     const normalizedInput = input.types?.length
       ? {
@@ -637,16 +714,26 @@ export class MemoryGraphStore {
       clauses.push("EXISTS (SELECT 1 FROM memory_node_tags t WHERE t.node_id = n.id AND t.tag = ?)");
       params.push(normalizeTag(tag));
     }
-    const rows = binding.database
-      .prepare(`SELECT n.id FROM memory_nodes n ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY n.updated_at DESC, n.id`)
-      .all(...params) as { id?: unknown }[];
-    return rows
-      .flatMap((row) => {
-        if (typeof row.id !== "string") return [];
-        const node = this.getFromDatabase(binding.database, row.id);
-        return node && nodeCanParticipateInActiveCatalog(node, this.catalog) ? [node] : [];
-      })
-      .slice(0, 100);
+    const sql = `SELECT n.id FROM memory_nodes n ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY n.updated_at DESC, n.id LIMIT ? OFFSET ?`;
+    const nodes: MemoryNode[] = [];
+    let offset = 0;
+    while (nodes.length < MEMORY_SEARCH_CANDIDATE_LIMIT) {
+      const rows = binding.database
+        .prepare(sql)
+        .all(...params, MEMORY_SEARCH_PAGE_SIZE, offset) as { id?: unknown }[];
+      if (rows.length === 0) break;
+      const page = this.getManyFromDatabase(
+        binding.database,
+        rows.flatMap((row) => typeof row.id === "string" ? [row.id] : []),
+      );
+      for (const node of page) {
+        if (nodeCanParticipateInActiveCatalog(node, this.catalog)) nodes.push(node);
+        if (nodes.length >= MEMORY_SEARCH_CANDIDATE_LIMIT) break;
+      }
+      offset += rows.length;
+      if (rows.length < MEMORY_SEARCH_PAGE_SIZE) break;
+    }
+    return nodes;
   }
 
   public link(fromId: string, toId: string, relation: string, note = ""): MemoryEdge {
@@ -676,31 +763,46 @@ export class MemoryGraphStore {
   }
 
   public listEdges(nodeId?: string): MemoryEdge[] {
-    const visibleIds = this.visibleNodeIds(this.local);
-    if (nodeId) {
-      const located = this.locate(nodeId);
-      if (!located) return [];
-      return (this.local.database.prepare("SELECT * FROM memory_edges WHERE from_id = ? OR to_id = ? ORDER BY updated_at DESC").all(nodeId, nodeId) as Record<string, unknown>[])
-        .map(edgeFromRow)
-        .filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
-    }
-    return (this.local.database.prepare("SELECT * FROM memory_edges ORDER BY updated_at DESC").all() as Record<string, unknown>[])
-      .map(edgeFromRow)
-      .filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
+    const rows = nodeId
+      ? this.local.database
+          .prepare("SELECT * FROM memory_edges WHERE from_id = ? OR to_id = ? ORDER BY updated_at DESC")
+          .all(nodeId, nodeId) as Record<string, unknown>[]
+      : this.local.database
+          .prepare("SELECT * FROM memory_edges ORDER BY updated_at DESC")
+          .all() as Record<string, unknown>[];
+    return this.visibleEdges(rows);
   }
 
-  private visibleNodeIds(binding: MemoryDatabaseBinding): Set<string> {
-    const visibility = visibilityClause(this.local.context);
-    const rows = binding.database
-      .prepare(`SELECT n.id FROM memory_nodes n WHERE ${visibility.sql}`)
-      .all(...visibility.params) as Array<{ id?: unknown }>;
-    return new Set(rows.flatMap((row) => {
-      if (typeof row.id !== "string") return [];
-      const node = this.getFromDatabase(binding.database, row.id);
-      return node && nodeCanParticipateInActiveCatalog(node, this.catalog) ? [node.id] : [];
-    }));
+  public listEdgesForNodes(nodeIds: readonly string[]): MemoryEdge[] {
+    const ids = unique(nodeIds.filter(Boolean));
+    if (ids.length === 0) return [];
+    const rows = queryInChunks<Record<string, unknown>>(
+      this.local.database,
+      ids,
+      (placeholders) =>
+        `SELECT * FROM memory_edges WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`,
+      2,
+    );
+    const uniqueRows = new Map(rows.map((row) => [
+      `${text(row.from_id)}\0${text(row.to_id)}\0${text(row.relation)}`,
+      row,
+    ]));
+    return this.visibleEdges([...uniqueRows.values()])
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  private visibleEdges(rows: readonly Record<string, unknown>[]): MemoryEdge[] {
+    const edges = rows.map(edgeFromRow);
+    const endpointIds = unique(edges.flatMap((edge) => [edge.fromId, edge.toId]));
+    const visibleIds = new Set(
+      this.getManyFromDatabase(this.local.database, endpointIds)
+        .filter((node) =>
+          nodeIsVisible(node, this.local.context)
+          && nodeCanParticipateInActiveCatalog(node, this.catalog))
+        .map((node) => node.id),
+    );
+    return edges.filter((edge) => visibleIds.has(edge.fromId) && visibleIds.has(edge.toId));
+  }
   private locate(id: string): LocatedMemoryNode | null {
     const node = this.getFromDatabase(this.local.database, id);
     if (node && nodeIsVisible(node, this.local.context)) return { binding: this.local, node };
@@ -1313,9 +1415,7 @@ export class MemoryGraphStore {
     }
   }
 
-  private strings(database: DatabaseSync, sql: string, value: string): string[] {
-    return (database.prepare(sql).all(value) as { value?: unknown }[]).flatMap((row) => (typeof row.value === "string" ? [row.value] : []));
-  }
+
 }
 
 function createActiveMemoryCatalog(
@@ -1559,11 +1659,12 @@ function writeMemoryNodeValidation(
     );
 }
 
-function readMemoryNodeProvenance(
-  database: DatabaseSync,
+function memoryNodeProvenanceFromRows(
   node: Omit<MemoryNode, "provenance">,
   catalogHash: string | null,
   activeCatalog: ActiveMemoryCatalog,
+  snapshot: Record<string, unknown> | undefined,
+  row: Record<string, unknown> | undefined,
 ): MemoryNodeProvenance {
   if (catalogHash === null) {
     return {
@@ -1574,9 +1675,6 @@ function readMemoryNodeProvenance(
     };
   }
   const isExactActiveCatalog = catalogHash === activeCatalog.hash;
-  const snapshot = database
-    .prepare("SELECT schema_version, catalog_json FROM memory_catalog_snapshots WHERE catalog_hash = ?")
-    .get(catalogHash) as { schema_version?: unknown; catalog_json?: unknown } | undefined;
   const snapshotJson = typeof snapshot?.catalog_json === "string" ? snapshot.catalog_json : undefined;
   const snapshotIsValid = snapshot?.schema_version === 1
     && snapshotJson !== undefined
@@ -1587,18 +1685,9 @@ function readMemoryNodeProvenance(
   const isActiveCatalog = isExactActiveCatalog
     || (sourceMemory !== undefined
       && memoryNodeCatalogsAreCompatible(node, sourceMemory, activeCatalog.memory));
-  const row = snapshotIsValid
-    ? database
-        .prepare(
-          `SELECT node_revision, catalog_hash, node_content_hash, validation_kind,
-                  research_profile_hash, research_profile_id, research_profile_version, validated_at
-           FROM memory_node_catalog_validations
-           WHERE node_id = ? AND node_revision = ? AND catalog_hash = ?`,
-        )
-        .get(node.id, node.revision, catalogHash) as Record<string, unknown> | undefined
-    : undefined;
   if (
-    !row
+    !snapshotIsValid
+    || !row
     || row.node_content_hash !== memoryNodeValidationHash(node)
     || !isMemoryNodeValidationKind(row.validation_kind)
   ) {
@@ -1638,6 +1727,41 @@ function readMemoryNodeProvenance(
       };
 }
 
+function queryInChunks<T extends Record<string, unknown>>(
+  database: DatabaseSync,
+  values: readonly string[],
+  sql: (placeholders: string) => string,
+  parameterRepeats = 1,
+): T[] {
+  if (values.length === 0) return [];
+  const rows: T[] = [];
+  const chunkSize = Math.max(1, Math.floor(MEMORY_QUERY_BATCH_SIZE / parameterRepeats));
+  for (let offset = 0; offset < values.length; offset += chunkSize) {
+    const chunk = values.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map(() => "?").join(",");
+    const params = Array.from({ length: parameterRepeats }, () => chunk).flat();
+    rows.push(...database.prepare(sql(placeholders)).all(...params) as T[]);
+  }
+  return rows;
+}
+
+function groupedRows(rows: readonly Record<string, unknown>[]): Map<string, Record<string, unknown>[]> {
+  const grouped = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    const nodeId = text(row.node_id);
+    const values = grouped.get(nodeId) ?? [];
+    values.push(row);
+    grouped.set(nodeId, values);
+  }
+  return grouped;
+}
+
+function groupedStrings(rows: readonly Record<string, unknown>[]): Map<string, string[]> {
+  return new Map([...groupedRows(rows)].map(([nodeId, values]) => [
+    nodeId,
+    values.flatMap((row) => typeof row.value === "string" ? [row.value] : []),
+  ]));
+}
 function memoryNodeValidationHash(node: Omit<MemoryNode, "provenance"> | MemoryNode): string {
   return createHash("sha256")
     .update(MEMORY_NODE_VALIDATION_HASH_DOMAIN)
@@ -2045,6 +2169,7 @@ function tableHasColumn(database: DatabaseSync, table: string, column: string): 
   return (database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>)
     .some((row) => row.name === column);
 }
+function uniqueInOrder(values: readonly string[]): string[] { return [...new Set(values.map((value) => value.trim()).filter(Boolean))]; }
 function unique(values: readonly string[]): string[] { return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort(); }
 function mergeSessionMemberships(existing: readonly string[], sessionId: string | undefined): string[] {
   return unique([...existing, ...(sessionId ? [sessionId] : [])]);

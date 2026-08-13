@@ -24,6 +24,15 @@ test("models list exposes the installed Pi catalog as JSON", () => {
   );
 });
 
+test("top-level help uses the lightweight dispatcher", async () => {
+  const source = await readFile(cliPath, "utf8");
+  const result = runTopCli(["--help"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Usage: honeycrisp/);
+  assert.doesNotMatch(source, /@honeycrisp\/research-agent/);
+  assert.match(source, /import\("\.\/runtime-cli\.js"\)/);
+});
 test("main CLI defaults to real mode and preflights auth", async () => {
   const authFile = await createEmptyAuthFilePath();
   const result = runTopCli(["-p", "Goal: Check real-mode preflight"], {
@@ -46,6 +55,44 @@ test("real cybersecurity runs require a recorded authorization boundary", async 
   assert.match(result.stderr, /Cybersecurity research requires a recorded authorization boundary/);
 });
 
+test("cybersecurity preflight rejects before MCP subprocess discovery", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-early-preflight-"));
+  const mcpConfigPath = join(workspaceRoot, "mcp.json");
+  try {
+    await writeFile(
+      mcpConfigPath,
+      JSON.stringify({
+        allowedServers: ["broken"],
+        servers: {
+          broken: { command: "definitely-not-a-real-honeycrisp-command" },
+        },
+      }),
+      "utf8",
+    );
+    const result = runTopCli([
+      "--provider",
+      "anthropic",
+      "--workspace-root",
+      workspaceRoot,
+      "--mcp-config",
+      mcpConfigPath,
+      "--allow-mcp-server",
+      "broken",
+      "-p",
+      "Inspect the authorized target.",
+    ], {
+      HONEYCRISP_AUTH_FILE: authFile,
+      ANTHROPIC_API_KEY: "test-only-key",
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Cybersecurity research requires a recorded authorization boundary/);
+    assert.doesNotMatch(result.stderr, /MCP discovery failed|ENOENT/);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
 test("Anthropic cybersecurity runs require the host-recorded CVP risk acknowledgement", async () => {
   const authFile = await createEmptyAuthFilePath();
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-anthropic-cvp-"));
@@ -717,6 +764,7 @@ test("tools config CLI persists skill and MCP preferences used by tools list", a
     assert.deepEqual(payload.skills.selectedIds, ["parser-cli"]);
     assert.equal(payload.mcp.status, "configured");
     assert.deepEqual(payload.mcp.allowedServers, ["fixture"]);
+    assert.deepEqual(payload.mcp.deniedConfiguredServers, ["denied"]);
     assert.ok(
       payload.tools.some((tool) => tool.name === "mcp.fixture.echo_search"),
     );
@@ -841,8 +889,9 @@ test("tools CLI discovers configured live MCP servers", async () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(payload.mcp.status, "configured");
-    assert.deepEqual(payload.mcp.configuredServers, ["fixture"]);
+    assert.deepEqual(payload.mcp.configuredServers, ["fixture", "denied"]);
     assert.deepEqual(payload.mcp.allowedServers, ["fixture"]);
+    assert.deepEqual(payload.mcp.deniedConfiguredServers, ["denied"]);
     assert.ok(
       payload.tools.some((tool) => tool.name === "mcp.fixture.echo_search"),
     );
@@ -1054,6 +1103,9 @@ async function createCliMcpFixture() {
         fixture: {
           command: process.execPath,
           args: [serverPath],
+        },
+        denied: {
+          command: "definitely-not-a-real-honeycrisp-command",
         },
       },
     }),

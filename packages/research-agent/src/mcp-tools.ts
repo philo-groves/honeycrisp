@@ -88,7 +88,11 @@ export async function createMcpResearchTools(
   const executableTools: ResearchExecutableTool[] = [];
   const resourceTemplates: ResearchMcpResourceTemplateDescription[] = [];
 
-  const mcpTools = await options.client.listTools();
+  const [mcpTools, resources, templates] = await Promise.all([
+    options.client.listTools(),
+    options.client.listResources?.() ?? Promise.resolve([]),
+    options.client.listResourceTemplates?.() ?? Promise.resolve([]),
+  ]);
   for (const mcpTool of mcpTools) {
     if (!allowedServers.has(mcpTool.serverName)) {
       deniedCapabilities.push({
@@ -103,8 +107,7 @@ export async function createMcpResearchTools(
     executableTools.push(createMcpExecutableTool(mcpTool, options.client, timeoutMs));
   }
 
-  if (options.client.listResources && options.client.readResource) {
-    const resources = await options.client.listResources();
+  if (options.client.readResource) {
     for (const resource of resources) {
       if (!allowedServers.has(resource.serverName)) {
         deniedCapabilities.push({
@@ -123,7 +126,6 @@ export async function createMcpResearchTools(
   }
 
   if (options.client.listResourceTemplates) {
-    const templates = await options.client.listResourceTemplates();
     for (const template of templates) {
       if (!allowedServers.has(template.serverName)) {
         deniedCapabilities.push({

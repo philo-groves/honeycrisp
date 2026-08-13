@@ -2048,10 +2048,16 @@ test("Pi Agent executor streams live thought and phased message events", async (
 
   assert.equal(result.agentRun.status, "complete");
   assert.ok(thoughtEvents.length >= 2);
+  const thoughtDelta = thoughtEvents.find((event) => event.payload.phase === "delta");
+  assert.equal(thoughtDelta.payload.delta, "Inspect parser entrypoints first.");
+  assert.equal("text" in thoughtDelta.payload, false);
   assert.equal(thoughtEvents.at(-1).payload.phase, "completed");
   assert.equal(thoughtEvents.at(-1).payload.text, "Inspect parser entrypoints first.");
+  const outputDelta = outputEvents.find((event) => event.payload.phase === "delta");
+  assert.equal(outputDelta.payload.delta, "I am checking parser entrypoints before choosing the next step.");
+  assert.equal("text" in outputDelta.payload, false);
   assert.deepEqual(
-    outputEvents.map((event) => ({
+    outputEvents.filter((event) => event.payload.phase === "completed").map((event) => ({
       itemId: event.payload.itemId,
       messagePhase: event.payload.messagePhase,
       text: event.payload.text,
@@ -2398,6 +2404,12 @@ function createThoughtStreamingModels() {
             contentIndex: 0,
             content: "Inspect parser entrypoints first.",
             partial: thinking,
+          };
+          yield {
+            type: "text_delta",
+            contentIndex: 1,
+            delta: "I am checking parser entrypoints before choosing the next step.",
+            partial: finalMessage,
           };
           yield {
             type: "text_end",

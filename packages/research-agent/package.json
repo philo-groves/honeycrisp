@@ -13,6 +13,14 @@
     "./workspace-tools": {
       "types": "./dist/workspace-tools.d.ts",
       "import": "./dist/workspace-tools.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js"
+    },
+    "./research-profile": {
+      "types": "./dist/research-profile.d.ts",
+      "import": "./dist/research-profile.js"
     }
   },
   "files": [

@@ -169,14 +169,16 @@ export function compileMemoryModelContext(
   const current = store.getContext();
   for (const node of store.search({ scope: "workspace", limit: 100 })) nodes.set(node.id, node);
   for (const node of store.search({ scope: "session", limit: 100 })) nodes.set(node.id, node);
-  for (const term of queryTerms(prompt).slice(0, 12)) {
-    for (const node of store.search({ query: term, scope: "subject", limit: 20 })) {
+  const terms = queryTerms(prompt).slice(0, 12);
+  if (terms.length > 0) {
+    for (const node of store.search({ query: terms.join(" "), scope: "subject", limit: 100 })) {
       nodes.set(node.id, node);
     }
   }
+  const candidateNodes = [...nodes.values()];
   return selectMemoryModelContext({
-    nodes: [...nodes.values()],
-    edges: store.listEdges(),
+    nodes: candidateNodes,
+    edges: store.listEdgesForNodes(candidateNodes.map((node) => node.id)),
     prompt,
     ...(current.sessionId ? { sessionId: current.sessionId } : {}),
     workspaceId: current.workspaceId,

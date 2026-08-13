@@ -2333,10 +2333,7 @@ function agentLiveEvent(
           provider: update.partial.provider,
           model: update.partial.model,
           api: update.partial.api,
-          text:
-            update.type === "thinking_end"
-              ? update.content
-              : thinking?.thinking ?? "",
+          ...(update.type === "thinking_end" ? { text: update.content } : {}),
           ...(update.type === "thinking_delta" ? { delta: update.delta } : {}),
           ...(thinking?.redacted ? { redacted: true } : {}),
         },
@@ -2373,12 +2370,7 @@ function agentLiveEvent(
           provider: update.partial.provider,
           model: update.partial.model,
           api: update.partial.api,
-          text:
-            update.type === "text_end"
-              ? update.content
-              : item?.type === "text"
-                ? item.text
-                : "",
+          ...(update.type === "text_end" ? { text: update.content } : {}),
           ...(update.type === "text_delta" ? { delta: update.delta } : {}),
           ...(signature.messagePhase ? { messagePhase: signature.messagePhase } : {}),
         },

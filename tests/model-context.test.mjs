@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   compileMemoryModelContext,
+  DEFAULT_SECURITY_RESEARCH_PROFILE,
   createAvailableToolContext,
   createModelWorkspaceContext,
   createResearchWorkspaceContext,
@@ -166,6 +167,35 @@ test("available tool capture summarizes actual tools without duplicating schemas
   }]);
 });
 
+test("memory context combines prompt terms and loads only candidate edges", () => {
+  const node = memoryNode({ id: "mem_candidate", title: "Parser allocation boundary" });
+  const searches = [];
+  let edgeNodeIds;
+  const store = {
+    getProfileMemory() {
+      return DEFAULT_SECURITY_RESEARCH_PROFILE.memory;
+    },
+    getContext() {
+      return { sessionId: "run_zftp", workspaceId: "workspace_zsh" };
+    },
+    search(input) {
+      searches.push(input);
+      return [node];
+    },
+    listEdgesForNodes(nodeIds) {
+      edgeNodeIds = nodeIds;
+      return [];
+    },
+  };
+
+  const context = compileMemoryModelContext(store, "Inspect the parser allocation boundary.");
+  const subjectSearches = searches.filter((input) => input.scope === "subject");
+
+  assert.equal(subjectSearches.length, 1);
+  assert.ok(subjectSearches[0].query.includes(" "));
+  assert.deepEqual(edgeNodeIds, [node.id]);
+  assert.deepEqual(context.map((candidate) => candidate.id), [node.id]);
+});
 test("memory context retrieves an older relevant node beyond the recent context window", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-model-context-old-"));
   const store = new MemoryGraphStore({ workspaceRoot });

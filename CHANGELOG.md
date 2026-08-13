@@ -16,6 +16,8 @@
 
 ### Changed
 
+- Bounded and batch-hydrated memory recall candidates before context ranking, combined prompt-term recall into one query, and restricted relationship loading to candidate nodes.
+- Split lightweight CLI commands from the full research runtime, moved cybersecurity rejection checks ahead of database and tool initialization, and limited concurrent MCP discovery to allowlisted servers.
 - Research runs now honor host-supplied per-provider Subscription or API key preferences across lead agents, collaborator agents, and title generation. Explicit subscription usage-cap and API-credit exhaustion errors switch once to an available alternate source without falling back for policy, authentication, or ordinary transient errors.
 - Extended the Anthropic catalog with the access-restricted `claude-mythos-5` model for official Claude Agent SDK and Claude CLI routes; host frontends may gate it behind an explicit opt-in.
 - Collaboration routing now permits multiple distinct models from one provider while rejecting duplicate provider/model entries.
@@ -48,6 +50,7 @@
 
 ### Fixed
 
+- Made live model deltas incremental instead of repeating accumulated text, and serialized CLI event-stream writes with stdout backpressure.
 - Multi-repository search now accepts an explicit configured root, uses a 30-second default bound, and returns clearly marked partial results at the deadline instead of discarding prior matches; raw search utilities use a shorter default timeout and report exit status 1 as a no-match outcome.
 - Model streams that stall or end after reasoning without actionable output now retry automatically before exposing uncommitted reasoning, while explicit subagent routes accept either separate provider/model fields or a validated provider/model route.
 - Missing host utilities now produce actionable platform-aware diagnostics without encouraging repeated commands or automatic trust of repository-controlled runtime configuration.

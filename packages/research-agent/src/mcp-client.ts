@@ -94,31 +94,22 @@ class StdioResearchMcpClient implements ConfiguredResearchMcpClient {
   }
 
   async listTools(): Promise<readonly ResearchMcpToolDescription[]> {
-    const tools: ResearchMcpToolDescription[] = [];
-    for (const [serverName, server] of this.servers) {
+    const discovered = await Promise.all([...this.servers].map(async ([serverName, server]) => {
       const result = await server.request("tools/list", {});
-      for (const tool of readResultArray(result, "tools")) {
-        if (!isRecord(tool) || typeof tool.name !== "string") {
-          continue;
-        }
-        tools.push({
+      return readResultArray(result, "tools").flatMap((tool) => {
+        if (!isRecord(tool) || typeof tool.name !== "string") return [];
+        return [{
           serverName,
           name: tool.name,
-          ...(typeof tool.description === "string"
-            ? { description: tool.description }
-            : {}),
+          ...(typeof tool.description === "string" ? { description: tool.description } : {}),
           ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
           ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
-          ...(isRecord(tool.annotations)
-            ? { annotations: tool.annotations }
-            : {}),
-        });
-      }
-    }
-
-    return tools;
+          ...(isRecord(tool.annotations) ? { annotations: tool.annotations } : {}),
+        }];
+      });
+    }));
+    return discovered.flat();
   }
-
   async callTool(input: {
     serverName: string;
     toolName: string;
@@ -136,33 +127,22 @@ class StdioResearchMcpClient implements ConfiguredResearchMcpClient {
   }
 
   async listResources(): Promise<readonly ResearchMcpResourceDescription[]> {
-    const resources: ResearchMcpResourceDescription[] = [];
-    for (const [serverName, server] of this.servers) {
+    const discovered = await Promise.all([...this.servers].map(async ([serverName, server]) => {
       const result = await server.requestOptional("resources/list", {});
-      if (!result) {
-        continue;
-      }
-      for (const resource of readResultArray(result, "resources")) {
-        if (!isRecord(resource) || typeof resource.uri !== "string") {
-          continue;
-        }
-        resources.push({
+      if (!result) return [];
+      return readResultArray(result, "resources").flatMap((resource) => {
+        if (!isRecord(resource) || typeof resource.uri !== "string") return [];
+        return [{
           serverName,
           uri: resource.uri,
           ...(typeof resource.name === "string" ? { name: resource.name } : {}),
-          ...(typeof resource.description === "string"
-            ? { description: resource.description }
-            : {}),
-          ...(typeof resource.mimeType === "string"
-            ? { mimeType: resource.mimeType }
-            : {}),
-        });
-      }
-    }
-
-    return resources;
+          ...(typeof resource.description === "string" ? { description: resource.description } : {}),
+          ...(typeof resource.mimeType === "string" ? { mimeType: resource.mimeType } : {}),
+        }];
+      });
+    }));
+    return discovered.flat();
   }
-
   async readResource(input: {
     serverName: string;
     uri: string;
@@ -175,36 +155,23 @@ class StdioResearchMcpClient implements ConfiguredResearchMcpClient {
     );
   }
 
-  async listResourceTemplates(): Promise<
-    readonly ResearchMcpResourceTemplateDescription[]
-  > {
-    const templates: ResearchMcpResourceTemplateDescription[] = [];
-    for (const [serverName, server] of this.servers) {
+  async listResourceTemplates(): Promise<readonly ResearchMcpResourceTemplateDescription[]> {
+    const discovered = await Promise.all([...this.servers].map(async ([serverName, server]) => {
       const result = await server.requestOptional("resources/templates/list", {});
-      if (!result) {
-        continue;
-      }
-      for (const template of readResultArray(result, "resourceTemplates")) {
-        if (!isRecord(template) || typeof template.uriTemplate !== "string") {
-          continue;
-        }
-        templates.push({
+      if (!result) return [];
+      return readResultArray(result, "resourceTemplates").flatMap((template) => {
+        if (!isRecord(template) || typeof template.uriTemplate !== "string") return [];
+        return [{
           serverName,
           uriTemplate: template.uriTemplate,
           ...(typeof template.name === "string" ? { name: template.name } : {}),
-          ...(typeof template.description === "string"
-            ? { description: template.description }
-            : {}),
-          ...(typeof template.mimeType === "string"
-            ? { mimeType: template.mimeType }
-            : {}),
-        });
-      }
-    }
-
-    return templates;
+          ...(typeof template.description === "string" ? { description: template.description } : {}),
+          ...(typeof template.mimeType === "string" ? { mimeType: template.mimeType } : {}),
+        }];
+      });
+    }));
+    return discovered.flat();
   }
-
   async close(): Promise<void> {
     await Promise.all([...this.servers.values()].map((server) => server.close()));
   }
