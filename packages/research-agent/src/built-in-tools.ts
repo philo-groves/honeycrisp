@@ -7,6 +7,7 @@ import {
 import { spawn } from "node:child_process";
 import {
   basename,
+  dirname,
   join,
   relative,
   resolve,
@@ -34,7 +35,7 @@ import type {
 
 const DEFAULT_MAX_RESULTS = 20;
 const DEFAULT_MAX_BYTES = 16_384;
-const DEFAULT_REPOSITORY_SEARCH_TIMEOUT_MS = 10_000;
+const DEFAULT_REPOSITORY_SEARCH_TIMEOUT_MS = 30_000;
 const DEFAULT_REPOSITORY_SEARCH_MAX_VISITED_FILES = 50_000;
 const GIT_SEARCH_CANDIDATE_MULTIPLIER = 4;
 const REPOSITORY_SEARCH_IGNORED_DIRECTORIES = new Set([
@@ -50,6 +51,11 @@ const REPOSITORY_SEARCH_PARAMETERS = {
   required: ["query"],
   properties: {
     query: { type: "string" },
+    root: {
+      type: "string",
+      description:
+        "Optional configured root path or unique root label. Use this to scope searches in multi-repository workspaces.",
+    },
     maxResults: { type: "number" },
   },
 };
@@ -142,7 +148,7 @@ export function createRepositorySearchTool(
     name: "repository.search",
     transportName: "repository_search",
     description:
-      "Search for a case-insensitive literal text phrase under repository and source context paths. Use during inspection to locate concrete files before reading them.",
+      "Search for a case-insensitive literal text phrase under repository and source context paths. In multi-repository workspaces, pass root as a configured path or unique root label to keep searches fast and targeted. Time-limited searches return explicitly marked partial results instead of discarding prior matches.",
     actionClasses: ["search", "inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
@@ -170,12 +176,18 @@ export function createRepositorySearchTool(
           action.input.maxResults,
           options.maxResults ?? DEFAULT_MAX_RESULTS,
         );
-        const roots = await resolveExistingRoots(rootHints);
-        if (roots.length === 0) {
+        const availableRoots = await resolveExistingRoots(rootHints);
+        if (availableRoots.length === 0) {
           throw new Error(
             "repository.search has no readable repository or source context paths.",
           );
         }
+        const requestedRoot = typeof action.input.root === "string"
+          ? action.input.root.trim()
+          : "";
+        const roots = requestedRoot
+          ? selectRepositorySearchRoots(availableRoots, requestedRoot)
+          : availableRoots;
         const maxDurationMs = options.maxDurationMs ?? DEFAULT_REPOSITORY_SEARCH_TIMEOUT_MS;
         const searchState = {
           deadline: Date.now() + maxDurationMs,
@@ -190,24 +202,42 @@ export function createRepositorySearchTool(
           line: number;
           preview: string;
         }[] = [];
+        const attemptedRoots: string[] = [];
+        let timedOut = false;
         for (const root of roots) {
           if (matches.length >= maxResults) {
             break;
           }
-          const rootMatches = await searchRepository(root, query, {
-            maxResults: maxResults - matches.length,
-            maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
-            state: searchState,
-          });
-          matches.push(...rootMatches.map((match) => ({ ...match, root })));
+          attemptedRoots.push(root);
+          try {
+            const rootMatches = await searchRepository(root, query, {
+              maxResults: maxResults - matches.length,
+              maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
+              state: searchState,
+            });
+            matches.push(...rootMatches.map((match) => ({ ...match, root })));
+          } catch (error) {
+            if (!(error instanceof RepositorySearchTimeoutError)) throw error;
+            timedOut = true;
+            break;
+          }
         }
 
         return completeResult(action, startedAt, {
-          summary: `Repository search found ${matches.length} match(es) across ${roots.length} context root(s) for: ${query}`,
+          summary: timedOut
+            ? `Repository search reached its ${maxDurationMs}ms limit and returned ${matches.length} partial match(es). Retry with root set to one of the available root labels.`
+            : `Repository search found ${matches.length} match(es) across ${attemptedRoots.length} context root(s) for: ${query}`,
           output: {
             roots,
+            availableRoots: availableRoots.map((root) => ({
+              label: repositorySearchRootLabel(root),
+              path: root,
+            })),
+            attemptedRoots,
             query,
             matches,
+            partial: timedOut,
+            timedOut,
           },
         });
       });
@@ -648,6 +678,15 @@ interface RepositorySearchState {
   signal?: AbortSignal;
 }
 
+class RepositorySearchTimeoutError extends Error {
+  constructor(maxDurationMs: number) {
+    super(
+      `Repository search timed out after ${maxDurationMs}ms. Narrow the query or select a repository root.`,
+    );
+    this.name = "RepositorySearchTimeoutError";
+  }
+}
+
 async function searchGitRepository(
   root: string,
   query: string,
@@ -769,9 +808,7 @@ function gitGrepCandidatePaths(
       child.kill();
       finish(
         undefined,
-        new Error(
-          `Repository search timed out after ${state.maxDurationMs}ms. Narrow the query or repository roots.`,
-        ),
+        new RepositorySearchTimeoutError(state.maxDurationMs),
       );
     }, remainingMs);
 
@@ -792,10 +829,38 @@ function assertRepositorySearchActive(state: RepositorySearchState): void {
     throw new Error("Repository search was interrupted.");
   }
   if (Date.now() >= state.deadline) {
+    throw new RepositorySearchTimeoutError(state.maxDurationMs);
+  }
+}
+
+function repositorySearchRootLabel(root: string): string {
+  const name = basename(root);
+  return name.toLowerCase() === "default" ? basename(dirname(root)) : name;
+}
+
+function selectRepositorySearchRoots(
+  roots: readonly string[],
+  requestedRoot: string,
+): string[] {
+  const normalizedRequest = requestedRoot.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
+  const matches = roots.filter((root) => {
+    const normalizedRoot = root.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
+    const label = repositorySearchRootLabel(root).toLowerCase();
+    return normalizedRoot === normalizedRequest
+      || label === normalizedRequest
+      || normalizedRoot.endsWith(`/${normalizedRequest}`);
+  });
+  if (matches.length === 1) return matches;
+
+  const labels = roots.map((root) => repositorySearchRootLabel(root)).join(", ");
+  if (matches.length > 1) {
     throw new Error(
-      `Repository search timed out after ${state.maxDurationMs}ms. Narrow the query or repository roots.`,
+      `repository.search root "${requestedRoot}" is ambiguous. Use an exact configured path. Available root labels: ${labels}`,
     );
   }
+  throw new Error(
+    `repository.search root "${requestedRoot}" is not configured. Available root labels: ${labels}`,
+  );
 }
 
 function portableRelativePath(root: string, path: string): string {

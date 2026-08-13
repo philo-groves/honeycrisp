@@ -193,6 +193,66 @@ test("subagent runtime routes heterogeneous room members and enforces room concu
   await active.settle();
 });
 
+test("subagent runtime normalizes exact routes and validates same-provider models", async () => {
+  const requests = [];
+  const manager = new SubagentManager({
+    rootProvider: "openai",
+    rootModel: "gpt-5.6-sol",
+    providerPreferences: [
+      { provider: "openai", model: "gpt-5.6-sol", reasoning: "high", enabled: true },
+      { provider: "anthropic", model: "claude-opus-5", reasoning: "high", enabled: true },
+      { provider: "anthropic", model: "claude-sonnet-5", reasoning: "medium", enabled: true },
+    ],
+    async run(request) {
+      requests.push(request);
+      return resultFor(request, `completed ${request.provider}/${request.model}`);
+    },
+  });
+  const tools = toolsByName(manager, "root");
+
+  await tools.spawn_agent.execute("spawn_composite_route", {
+    task_name: "composite_route",
+    message: "Use an exact compatible route.",
+    fork_turns: "none",
+    provider: "anthropic/claude-opus-5",
+  });
+  await tools.spawn_agent.execute("spawn_separate_route", {
+    task_name: "separate_route",
+    message: "Use separate provider and model fields.",
+    fork_turns: "none",
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+  });
+  await manager.settle();
+
+  assert.deepEqual(
+    requests.map((request) => [request.provider, request.model]),
+    [
+      ["anthropic", "claude-opus-5"],
+      ["anthropic", "claude-sonnet-5"],
+    ],
+  );
+  await assert.rejects(
+    tools.spawn_agent.execute("spawn_disabled_route", {
+      task_name: "disabled_route",
+      message: "This route is not enabled.",
+      fork_turns: "none",
+      provider: "anthropic",
+      model: "claude-haiku-5",
+    }),
+    /not enabled.*Enabled routes/,
+  );
+  await assert.rejects(
+    tools.spawn_agent.execute("spawn_full_history_route", {
+      task_name: "full_history_route",
+      message: "This explicit route cannot inherit all history.",
+      fork_turns: "all",
+      provider: "anthropic/claude-opus-5",
+    }),
+    /Full-history children inherit the parent provider/,
+  );
+});
+
 test("collaboration config decoder allows distinct models per provider and rejects duplicate routes", () => {
   const valid = {
     mode: "adaptive",

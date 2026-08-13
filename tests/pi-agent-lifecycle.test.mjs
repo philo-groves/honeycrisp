@@ -1549,7 +1549,63 @@ test("Pi Agent retries a model stream that produces no response events", async (
   assert.ok(liveEvents.some((event) =>
     event.kind === "agent.event"
     && event.payload.type === "model_retry"
-    && event.payload.errorMessage.includes("produced no content")
+    && event.payload.errorMessage.includes("produced no actionable content")
+  ));
+});
+
+test("Pi Agent retries a model stream that stalls after reasoning only", async () => {
+  let calls = 0;
+  const liveEvents = [];
+  const models = {
+    getModel() {
+      return FAUX_MODEL;
+    },
+    streamSimple(_model, _context, options = {}) {
+      calls += 1;
+      if (calls > 1) return streamFrom(assistant("## Result\nRecovered from a reasoning-only stall."));
+      const reasoning = "DISCARDED_STALLED_REASONING";
+      const started = assistant([], "stop");
+      const partial = {
+        ...started,
+        content: [{ type: "thinking", thinking: reasoning }],
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "start", partial: started };
+          yield { type: "thinking_start", contentIndex: 0, partial };
+          yield { type: "thinking_delta", contentIndex: 0, delta: reasoning, partial };
+          yield { type: "thinking_end", contentIndex: 0, content: reasoning, partial };
+          await new Promise((_resolve, reject) => {
+            options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        },
+      };
+    },
+  };
+  const result = await runResearchAgent({
+    prompt: "Recover if reasoning ends without an actionable response.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models,
+      modelFirstEventTimeoutMs: 10,
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(calls, 2);
+  assert.match(result.agentRun.output.text, /Recovered from a reasoning-only stall/);
+  assert.equal(liveEvents.some((event) =>
+    event.kind === "model.thought"
+    && JSON.stringify(event.payload).includes("DISCARDED_STALLED_REASONING")
+  ), false);
+  assert.ok(liveEvents.some((event) =>
+    event.kind === "agent.event"
+    && event.payload.type === "model_retry"
+    && event.payload.errorMessage.includes("produced no actionable content")
   ));
 });
 

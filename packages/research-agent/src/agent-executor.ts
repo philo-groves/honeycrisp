@@ -120,6 +120,7 @@ function collaborationSystemGuidance(config: ResearchCollaborationConfig): strin
   const enabled = config.providers.filter((provider) => provider.enabled);
   return [
     `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
+    "For an explicit collaborator route, pass provider and model as separate fields with fork_turns set to none or a bounded number. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the parent route.",
     `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations across the session.`,
     "A single delegated worker is a normal subagent: omit room_name and all room metadata. Create a breakout room only when at least two subagents need to communicate, and give those peers the same room_name.",
     "The lead agent is not a breakout-room member. If the lead perspective is needed in a room, spawn a separate subagent on the lead provider/model to represent it; use partial or no inheritance when explicit routing overrides are required.",
@@ -1232,12 +1233,11 @@ function createRetryingStreamFn(
       let safetyRecoveryDisposition: SafetyRecoveryDisposition | undefined;
       for (;;) {
         let contextCompactedForRetry = false;
-        let receivedAnyEvent = false;
         let emittedCommittedContent = false;
         let automaticSafetyRetry = false;
         let retryError: AssistantMessage | null = null;
         let recoveryKind: "transient" | "safety_guardrail" = "transient";
-        let firstEventTimedOut = false;
+        let eventIdleTimedOut = false;
         const bufferedPrelude: AssistantMessageEvent[] = [];
         const flushBufferedPrelude = (): void => {
           for (const buffered of bufferedPrelude) output.push(buffered);
@@ -1259,18 +1259,41 @@ function createRetryingStreamFn(
           });
           const iterator = upstream[Symbol.asyncIterator]();
           for (;;) {
-            const next = receivedAnyEvent || !options.firstEventTimeoutMs
+            const next = emittedCommittedContent || !options.firstEventTimeoutMs
               ? await iterator.next()
               : await nextModelEvent(iterator, options.firstEventTimeoutMs, () => {
-                  firstEventTimedOut = true;
+                  eventIdleTimedOut = true;
                   attemptController.abort();
                 });
-            if (next.done) break;
+            if (next.done) {
+              if (!emittedCommittedContent) {
+                retryError = assistantErrorMessage(
+                  model,
+                  bufferedPrelude.length > 0
+                    ? "Model stream ended after reasoning without actionable output."
+                    : "Model stream ended without actionable output.",
+                );
+              }
+              break;
+            }
             const event = next.value;
-            receivedAnyEvent = true;
             if (!emittedCommittedContent && isUncommittedReasoningEvent(event)) {
               bufferedPrelude.push(event);
               continue;
+            }
+            if (event.type === "done" && !emittedCommittedContent) {
+              if (hasActionableAssistantContent(event.message)) {
+                flushBufferedPrelude();
+                output.push(event);
+                return;
+              }
+              retryError = assistantErrorMessage(
+                model,
+                bufferedPrelude.length > 0
+                  ? "Model stream ended after reasoning without actionable output."
+                  : "Model stream ended without actionable output.",
+              );
+              break;
             }
             if (
               event.type === "error"
@@ -1332,8 +1355,8 @@ function createRetryingStreamFn(
         } catch (error) {
           const message = assistantErrorMessage(
             model,
-            firstEventTimedOut
-              ? `Model stream produced no content for ${options.firstEventTimeoutMs}ms.`
+            eventIdleTimedOut
+              ? `Model stream produced no actionable content for ${options.firstEventTimeoutMs}ms.`
               : error,
           );
           if (
@@ -1372,7 +1395,7 @@ function createRetryingStreamFn(
             retryError = message;
           } else if (
             !emittedCommittedContent
-            && (firstEventTimedOut || isRecoverableAssistantError(message))
+            && (eventIdleTimedOut || isRecoverableAssistantError(message))
           ) {
             retryError = message;
           } else {
@@ -1480,6 +1503,13 @@ function isUncommittedReasoningEvent(event: AssistantMessageEvent): boolean {
     || event.type === "thinking_start"
     || event.type === "thinking_delta"
     || event.type === "thinking_end";
+}
+
+function hasActionableAssistantContent(message: AssistantMessage): boolean {
+  return message.content.some((content) =>
+    content.type !== "thinking"
+    && (content.type !== "text" || content.text.trim().length > 0)
+  );
 }
 
 function waitForSafetyRecoveryMessages(

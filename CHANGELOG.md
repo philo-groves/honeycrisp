@@ -46,6 +46,9 @@
 
 ### Fixed
 
+- Multi-repository search now accepts an explicit configured root, uses a 30-second default bound, and returns clearly marked partial results at the deadline instead of discarding prior matches; raw search utilities use a shorter default timeout and report exit status 1 as a no-match outcome.
+- Model streams that stall or end after reasoning without actionable output now retry automatically before exposing uncommitted reasoning, while explicit subagent routes accept either separate provider/model fields or a validated provider/model route.
+- Missing host utilities now produce actionable platform-aware diagnostics without encouraging repeated commands or automatic trust of repository-controlled runtime configuration.
 - Surfaced Claude Agent SDK progress text as phased live commentary, with Claude-specific instructions to emit concise ordinary-text updates without exposing extended thinking.
 - Repository search now uses Git's native working-tree search path for Git repositories and enforces cooperative cancellation, elapsed-time, and file-traversal bounds for fallbacks, preventing low-match searches in large multi-repository workspaces from running indefinitely.
 - Claude Agent SDK runs now receive bounded, redacted governed-tool output as readable model content instead of status-only audit metadata, restoring evidence access for Anthropic lead and breakout agents.

@@ -441,6 +441,7 @@ function collaborationSystemGuidance(config: ResearchCollaborationConfig): strin
   const enabled = config.providers.filter((provider) => provider.enabled);
   return [
     `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
+    "For an explicit collaborator route, pass provider and model as separate fields with fork_turns set to none or a bounded number. With fork_turns=all, omit provider, model, and reasoning_effort.",
     `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations.`,
     config.independentFirstPass
       ? "Require an independent evidence memo from each member before peer messaging."

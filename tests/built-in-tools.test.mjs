@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
@@ -587,6 +587,83 @@ test("repository search bounds and interrupts non-Git traversal", async () => {
     });
     assert.equal(interrupted.result.status, "error");
     assert.match(interrupted.result.summary, /search was interrupted/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("repository search scopes configured roots and preserves bounded partial results", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-roots-"));
+  const first = join(workspace, "first-repository");
+  const second = join(workspace, "second-repository");
+  await mkdir(first);
+  await mkdir(second);
+  await writeFile(join(first, "first.txt"), "scoped needle\n");
+  await writeFile(join(second, "second.txt"), "scoped needle\n");
+  try {
+    const scopedTool = createRepositorySearchTool({ roots: [first, second] });
+    const scoped = await createResearchToolRegistry([scopedTool]).execute({
+      id: "search_scoped_root",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "scoped needle", root: "second-repository" },
+    });
+    assert.equal(scoped.result.status, "complete");
+    assert.equal(scoped.result.output.matches.length, 1);
+    assert.equal(basename(scoped.result.output.matches[0].root), "second-repository");
+    assert.equal(scoped.result.output.partial, false);
+    assert.deepEqual(
+      scoped.result.output.availableRoots.map((entry) => entry.label),
+      ["first-repository", "second-repository"],
+    );
+
+    const partialTool = createRepositorySearchTool({
+      roots: [first, second],
+      maxDurationMs: 0,
+    });
+    const partial = await createResearchToolRegistry([partialTool]).execute({
+      id: "search_partial_timeout",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "scoped needle" },
+    });
+    assert.equal(partial.result.status, "complete");
+    assert.equal(partial.result.output.partial, true);
+    assert.equal(partial.result.output.timedOut, true);
+    assert.match(partial.result.summary, /partial match/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("shell search treats no matches as complete and reports unavailable utilities clearly", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-search-status-"));
+  await writeFile(join(root, "tracked.txt"), "present text\n");
+  await execFileAsync("git", ["init", "--quiet", root]);
+  await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, authorize: allowShell }),
+    ]);
+    const noMatch = await registry.execute({
+      id: "shell_git_grep_no_match",
+      actionClass: "search",
+      toolName: "shell.run",
+      input: { utility: "git", args: ["-C", root, "grep", "absent text"] },
+    });
+    assert.equal(noMatch.result.status, "complete");
+    assert.equal(noMatch.result.output.exitCode, 1);
+    assert.match(noMatch.result.summary, /no matches/);
+
+    const unavailable = await registry.execute({
+      id: "shell_unavailable_utility",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "honeycrisp-missing-utility-fixture" },
+    });
+    assert.equal(unavailable.result.status, "error");
+    assert.match(unavailable.result.summary, /not available.*PATH/);
+    assert.match(unavailable.result.summary, /Do not repeat/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

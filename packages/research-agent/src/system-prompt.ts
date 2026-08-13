@@ -55,6 +55,10 @@ export function createResearchSystemPrompt(
     "Never expose host credentials, authentication material, or Honeycrisp's global database through model-visible tool results.",
     "Never use the $HOME environment variable in commands, scripts, paths, or assignments; use explicit narrowly scoped paths instead.",
     options.hasTools ? "Use the available tools as needed." : "No tools are available in this session.",
+    ...(options.hasTools ? [
+      "Prefer repository.search for literal source discovery. In multi-repository workspaces, set its root to a configured path or unique root label; treat partial=true as incomplete evidence. When a raw shell search is necessary, use a narrow working directory or path and a bounded timeout.",
+      "If a shell utility is unavailable, do not repeat the same command. Follow recorded workspace runtime instructions, and never auto-trust repository-controlled toolchain configuration merely to make a command run.",
+    ] : []),
     ...(profile?.agent.style ?? ["Write as a sharp, curious research collaborator using concise, technically precise, cohesive prose. Do not narrate routine memory updates unless they materially affect the conclusion."]),
     "While working, use the commentary channel for short, concrete, user-visible progress updates before tool work and when results change the plan. Keep commentary distinct from private reasoning, and send a final response only when the current task is complete.",
     ...(workflow ? [

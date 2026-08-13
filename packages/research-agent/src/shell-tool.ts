@@ -20,6 +20,7 @@ import {
 
 const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_SEARCH_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_CONCURRENCY = 64;
@@ -92,7 +93,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       name: "shell.run",
       transportName: "shell_run",
       description:
-        "Run one host utility with explicit argv. Use it for repository inspection, builds, tests, debugging, and bounded proof work. Utility policy, shell safety authorization, recognized network-intent policy, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
+        "Run one host utility with explicit argv. Use repository.search first for literal discovery; raw search utilities should use a narrow cwd or path and a bounded timeout. Exit status 1 from rg, grep, findstr, or git grep is reported as a successful no-match result. Utility policy, shell safety authorization, recognized network-intent policy, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
       actionClasses: ["search", "inspect", "analyze", "experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],
@@ -114,7 +115,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
         const stdin = readOptionalString(action.input.stdin, "stdin");
         assertNoHomeVariableUsage([cwd, ...args, ...(stdin === undefined ? [] : [stdin])]);
         const timeoutMs = Math.min(
-          positiveInteger(action.input.timeoutMs, DEFAULT_TIMEOUT_MS),
+          positiveInteger(action.input.timeoutMs, defaultUtilityTimeoutMs(utility, args)),
           MAX_TIMEOUT_MS,
         );
         const policy = await loadShellOptions(options.shellOptionsPath);
@@ -552,7 +553,10 @@ async function runUtility(input: {
       clearTimeout(timeout);
       if (forceStop) clearTimeout(forceStop);
       input.signal?.removeEventListener("abort", abort);
-      resolvePromise(errorResult(input.action, input.startedAt, errorMessage(error), {
+      const message = (error as NodeJS.ErrnoException).code === "ENOENT"
+        ? unavailableUtilityMessage(input.utility)
+        : errorMessage(error);
+      resolvePromise(errorResult(input.action, input.startedAt, message, {
         utility: input.utility,
         args: redactShellArguments(input.args),
         cwd: input.cwd,
@@ -577,13 +581,16 @@ async function runUtility(input: {
         authorization: input.authorization,
         ...captured,
       };
-      if (exitCode === 0 && !timedOut && !aborted) {
+      const noMatches = exitCode === 1 && isSearchUtility(input.utility, input.args);
+      if ((exitCode === 0 || noMatches) && !timedOut && !aborted) {
         resolvePromise({
           action: input.action,
           status: "complete",
           startedAt: input.startedAt,
           completedAt: nowIso(),
-          summary: `${input.utility} completed successfully.`,
+          summary: noMatches
+            ? `${input.utility} completed with no matches.`
+            : `${input.utility} completed successfully.`,
           output: resultOutput,
           followUpActions: [],
         });
@@ -600,6 +607,23 @@ async function runUtility(input: {
     if (input.stdin !== undefined) child.stdin.end(input.stdin);
     else child.stdin.end();
   });
+}
+
+function defaultUtilityTimeoutMs(utility: string, args: readonly string[]): number {
+  return isSearchUtility(utility, args) ? DEFAULT_SEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+}
+
+function isSearchUtility(utility: string, args: readonly string[]): boolean {
+  const normalized = utility.toLowerCase();
+  return normalized === "rg"
+    || normalized === "grep"
+    || normalized === "findstr"
+    || (normalized === "git" && args.includes("grep"));
+}
+
+function unavailableUtilityMessage(utility: string): string {
+  const host = process.platform === "win32" ? "Windows host" : "host";
+  return `Shell utility ${utility} is not available on the ${host} PATH. Do not repeat the same command. Follow the workspace's recorded runtime instructions and use WSL only when the workspace explicitly requires it.`;
 }
 
 function createOutputCollector(maxBytes: number): {

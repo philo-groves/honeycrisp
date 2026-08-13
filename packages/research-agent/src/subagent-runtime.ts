@@ -289,7 +289,7 @@ export class SubagentManager {
       agentId,
       "spawn_agent",
       "Spawn agent",
-      "Spawn a bounded subagent. Omit room_name for a single independent worker. Supply one shared room_name only when spawning at least two agents that need a durable breakout-room transcript. The child shares this authorized workspace and tool policy. Prefer independent first passes before messaging peers. fork_turns accepts none, all, or a positive integer string.",
+      "Spawn a bounded subagent. Omit room_name for a single independent worker. Supply one shared room_name only when spawning at least two agents that need a durable breakout-room transcript. The child shares this authorized workspace and tool policy. Prefer independent first passes before messaging peers. fork_turns accepts none, all, or a positive integer string. For explicit routing, pass provider and model separately and do not use fork_turns=all.",
       {
         type: "object",
         required: ["task_name", "message"],
@@ -301,9 +301,9 @@ export class SubagentManager {
           room_title: { type: "string", description: "Short user-facing breakout-room title. Requires room_name." },
           room_kind: { type: "string", enum: ["exploration", "validation", "proving", "synthesis", "general"] },
           role: { type: "string", description: "Agent's evidence-oriented breakout-room role, such as explorer, skeptic, or prover. Requires room_name." },
-          provider: { type: "string", description: "Optional enabled collaborator provider. Omit to let Honeycrisp select a diverse provider." },
+          provider: { type: "string", description: "Optional enabled collaborator provider ID. An exact provider/model route is also accepted for compatibility. Omit to let Honeycrisp select a diverse provider." },
           fork_turns: { type: "string", description: "none, all, or a positive integer string. Defaults to all." },
-          model: { type: "string", description: "Optional model override for partial or fresh inheritance." },
+          model: { type: "string", description: "Optional enabled model ID for partial or fresh inheritance. Pass the provider ID separately." },
           reasoning_effort: { type: "string", enum: [...REASONING_LEVELS] },
         },
       },
@@ -441,13 +441,14 @@ export class SubagentManager {
 
     const message = requiredString(input.message, "message");
     const forkTurns = normalizeForkTurns(optionalString(input.fork_turns) ?? "all");
+    const providerOverride = optionalString(input.provider);
     const modelOverride = optionalString(input.model);
     const reasoningOverride = optionalReasoning(input.reasoning_effort);
-    if (forkTurns === "all" && (modelOverride || reasoningOverride)) {
-      throw new Error("Full-history children inherit the parent model and reasoning effort. Omit overrides or use partial/no inheritance.");
+    if (forkTurns === "all" && (providerOverride || modelOverride || reasoningOverride)) {
+      throw new Error("Full-history children inherit the parent provider, model, and reasoning effort. Omit routing overrides or use partial/no inheritance.");
     }
     const inheritedMessages = inheritMessages(parentMessages, toolCallId, forkTurns);
-    const preference = this.selectProviderPreference(optionalString(input.provider), parent);
+    const preference = this.selectProviderPreference(providerOverride, modelOverride, parent);
     const requestedRoomName = optionalString(input.room_name);
     const roomName = requestedRoomName ? normalizeRoomName(requestedRoomName) : null;
     const roomMetadataProvided = optionalString(input.room_title) || optionalString(input.room_kind) || optionalString(input.role);
@@ -482,7 +483,7 @@ export class SubagentManager {
       parentId,
       depth: parent.depth + 1,
       provider: preference?.provider ?? parent.provider,
-      model: modelOverride ?? preference?.model ?? parent.model,
+      model: preference?.model ?? parent.model,
       ...(reasoningOverride ?? preference?.reasoning ?? parent.reasoning ? { reasoning: reasoningOverride ?? preference?.reasoning ?? parent.reasoning } : {}),
       forkTurns,
       roomName,
@@ -759,13 +760,61 @@ export class SubagentManager {
     });
   }
 
-  private selectProviderPreference(provider: string | undefined, parent: SubagentSession): SubagentProviderPreference | undefined {
-    if (this.providerPreferences.length === 0) return undefined;
+  private selectProviderPreference(
+    provider: string | undefined,
+    model: string | undefined,
+    parent: SubagentSession,
+  ): SubagentProviderPreference | undefined {
+    if (this.providerPreferences.length === 0) {
+      if (!provider && !model) return undefined;
+      const separator = provider?.indexOf("/") ?? -1;
+      const routeProvider = separator > 0 ? provider!.slice(0, separator) : provider ?? parent.provider;
+      const routeModel = separator > 0 ? provider!.slice(separator + 1) : model ?? parent.model;
+      if (separator > 0 && model && model !== routeModel) {
+        throw new Error(`Conflicting collaborator models were requested: ${routeModel} and ${model}.`);
+      }
+      return { provider: routeProvider, model: routeModel, enabled: true };
+    }
+
+    const enabledRoutes = this.providerPreferences
+      .map((preference) => `${preference.provider}/${preference.model}`)
+      .join(", ");
     if (provider) {
-      const selected = this.providerPreferences.find((preference) => preference.provider === provider);
-      if (!selected) throw new Error(`Provider ${provider} is not enabled for this session's breakout rooms.`);
+      const exactRoute = this.providerPreferences.find(
+        (preference) => `${preference.provider}/${preference.model}` === provider,
+      );
+      if (exactRoute) {
+        if (model && model !== exactRoute.model) {
+          throw new Error(`Conflicting collaborator models were requested: ${exactRoute.model} and ${model}.`);
+        }
+        return exactRoute;
+      }
+
+      const providerMatches = this.providerPreferences.filter(
+        (preference) => preference.provider === provider,
+      );
+      const selected = model
+        ? providerMatches.find((preference) => preference.model === model)
+        : providerMatches[0];
+      if (!selected) {
+        throw new Error(`Collaborator route ${provider}${model ? `/${model}` : ""} is not enabled. Enabled routes: ${enabledRoutes}.`);
+      }
       return selected;
     }
+
+    if (model) {
+      const modelMatches = this.providerPreferences.filter(
+        (preference) => preference.model === model,
+      );
+      if (modelMatches.length === 1) return modelMatches[0];
+      if (modelMatches.length > 1) {
+        const parentMatch = modelMatches.find((preference) => preference.provider === parent.provider);
+        if (parentMatch) return parentMatch;
+        throw new Error(`Model ${model} is ambiguous. Pass provider separately. Enabled routes: ${enabledRoutes}.`);
+      }
+      throw new Error(`Model ${model} is not enabled. Enabled routes: ${enabledRoutes}.`);
+    }
+
     const alternatives = this.providerPreferences.filter((preference) => preference.provider !== parent.provider);
     const candidates = alternatives.length > 0 ? alternatives : this.providerPreferences;
     const selected = candidates[this.providerPreferenceCursor % candidates.length];
