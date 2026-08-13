@@ -5,6 +5,10 @@ import type {
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
 import { completeClaudeAgentText } from "./claude-agent-executor.js";
+import {
+  ProviderAuthenticationRouter,
+  type ProviderAuthenticationPreferences,
+} from "./auth-routing.js";
 import type { ResearchModelEffort } from "./config.js";
 import { createId } from "./ids.js";
 
@@ -97,6 +101,7 @@ export interface CreateShellSafetyAuthorizerOptions {
   reviewTimeoutMs?: number;
   maxReviewInputBytes?: number;
   researchProfileName?: string;
+  authenticationPreferences?: ProviderAuthenticationPreferences;
 }
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 30_000;
@@ -298,6 +303,7 @@ export function createShellSafetyAuthorizer(
   options: CreateShellSafetyAuthorizerOptions,
 ): ShellCommandAuthorizer {
   const models = options.models ?? createAuthenticatedModels();
+  const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
   return async (request, signal) => {
     const mode = options.getMode();
     const approvalRequestId = createId("shell_approval");
@@ -400,6 +406,8 @@ export function createShellSafetyAuthorizer(
         timeoutMs: options.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
         maxInputBytes: options.maxReviewInputBytes ?? DEFAULT_MAX_REVIEW_INPUT_BYTES,
         network,
+        authenticationRouter,
+        ...(options.authenticationPreferences ? { authenticationPreferences: options.authenticationPreferences } : {}),
         ...(options.researchProfileName ? { researchProfileName: options.researchProfileName } : {}),
         ...(signal ? { signal } : {}),
       });
@@ -427,6 +435,8 @@ async function reviewShellCommand(input: {
   timeoutMs: number;
   maxInputBytes: number;
   network: ShellNetworkAuthorizationAudit;
+  authenticationRouter: ProviderAuthenticationRouter;
+  authenticationPreferences?: ProviderAuthenticationPreferences;
   researchProfileName?: string;
   signal?: AbortSignal;
 }): Promise<{
@@ -453,9 +463,9 @@ async function reviewShellCommand(input: {
   }
 
   const useOfficialClaude = input.reviewer.provider === "anthropic";
-  const model = useOfficialClaude
+  let model = useOfficialClaude
     ? undefined
-    : input.models.getModel(input.reviewer.provider, input.reviewer.model);
+    : input.authenticationRouter.routePiModel(input.models, input.reviewer.provider, input.reviewer.model);
   if (!useOfficialClaude && !model) throw new Error("Unknown shell safety reviewer model.");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
@@ -486,6 +496,7 @@ async function reviewShellCommand(input: {
             prompt,
             reasoning: input.reviewer.reasoningEffort,
             signal: reviewSignal,
+            ...(input.authenticationPreferences ? { authenticationPreferences: input.authenticationPreferences } : {}),
           }),
           aborted,
         ]);
@@ -496,34 +507,56 @@ async function reviewShellCommand(input: {
           usage: response.usage,
         };
       }
-      const response = await Promise.race([
-        input.models.completeSimple(
-          model!,
-          {
-            systemPrompt: autoReviewSystemPrompt(input.researchProfileName),
-            messages: [{
-              role: "user",
-              content: prompt,
-              timestamp: Date.now(),
-            }],
-          },
-          {
-            reasoning: input.reviewer.reasoningEffort,
-            maxTokens: 256,
-            signal: reviewSignal,
-          },
-        ),
-        aborted,
-      ]);
-      if (response.stopReason === "error" || response.stopReason === "aborted") {
-        throw new Error("Shell safety reviewer did not complete.");
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const apiKey = input.authenticationRouter.requestApiKey(input.reviewer.provider);
+        let response: AssistantMessage;
+        try {
+          response = await Promise.race([
+            input.models.completeSimple(
+              model!,
+              {
+                systemPrompt: autoReviewSystemPrompt(input.researchProfileName),
+                messages: [{
+                  role: "user",
+                  content: prompt,
+                  timestamp: Date.now(),
+                }],
+              },
+              {
+                reasoning: input.reviewer.reasoningEffort,
+                maxTokens: 256,
+                signal: reviewSignal,
+                ...(apiKey ? { apiKey } : {}),
+              },
+            ),
+            aborted,
+          ]);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (input.authenticationRouter.tryFallback(input.reviewer.provider, message)) {
+            model = input.authenticationRouter.routePiModel(input.models, input.reviewer.provider, input.reviewer.model);
+            if (!model) throw new Error("Alternate authentication source does not support the shell safety reviewer model.");
+            continue;
+          }
+          throw error;
+        }
+        if (response.stopReason === "error") {
+          if (input.authenticationRouter.tryFallback(input.reviewer.provider, response.errorMessage ?? "")) {
+            model = input.authenticationRouter.routePiModel(input.models, input.reviewer.provider, input.reviewer.model);
+            if (!model) throw new Error("Alternate authentication source does not support the shell safety reviewer model.");
+            continue;
+          }
+          throw new Error(response.errorMessage ?? "Shell safety reviewer did not complete.");
+        }
+        if (response.stopReason === "aborted") throw new Error("Shell safety reviewer did not complete.");
+        const parsed = parseReviewerDecision(assistantText(response));
+        return {
+          ...parsed,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          usage: { ...response.usage },
+        };
       }
-      const parsed = parseReviewerDecision(assistantText(response));
-      return {
-        ...parsed,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        usage: { ...response.usage },
-      };
+      throw new Error("Shell safety reviewer authentication sources were exhausted.");
     } finally {
       reviewSignal.removeEventListener("abort", abortReview);
     }

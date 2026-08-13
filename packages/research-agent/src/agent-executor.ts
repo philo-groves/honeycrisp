@@ -24,6 +24,10 @@ import {
   type Usage,
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
+import {
+  ProviderAuthenticationRouter,
+  type ProviderAuthenticationPreferences,
+} from "./auth-routing.js";
 import { createId, nowIso } from "./ids.js";
 import {
   createToolRequestedEvent,
@@ -104,6 +108,7 @@ export interface CreatePiAgentExecutorOptions {
   memoryTypeDescriptions?: MemoryTypeDescriptionsInput;
   researchProfile?: ResearchProfile;
   workflowId?: string;
+  authenticationPreferences?: ProviderAuthenticationPreferences;
 }
 
 const MODEL_CONTEXT_RESERVE_TOKENS = 32_768;
@@ -304,6 +309,7 @@ export function createPiAgentExecutor(
         createAuthenticatedModels(
           options.authFile ? { authFile: options.authFile } : {},
         );
+      const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
       const model = getPiModel(models, options.provider, options.model);
       if (!model) {
         throw new Error(`Unknown model ${options.provider}/${options.model}`);
@@ -521,21 +527,31 @@ export function createPiAgentExecutor(
         };
         const dynamicStreamFn: StreamFn = (_model, context, streamOptions) => {
           const active = activeModelSelection();
+          const routedModel = authenticationRouter.routePiModel(models, active.model.provider, active.model.id);
+          if (!routedModel) {
+            throw new Error(`Unknown routed model ${active.model.provider}/${active.model.id}`);
+          }
+          const apiKey = authenticationRouter.requestApiKey(active.model.provider);
           if (!options.getModelSelection || !request.root) {
             return models.streamSimple(
-              active.model,
+              routedModel,
               context,
-              withProviderSession(active.model, streamOptions, providerSessionId),
+              withProviderSession(
+                routedModel,
+                { ...streamOptions, ...(apiKey ? { apiKey } : {}) },
+                providerSessionId,
+              ),
             );
           }
           const { reasoning: _previousReasoning, ...remainingOptions } = streamOptions ?? {};
           return models.streamSimple(
-            active.model,
+            routedModel,
             context,
             withProviderSession(
-              active.model,
+              routedModel,
               {
                 ...remainingOptions,
+                ...(apiKey ? { apiKey } : {}),
                 ...(active.reasoningEffort && active.reasoningEffort !== "off" ? { reasoning: active.reasoningEffort } : {}),
               },
               providerSessionId,
@@ -545,6 +561,10 @@ export function createPiAgentExecutor(
         const streamFn = createRetryingStreamFn(dynamicStreamFn, {
           signal: request.signal,
           firstEventTimeoutMs: options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
+          tryAuthenticationFallback: (errorMessage) => {
+            const active = activeModelSelection();
+            return authenticationRouter.tryFallback(active.model.provider, errorMessage);
+          },
           safetyRecoveryContext: {
             researchProfile,
             bundledSecurityProfile,
@@ -1210,7 +1230,7 @@ function createRetryingStreamFn(
       retry: number;
       delayMs: number;
       errorMessage: string;
-      recoveryKind: "transient" | "safety_guardrail";
+      recoveryKind: "transient" | "safety_guardrail" | "authentication_fallback";
       safetyDisposition?: SafetyRecoveryDisposition;
       awaitingSteering?: boolean;
     }) => Promise<void> | void;
@@ -1220,6 +1240,7 @@ function createRetryingStreamFn(
     waitForSafetyRecovery?: () => Promise<Message[]>;
     onContextRetry?: (event: { tokensBefore: number; tokensAfter: number; errorMessage: string }) => Promise<void> | void;
     firstEventTimeoutMs?: number;
+    tryAuthenticationFallback?: (errorMessage: string) => boolean;
   },
 ): StreamFn {
   return (model, context, streamOptions) => {
@@ -1235,8 +1256,9 @@ function createRetryingStreamFn(
         let contextCompactedForRetry = false;
         let emittedCommittedContent = false;
         let automaticSafetyRetry = false;
+        let authenticationFallbackActivated = false;
         let retryError: AssistantMessage | null = null;
-        let recoveryKind: "transient" | "safety_guardrail" = "transient";
+        let recoveryKind: "transient" | "safety_guardrail" | "authentication_fallback" = "transient";
         let eventIdleTimedOut = false;
         const bufferedPrelude: AssistantMessageEvent[] = [];
         const flushBufferedPrelude = (): void => {
@@ -1293,6 +1315,16 @@ function createRetryingStreamFn(
                   ? "Model stream ended after reasoning without actionable output."
                   : "Model stream ended without actionable output.",
               );
+              break;
+            }
+            if (
+              event.type === "error"
+              && !emittedCommittedContent
+              && options.tryAuthenticationFallback?.(event.error.errorMessage ?? "") === true
+            ) {
+              authenticationFallbackActivated = true;
+              recoveryKind = "authentication_fallback";
+              retryError = event.error;
               break;
             }
             if (
@@ -1361,6 +1393,13 @@ function createRetryingStreamFn(
           );
           if (
             !emittedCommittedContent
+            && options.tryAuthenticationFallback?.(message.errorMessage ?? "") === true
+          ) {
+            authenticationFallbackActivated = true;
+            recoveryKind = "authentication_fallback";
+            retryError = message;
+          } else if (
+            !emittedCommittedContent
             && isSafetyGuardrailAssistantError(message)
           ) {
             automaticSafetyRetry = !safetyRecoveryInjected;
@@ -1421,6 +1460,17 @@ function createRetryingStreamFn(
           flushBufferedPrelude();
           output.push({ type: "error", reason: "error", error: retryError });
           return;
+        }
+
+        if (authenticationFallbackActivated) {
+          await options.onRetry?.({
+            retry: retries + 1,
+            delayMs: 0,
+            errorMessage: retryError.errorMessage ?? "Preferred authentication source exhausted.",
+            recoveryKind,
+          });
+          retries += 1;
+          continue;
         }
 
         const retry = retries + 1;

@@ -9,6 +9,10 @@ import {
 import { z, type ZodType } from "zod";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createId, nowIso } from "./ids.js";
+import {
+  ProviderAuthenticationRouter,
+  type ProviderAuthenticationPreferences,
+} from "./auth-routing.js";
 import { researchProfileHash, researchProfileWorkflow, type ResearchProfile } from "./research-profile.js";
 import { createResearchSystemPrompt } from "./system-prompt.js";
 import { SubagentManager, type SubagentRunRequest, type SubagentRunResult } from "./subagent-runtime.js";
@@ -52,6 +56,7 @@ export interface CreateClaudeAgentExecutorOptions {
     rootInput: ResearchAgentExecutionInput,
   ) => Promise<SubagentRunResult>;
   agentIdentity?: { id: string; path: string; parentId: string };
+  authenticationPreferences?: ProviderAuthenticationPreferences;
 }
 
 export interface CompleteClaudeAgentTextOptions {
@@ -61,6 +66,7 @@ export interface CompleteClaudeAgentTextOptions {
   reasoning?: string;
   cwd?: string;
   signal?: AbortSignal;
+  authenticationPreferences?: ProviderAuthenticationPreferences;
 }
 
 export interface ClaudeAgentTextCompletion {
@@ -82,32 +88,44 @@ export async function completeClaudeAgentText(
   else options.signal?.addEventListener("abort", abort, { once: true });
 
   let result: SDKResultMessage | undefined;
+  const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
   try {
     const effort = claudeEffort(options.reasoning);
-    const stream = query({
-      prompt: options.prompt,
-      options: {
-        abortController,
-        cwd: options.cwd ?? process.cwd(),
-        model: options.model,
-        maxTurns: 1,
-        tools: [],
-        allowedTools: [],
-        permissionMode: "dontAsk",
-        settingSources: [],
-        persistSession: false,
-        systemPrompt: {
-          type: "preset",
-          preset: "claude_code",
-          append: options.systemPrompt,
-        },
-        ...(effort ? { effort } : {}),
-        ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
-        env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "honeycrisp/0.1.0" },
-      },
-    });
-    for await (const message of stream) {
-      if (message.type === "result") result = message;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      result = undefined;
+      try {
+        const stream = query({
+          prompt: options.prompt,
+          options: {
+            abortController,
+            cwd: options.cwd ?? process.cwd(),
+            model: options.model,
+            maxTurns: 1,
+            tools: [],
+            allowedTools: [],
+            permissionMode: "dontAsk",
+            settingSources: [],
+            persistSession: false,
+            systemPrompt: {
+              type: "preset",
+              preset: "claude_code",
+              append: options.systemPrompt,
+            },
+            ...(effort ? { effort } : {}),
+            ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
+            env: authenticationRouter.claudeEnvironment(),
+          },
+        });
+        for await (const message of stream) {
+          if (message.type === "result") result = message;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (authenticationRouter.tryFallback("anthropic", message)) continue;
+        throw error;
+      }
+      const errors = result?.subtype === "success" ? "" : result?.errors.join("\n") ?? "";
+      if (!errors || !authenticationRouter.tryFallback("anthropic", errors)) break;
     }
   } finally {
     options.signal?.removeEventListener("abort", abort);
@@ -156,6 +174,7 @@ export function extractCompatibleClaudeAgentResumableState(
 }
 
 export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOptions): ResearchAgentExecutor {
+  const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
   const workflow = researchProfileWorkflow(options.researchProfile, options.workflowId);
   const profileHash = researchProfileHash(options.researchProfile);
   if (options.resumableState?.researchProfileHash !== undefined
@@ -263,63 +282,81 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
         finishInput = resolvePromise;
       });
       try {
-        const stream = query({
-          prompt: options.waitForSteeringMessages
-            ? streamUserMessages(
-                formatModelInput(input.modelInput),
-                options.waitForSteeringMessages,
-                inputFinished,
-                abortController.signal,
-              )
-            : formatModelInput(input.modelInput),
-          options: {
-            abortController,
-            cwd: options.workspaceRoot,
-            model: options.model,
-            ...(options.resumableState ? { resume: options.resumableState.providerSessionId } : {}),
-            mcpServers: { honeycrisp: allMcpServer },
-            tools: [],
-            allowedTools: allMcpToolNames,
-            permissionMode: "dontAsk",
-            settingSources: [],
-            systemPrompt: {
-              type: "preset",
-              preset: "claude_code",
-              append: appendClaudeAgentProgressGuidance(
-                createResearchSystemPrompt({
-                  hasTools: mcpTools.length > 0,
-                  hasMemoryTools: hasTool(options.toolRegistry, "memory_search"),
-                  hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
-                  hasReportTools: hasTool(options.toolRegistry, "report_list"),
-                  hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
-                  hasCollaborationTools: collaborationManager !== null,
-                  ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
-                  goalEnabled: false,
-                  ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
-                  researchProfile: options.researchProfile,
-                  workflowId: workflow.id,
-                  ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
-                }),
-              ),
-            },
-            includePartialMessages: true,
-            forwardSubagentText: true,
-            ...(effort ? { effort } : {}),
-            ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
-            ...(options.maxTokens ? { taskBudget: { total: options.maxTokens } } : {}),
-            env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "honeycrisp/0.1.0" },
-          },
-        });
-        for await (const message of stream) {
-          sessionId = message.session_id || sessionId;
-          if (message.type === "assistant") {
-            const output = projectClaudeAgentAssistantOutput(message, options.model, options.agentIdentity);
-            if (output) assistantText.push(output.text);
-            await emitAssistantMessage(input.eventSink, output);
-          } else if (message.type === "result") {
-            result = message;
-            finishInput();
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          result = undefined;
+          try {
+            const stream = query({
+              prompt: options.waitForSteeringMessages
+                ? streamUserMessages(
+                    formatModelInput(input.modelInput),
+                    options.waitForSteeringMessages,
+                    inputFinished,
+                    abortController.signal,
+                  )
+                : formatModelInput(input.modelInput),
+              options: {
+                abortController,
+                cwd: options.workspaceRoot,
+                model: options.model,
+                ...(options.resumableState ? { resume: options.resumableState.providerSessionId } : {}),
+                mcpServers: { honeycrisp: allMcpServer },
+                tools: [],
+                allowedTools: allMcpToolNames,
+                permissionMode: "dontAsk",
+                settingSources: [],
+                systemPrompt: {
+                  type: "preset",
+                  preset: "claude_code",
+                  append: appendClaudeAgentProgressGuidance(
+                    createResearchSystemPrompt({
+                      hasTools: mcpTools.length > 0,
+                      hasMemoryTools: hasTool(options.toolRegistry, "memory_search"),
+                      hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
+                      hasReportTools: hasTool(options.toolRegistry, "report_list"),
+                      hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
+                      hasCollaborationTools: collaborationManager !== null,
+                      ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
+                      goalEnabled: false,
+                      ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
+                      researchProfile: options.researchProfile,
+                      workflowId: workflow.id,
+                      ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
+                    }),
+                  ),
+                },
+                includePartialMessages: true,
+                forwardSubagentText: true,
+                ...(effort ? { effort } : {}),
+                ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
+                ...(options.maxTokens ? { taskBudget: { total: options.maxTokens } } : {}),
+                env: authenticationRouter.claudeEnvironment(),
+              },
+            });
+            for await (const message of stream) {
+              sessionId = message.session_id || sessionId;
+              if (message.type === "assistant") {
+                const output = projectClaudeAgentAssistantOutput(message, options.model, options.agentIdentity);
+                if (output) assistantText.push(output.text);
+                await emitAssistantMessage(input.eventSink, output);
+              } else if (message.type === "result") {
+                result = message;
+                finishInput();
+              }
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const canRetryWithAlternateAuthentication = toolCallCount === 0
+              && assistantText.length === 0
+              && authenticationRouter.tryFallback("anthropic", message);
+            if (canRetryWithAlternateAuthentication) continue;
+            throw error;
           }
+          const errors = result?.subtype === "success" ? "" : result?.errors.join("\n") ?? "";
+          const canRetryWithAlternateAuthentication = toolCallCount === 0
+            && assistantText.length === 0
+            && Boolean(errors)
+            && authenticationRouter.tryFallback("anthropic", errors);
+          if (!canRetryWithAlternateAuthentication) break;
         }
       } finally {
         finishInput();

@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Research runs now honor host-supplied per-provider Subscription or API key preferences across lead agents, collaborator agents, and title generation. Explicit subscription usage-cap and API-credit exhaustion errors switch once to an available alternate source without falling back for policy, authentication, or ordinary transient errors.
 - Extended the Anthropic catalog with the access-restricted `claude-mythos-5` model for official Claude Agent SDK and Claude CLI routes; host frontends may gate it behind an explicit opt-in.
 - Collaboration routing now permits multiple distinct models from one provider while rejecting duplicate provider/model entries.
 - Single-worker delegation now creates an ordinary subagent by default. Breakout metadata is explicit and reserved for rooms with at least two collaborating subagents; lead agents are instructed to delegate a same-model representative instead of joining a room themselves.

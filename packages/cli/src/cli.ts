@@ -63,6 +63,7 @@ import {
   researchProfileHash,
   researchProfileWorkflow,
   resolveResearchProfile,
+  readProviderAuthenticationPreferences,
   verifyProviderAuth,
   workspaceContextFileReadHints,
   writeResearchModelConfig,
@@ -1808,6 +1809,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         },
         onRequested: (event) => emitShellSafetyEvent(liveEventSink, event),
         onResolved: (event) => emitShellSafetyEvent(liveEventSink, event),
+        authenticationPreferences: readProviderAuthenticationPreferences(),
       });
       runtimeConfig = await createRuntimeConfig({
         ...args,
@@ -1983,6 +1985,7 @@ function startSessionTitleGeneration(
     prompt: args.prompt,
     effort: route.effort,
     researchProfile: resolvedResearchProfile.profile,
+    authenticationPreferences: readProviderAuthenticationPreferences(),
     ...(signal ? { signal } : {}),
   })
     .then((title) =>
@@ -2054,6 +2057,7 @@ function createRealAgentExecutor(
   resumableState?: PiAgentResumableState | ClaudeAgentResumableState,
   collaboration?: ResearchCollaborationConfig,
 ): ResearchAgentExecutor {
+  const authenticationPreferences = readProviderAuthenticationPreferences();
   const providerSessionId = args.sessionId?.trim() || resumableState?.providerSessionId;
   const executorInput = {
     provider: modelConfig.provider,
@@ -2068,6 +2072,7 @@ function createRealAgentExecutor(
         workspaceRoot: args.workspaceRoot,
         resolvedResearchProfile,
         workflowId,
+        authenticationPreferences,
         toolRegistry,
       })
     : undefined;
@@ -2084,6 +2089,7 @@ function createRealAgentExecutor(
       ...(toolRegistry ? { toolRegistry } : {}),
       researchProfile: resolvedResearchProfile.profile,
       workflowId,
+      authenticationPreferences,
       ...(collaboration ? { collaboration } : {}),
       ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
       ...(claudeResumableState ? { resumableState: claudeResumableState } : {}),
@@ -2115,6 +2121,7 @@ function createRealAgentExecutor(
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
     researchProfile: resolvedResearchProfile.profile,
     workflowId,
+    authenticationPreferences,
     ...(collaboration ? { collaboration } : {}),
     ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
     ...(resolvedResearchProfile.profile.capabilities.collaborationEnabled
@@ -2146,11 +2153,13 @@ function createProviderNeutralSubagentRunner({
   resolvedResearchProfile,
   workflowId,
   toolRegistry,
+  authenticationPreferences,
 }: {
   workspaceRoot: string;
   resolvedResearchProfile: ResolvedResearchProfile;
   workflowId: string;
   toolRegistry: ResearchToolRegistry | undefined;
+  authenticationPreferences: ReturnType<typeof readProviderAuthenticationPreferences>;
 }): (request: SubagentRunRequest, rootInput: ResearchAgentExecutionInput) => Promise<SubagentRunResult> {
   return async (request, rootInput) => {
     const identity = { id: request.id, path: request.path, parentId: request.parentId };
@@ -2164,6 +2173,7 @@ function createProviderNeutralSubagentRunner({
           workflowId,
           subagents: false,
           agentIdentity: identity,
+          authenticationPreferences,
         })
       : createPiAgentExecutor({
           provider: request.provider,
@@ -2174,6 +2184,7 @@ function createProviderNeutralSubagentRunner({
           workflowId,
           subagents: false,
           agentIdentity: identity,
+          authenticationPreferences,
         });
     const output = await executor.execute({
       ...rootInput,

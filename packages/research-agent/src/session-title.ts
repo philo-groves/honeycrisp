@@ -6,6 +6,10 @@ import {
 } from "@earendil-works/pi-ai";
 import { createAuthenticatedModels } from "./auth.js";
 import { completeClaudeAgentText } from "./claude-agent-executor.js";
+import {
+  ProviderAuthenticationRouter,
+  type ProviderAuthenticationPreferences,
+} from "./auth-routing.js";
 import type { ResearchProfile } from "./research-profile.js";
 
 /*
@@ -24,6 +28,7 @@ export interface GenerateResearchSessionTitleOptions {
   models?: Pick<Models, "getModel" | "completeSimple">;
   completeClaudeText?: typeof completeClaudeAgentText;
   researchProfile?: Pick<ResearchProfile, "name" | "workspace" | "presentation">;
+  authenticationPreferences?: ProviderAuthenticationPreferences;
 }
 
 const SECURITY_TITLE_SYSTEM_PROMPT = [
@@ -42,7 +47,10 @@ export async function generateResearchSessionTitle(
 ): Promise<string> {
   const useOfficialClaude = options.provider === "anthropic";
   const models = useOfficialClaude ? undefined : options.models ?? createAuthenticatedModels();
-  const model = useOfficialClaude ? undefined : models!.getModel(options.provider, options.model);
+  const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
+  let model = useOfficialClaude
+    ? undefined
+    : authenticationRouter.routePiModel(models!, options.provider, options.model);
   if (!useOfficialClaude && !model) throw new Error(`Unknown title model ${options.provider}/${options.model}`);
 
   const controller = new AbortController();
@@ -74,11 +82,13 @@ export async function generateResearchSessionTitle(
             prompt: boundedPrompt(options.prompt),
             reasoning: options.effort ?? "medium",
             signal,
+            ...(options.authenticationPreferences ? { authenticationPreferences: options.authenticationPreferences } : {}),
           });
           const title = normalizeResearchSessionTitle(completion.text);
           if (!title) throw new Error("Title model returned an empty title.");
           return title;
         }
+        const apiKey = authenticationRouter.requestApiKey(options.provider);
         response = await models!.completeSimple(
           model!,
           {
@@ -95,10 +105,16 @@ export async function generateResearchSessionTitle(
             reasoning: options.effort ?? "medium",
             maxTokens: 128,
             signal,
+            ...(apiKey ? { apiKey } : {}),
           },
         );
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        if (!useOfficialClaude && authenticationRouter.tryFallback(options.provider, errorMessage)) {
+          model = authenticationRouter.routePiModel(models!, options.provider, options.model);
+          if (!model) throw new Error("Alternate authentication source does not support the title model.");
+          continue;
+        }
         if (
           attempt >= TITLE_RETRY_DELAYS_MS.length
           || signal.aborted
@@ -114,6 +130,11 @@ export async function generateResearchSessionTitle(
         throw new Error(response.errorMessage ?? "Title generation was aborted.");
       }
       if (response.stopReason !== "error") break;
+      if (authenticationRouter.tryFallback(options.provider, response.errorMessage ?? "")) {
+        model = authenticationRouter.routePiModel(models!, options.provider, options.model);
+        if (!model) throw new Error("Alternate authentication source does not support the title model.");
+        continue;
+      }
       if (
         attempt >= TITLE_RETRY_DELAYS_MS.length
         || !isRetryableTitleError(response)
