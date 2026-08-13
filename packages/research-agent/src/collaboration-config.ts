@@ -13,9 +13,10 @@ export function decodeResearchCollaborationConfig(value: unknown): ResearchColla
   const providers = value.providers.map((entry, index) => {
     if (!isRecord(entry)) throw new Error(`Collaboration provider ${index + 1} must be an object.`);
     const provider = requiredString(entry.provider, `providers[${index}].provider`);
-    if (seen.has(provider)) throw new Error(`Collaboration provider ${provider} is configured more than once.`);
-    seen.add(provider);
     const model = requiredString(entry.model, `providers[${index}].model`);
+    const key = providerModelKey(provider, model);
+    if (seen.has(key)) throw new Error(`Collaboration provider/model ${provider}/${model} is configured more than once.`);
+    seen.add(key);
     const reasoningEffort = requiredEnum(entry.reasoningEffort, EFFORTS, `providers[${index}].reasoningEffort`);
     return { provider, model, reasoningEffort, enabled: entry.enabled !== false };
   });
@@ -29,6 +30,10 @@ export function decodeResearchCollaborationConfig(value: unknown): ResearchColla
     maxMembersPerRoom: boundedInteger(value.maxMembersPerRoom, 2, 5, "maxMembersPerRoom"),
     maxTotalInvocations: boundedInteger(value.maxTotalInvocations, 2, 24, "maxTotalInvocations"),
   };
+}
+
+function providerModelKey(provider: string, model: string): string {
+  return `${provider}\u0000${model}`;
 }
 
 function requiredString(value: unknown, field: string): string {

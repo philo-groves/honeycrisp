@@ -17,6 +17,7 @@ import {
 test("authenticated model catalog includes current supplemental models", () => {
   const models = createAuthenticatedModels();
   const daybreak = models.getModel("openai-codex", "gpt-daybreak-blue-latest");
+  const daybreakRed = models.getModel("openai-codex", "gpt-daybreak-red-latest");
   const grok46 = models.getModel("xai", "grok-4.6");
 
   assert.equal(models.getProvider("anthropic"), undefined);
@@ -24,6 +25,9 @@ test("authenticated model catalog includes current supplemental models", () => {
   assert.equal(daybreak?.name, "Daybreak Blue");
   assert.equal(daybreak?.provider, "openai-codex");
   assert.equal(daybreak?.contextWindow, 272_000);
+  assert.equal(daybreakRed?.name, "Daybreak Red");
+  assert.equal(daybreakRed?.provider, "openai-codex");
+  assert.equal(daybreakRed?.contextWindow, daybreak?.contextWindow);
   assert.equal(grok46?.name, "Grok 4.6");
   assert.equal(grok46?.provider, "xai");
   assert.equal(grok46?.contextWindow, 500_000);
@@ -55,7 +59,12 @@ test("provider catalogs expose current supplemental models to frontends", () => 
   const daybreak = openai?.models.find(
     (model) => model.id === "gpt-daybreak-blue-latest",
   );
+  const daybreakRed = openai?.models.find(
+    (model) => model.id === "gpt-daybreak-red-latest",
+  );
   assert.deepEqual(daybreak?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(daybreakRed?.effortLevels, daybreak?.effortLevels);
+  assert.equal(daybreakRed?.contextWindow, daybreak?.contextWindow);
 });
 
 test("provider catalog reports Pi model names and model-specific effort levels", () => {

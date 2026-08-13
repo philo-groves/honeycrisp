@@ -193,12 +193,13 @@ test("subagent runtime routes heterogeneous room members and enforces room concu
   await active.settle();
 });
 
-test("collaboration config decoder rejects ambiguous or unbounded routing", () => {
+test("collaboration config decoder allows distinct models per provider and rejects duplicate routes", () => {
   const valid = {
     mode: "adaptive",
     intensity: "balanced",
     providers: [
       { provider: "anthropic", model: "claude-opus-5", reasoningEffort: "high", enabled: true },
+      { provider: "anthropic", model: "claude-sonnet-5", reasoningEffort: "high", enabled: true },
       { provider: "xai", model: "grok-4.6", reasoningEffort: "high", enabled: true },
     ],
     independentFirstPass: true,

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the access-restricted `gpt-daybreak-red-latest` OpenAI Codex model with the same runtime capabilities as Daybreak Blue; host frontends may gate its visibility behind an explicit opt-in.
 - Added bounded heterogeneous breakout-room orchestration across OpenAI, Anthropic, and xAI, including provider-aware agent identities, room metadata, independent-first-pass guidance, peer challenges, lifecycle activity, and strict host-written collaboration configuration.
 - Added migration 9 artifact revision events so Runbook and Report revisions retain their session and timestamp for workspace activity timelines; existing artifacts receive a conservative latest-known revision event.
 - Added first-class revisioned Markdown reports with Complete and Stale states, dedicated `report.*` tools, and workspace artifact storage. Migration 8 adds report metadata, and bundled Security Research and Mathematics profiles advance to 1.2.0 with domain-specific report guidance.
@@ -15,6 +16,7 @@
 
 ### Changed
 
+- Collaboration routing now permits multiple distinct models from one provider while rejecting duplicate provider/model entries.
 - Single-worker delegation now creates an ordinary subagent by default. Breakout metadata is explicit and reserved for rooms with at least two collaborating subagents; lead agents are instructed to delegate a same-model representative instead of joining a room themselves.
 - Anthropic breakout workers run through the official Claude Agent SDK, while OpenAI and xAI workers use their native Pi adapters; all routes share the lead session's governed workspace tools and authorization boundary without sharing provider-native conversation state.
 - Runs under the bundled Security Research profile now require the selected provider's host-recorded policy-risk acknowledgement during authorization preflight: Trusted Access for Cyber plus policy risk for OpenAI, Cyber Verification Program plus policy risk for Anthropic, and policy risk for xAI.
