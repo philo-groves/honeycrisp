@@ -56,6 +56,14 @@ test("provider catalogs expose current supplemental models to frontends", () => 
   const [openai] = getProviderModelCatalog("openai-codex");
 
   assert.ok(anthropic?.models.some((model) => model.id === "claude-opus-5"));
+  const fable = anthropic?.models.find((model) => model.id === "claude-fable-5");
+  const mythos = anthropic?.models.find((model) => model.id === "claude-mythos-5");
+  assert.equal(fable?.name, "Claude Fable 5");
+  assert.equal(fable?.contextWindow, 1_000_000);
+  assert.equal(mythos?.name, "Claude Mythos 5");
+  assert.deepEqual(mythos?.effortLevels, ["minimal", "low", "medium", "high", "xhigh", "max"]);
+  assert.equal(mythos?.contextWindow, 1_000_000);
+  assert.equal(mythos?.maxTokens, 128_000);
   const daybreak = openai?.models.find(
     (model) => model.id === "gpt-daybreak-blue-latest",
   );

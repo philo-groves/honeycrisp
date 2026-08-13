@@ -76,6 +76,32 @@ const execFileAsync = promisify(execFile);
 const ADDITIONAL_PROVIDER_MODELS: Readonly<Record<string, readonly Model<Api>[]>> = {
   anthropic: [
     {
+      id: "claude-mythos-5",
+      name: "Claude Mythos 5",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      compat: {
+        forceAdaptiveThinking: true,
+        supportsTemperature: false,
+      },
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        xhigh: "xhigh",
+        max: "max",
+      },
+      input: ["text", "image"],
+      cost: {
+        input: 10,
+        output: 50,
+        cacheRead: 1,
+        cacheWrite: 12.5,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+    {
       id: "claude-opus-5",
       name: "Claude Opus 5",
       api: "anthropic-messages",

@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Extended the Anthropic catalog with the access-restricted `claude-mythos-5` model for official Claude Agent SDK and Claude CLI routes; host frontends may gate it behind an explicit opt-in.
 - Collaboration routing now permits multiple distinct models from one provider while rejecting duplicate provider/model entries.
 - Single-worker delegation now creates an ordinary subagent by default. Breakout metadata is explicit and reserved for rooms with at least two collaborating subagents; lead agents are instructed to delegate a same-model representative instead of joining a room themselves.
 - Anthropic breakout workers run through the official Claude Agent SDK, while OpenAI and xAI workers use their native Pi adapters; all routes share the lead session's governed workspace tools and authorization boundary without sharing provider-native conversation state.
