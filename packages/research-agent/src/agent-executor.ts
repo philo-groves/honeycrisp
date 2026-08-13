@@ -121,13 +121,15 @@ function collaborationSystemGuidance(config: ResearchCollaborationConfig): strin
   return [
     `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
     `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations across the session.`,
+    "A single delegated worker is a normal subagent: omit room_name and all room metadata. Create a breakout room only when at least two subagents need to communicate, and give those peers the same room_name.",
+    "The lead agent is not a breakout-room member. If the lead perspective is needed in a room, spawn a separate subagent on the lead provider/model to represent it; use partial or no inheritance when explicit routing overrides are required.",
     config.independentFirstPass
       ? "Require each room member to produce an independent evidence memo before peer messages or convergence."
       : "Independent first passes are optional for this session.",
     `After independent work, use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"} per room.`,
     config.mode === "adaptive"
       ? "Create breakout rooms only for decomposable coverage, meaningful disagreement, evidence review, or proving work; keep tightly sequential work in the lead session."
-      : "Use breakout rooms for every materially separable research stage.",
+      : "Use breakout rooms for materially separable stages that benefit from collaboration between at least two subagents; use an ordinary subagent for single-worker delegation.",
   ].join(" ");
 }
 

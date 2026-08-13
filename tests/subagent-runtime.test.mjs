@@ -40,7 +40,9 @@ test("subagent runtime sanitizes partial inheritance and applies explicit overri
   assert.equal(requests[0].inheritedMessages[0], secondTurn);
   assert.equal(requests[0].inheritedMessages[0].uncloneable(), "structurally shared");
   assert.equal(spawned.details.task_name, "/root/focused_review");
+  assert.equal(spawned.details.room_name, null);
   assert.equal(manager.snapshot().agents[0].status, "completed");
+  assert.equal(manager.snapshot().agents[0].roomName, null);
 
   manager.captureContext("root", "spawn_invalid", [user("root context"), assistantTool("spawn_invalid")]);
   await assert.rejects(
@@ -80,6 +82,40 @@ test("subagent runtime sanitizes partial inheritance and applies explicit overri
   });
   await manager.settle();
   assert.deepEqual(requests[3].inheritedMessages, []);
+});
+
+test("single-worker delegation remains a normal subagent without breakout metadata", async () => {
+  const activities = [];
+  const manager = new SubagentManager({
+    rootProvider: "openai",
+    rootModel: "gpt-5.6-sol",
+    onActivity(activity) {
+      activities.push(activity);
+    },
+    async run(request) {
+      return resultFor(request, "single worker complete");
+    },
+  });
+  const tools = toolsByName(manager, "root");
+  const spawned = await tools.spawn_agent.execute("spawn_single", {
+    task_name: "single_review",
+    message: "Review one independent boundary.",
+    fork_turns: "none",
+  });
+  await manager.settle();
+
+  assert.equal(spawned.details.room_name, null);
+  assert.ok(activities.length >= 2);
+  assert.ok(activities.every((activity) => !("roomName" in activity)));
+  await assert.rejects(
+    tools.spawn_agent.execute("spawn_invalid_room_metadata", {
+      task_name: "invalid_room_metadata",
+      message: "Do not launch.",
+      fork_turns: "none",
+      role: "challenger",
+    }),
+    /room_name is required/,
+  );
 });
 
 test("subagent runtime routes heterogeneous room members and enforces room concurrency", async () => {

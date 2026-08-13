@@ -94,10 +94,10 @@ interface SubagentSession {
   model: string;
   reasoning?: SimpleStreamOptions["reasoning"];
   forkTurns: string;
-  roomName: string;
-  roomTitle: string;
-  roomKind: string;
-  role: string;
+  roomName: string | null;
+  roomTitle: string | null;
+  roomKind: string | null;
+  role: string | null;
   status: SubagentStatus;
   createdAt: string;
   startedAt?: string;
@@ -164,10 +164,10 @@ export class SubagentManager {
       model: options.rootModel,
       ...(options.rootReasoning ? { reasoning: options.rootReasoning } : {}),
       forkTurns: "all",
-      roomName: "main",
-      roomTitle: "Main session",
-      roomKind: "general",
-      role: "lead",
+      roomName: null,
+      roomTitle: null,
+      roomKind: null,
+      role: null,
       status: "running",
       createdAt: new Date().toISOString(),
       startedAt: new Date().toISOString(),
@@ -289,7 +289,7 @@ export class SubagentManager {
       agentId,
       "spawn_agent",
       "Spawn agent",
-      "Spawn a bounded subagent in a breakout room. The child shares this authorized workspace and tool policy. Agents with the same room_name share one durable room transcript. Prefer independent first passes before messaging peers. fork_turns accepts none, all, or a positive integer string.",
+      "Spawn a bounded subagent. Omit room_name for a single independent worker. Supply one shared room_name only when spawning at least two agents that need a durable breakout-room transcript. The child shares this authorized workspace and tool policy. Prefer independent first passes before messaging peers. fork_turns accepts none, all, or a positive integer string.",
       {
         type: "object",
         required: ["task_name", "message"],
@@ -297,10 +297,10 @@ export class SubagentManager {
         properties: {
           task_name: { type: "string", description: "Lowercase letters, digits, and underscores." },
           message: { type: "string", description: "Concrete bounded task for the child." },
-          room_name: { type: "string", description: "Stable lowercase room name. Use the same name for agents collaborating in one room." },
-          room_title: { type: "string", description: "Short user-facing breakout room title." },
+          room_name: { type: "string", description: "Optional stable lowercase breakout-room name. Omit for a lone subagent; use the same name for at least two collaborating agents." },
+          room_title: { type: "string", description: "Short user-facing breakout-room title. Requires room_name." },
           room_kind: { type: "string", enum: ["exploration", "validation", "proving", "synthesis", "general"] },
-          role: { type: "string", description: "Agent's evidence-oriented role in the room, such as explorer, skeptic, or prover." },
+          role: { type: "string", description: "Agent's evidence-oriented breakout-room role, such as explorer, skeptic, or prover. Requires room_name." },
           provider: { type: "string", description: "Optional enabled collaborator provider. Omit to let Honeycrisp select a diverse provider." },
           fork_turns: { type: "string", description: "none, all, or a positive integer string. Defaults to all." },
           model: { type: "string", description: "Optional model override for partial or fresh inheritance." },
@@ -448,20 +448,27 @@ export class SubagentManager {
     }
     const inheritedMessages = inheritMessages(parentMessages, toolCallId, forkTurns);
     const preference = this.selectProviderPreference(optionalString(input.provider), parent);
-    const roomName = normalizeRoomName(optionalString(input.room_name) ?? taskName);
-    const roomTitle = optionalString(input.room_title) ?? titleFromRoomName(roomName);
-    const roomKind = normalizeRoomKind(optionalString(input.room_kind));
-    const role = optionalString(input.role) ?? "researcher";
+    const requestedRoomName = optionalString(input.room_name);
+    const roomName = requestedRoomName ? normalizeRoomName(requestedRoomName) : null;
+    const roomMetadataProvided = optionalString(input.room_title) || optionalString(input.room_kind) || optionalString(input.role);
+    if (!roomName && roomMetadataProvided) {
+      throw new Error("room_name is required when room_title, room_kind, or role is provided.");
+    }
+    const roomTitle = roomName ? optionalString(input.room_title) ?? titleFromRoomName(roomName) : null;
+    const roomKind = roomName ? normalizeRoomKind(optionalString(input.room_kind)) : null;
+    const role = roomName ? optionalString(input.role) ?? "researcher" : null;
     const activeRoomNames = new Set(
       [...this.sessions.values()]
-        .filter((session) => session.id !== "root" && session.status === "running")
-        .map((session) => session.roomName),
+        .filter((session) => session.id !== "root" && session.status === "running" && session.roomName)
+        .map((session) => session.roomName!),
     );
-    if (!activeRoomNames.has(roomName) && activeRoomNames.size >= this.maxConcurrentRooms) {
+    if (roomName && !activeRoomNames.has(roomName) && activeRoomNames.size >= this.maxConcurrentRooms) {
       throw new Error(`Breakout room concurrency limit reached (${this.maxConcurrentRooms}).`);
     }
-    const roomMemberCount = [...this.sessions.values()].filter((session) => session.id !== "root" && session.roomName === roomName).length;
-    if (roomMemberCount >= this.maxMembersPerRoom) {
+    const roomMemberCount = roomName
+      ? [...this.sessions.values()].filter((session) => session.id !== "root" && session.roomName === roomName).length
+      : 0;
+    if (roomName && roomMemberCount >= this.maxMembersPerRoom) {
       throw new Error(`Breakout room ${roomName} member limit reached (${this.maxMembersPerRoom}).`);
     }
     if (this.totalInvocations >= this.maxTotalInvocations) {
@@ -743,10 +750,12 @@ export class SubagentManager {
       provider: session.provider,
       model: session.model,
       reasoningEffort: session.reasoning ?? null,
-      roomName: session.roomName,
-      roomTitle: session.roomTitle,
-      roomKind: session.roomKind,
-      role: session.role,
+      ...(session.roomName ? {
+        roomName: session.roomName,
+        roomTitle: session.roomTitle ?? titleFromRoomName(session.roomName),
+        roomKind: session.roomKind ?? "general",
+        role: session.role ?? "researcher",
+      } : {}),
     });
   }
 

@@ -15,6 +15,7 @@
 
 ### Changed
 
+- Single-worker delegation now creates an ordinary subagent by default. Breakout metadata is explicit and reserved for rooms with at least two collaborating subagents; lead agents are instructed to delegate a same-model representative instead of joining a room themselves.
 - Anthropic breakout workers run through the official Claude Agent SDK, while OpenAI and xAI workers use their native Pi adapters; all routes share the lead session's governed workspace tools and authorization boundary without sharing provider-native conversation state.
 - Runs under the bundled Security Research profile now require the selected provider's host-recorded policy-risk acknowledgement during authorization preflight: Trusted Access for Cyber plus policy risk for OpenAI, Cyber Verification Program plus policy risk for Anthropic, and policy risk for xAI.
 - Anthropic execution now uses the official Claude Agent SDK and its Claude Code agent process, with Honeycrisp's governed research tools bridged through an in-process MCP server. Subscription sign-in and status delegate to the installed official Claude CLI instead of storing or replaying Anthropic OAuth tokens; API-key use remains available through `ANTHROPIC_API_KEY`.
