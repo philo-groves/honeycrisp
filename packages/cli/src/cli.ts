@@ -27,6 +27,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       await runModelsCommand(argv.slice(1));
       return;
     }
+    if (argv[0] === "complete") {
+      const { runCompleteCommand } = await import("./complete-command.js");
+      await runCompleteCommand(argv.slice(1));
+      return;
+    }
     const { main: runRuntimeCli } = await import("./runtime-cli.js");
     await runRuntimeCli(argv);
   } catch (error) {
