@@ -28,10 +28,7 @@ const LEASE_RETRY_MS = 50;
 const NEW_LEASE_GRACE_MS = 5_000;
 const SHELL_PARAMETERS = {
   type: "object",
-  anyOf: [
-    { required: ["command"] },
-    { required: ["utility"] },
-  ],
+  description: "Provide either command, or utility with optional args. Do not provide both forms.",
   properties: {
     command: {
       type: "string",

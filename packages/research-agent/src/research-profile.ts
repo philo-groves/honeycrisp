@@ -510,8 +510,10 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       description: "Hunt for ambitious, reportable high- or critical-severity vulnerabilities in underexplored attack surfaces.",
       goalSuggestionCount: 4,
       goalSuggestionInstructions: [
-        "Choose high-upside, underexplored directions with a credible path to reportable high or critical impact, grounded in the workspace architecture, prior evidence, or historical vulnerability patterns.",
-        "Favor deep trust-boundary failures, cross-component composition, and powerful attacker-controlled pivots over incremental variants, without assuming that a flaw exists or that its severity is established.",
+        "Propose open-ended research territories with a credible path to reportable high or critical impact, grounded in broad architecture, trust boundaries, prior evidence, or historical vulnerability patterns.",
+        "Each goal must name a broad attack surface and an explicit systemic impact ceiling, such as platform-wide cross-tenant compromise, remote or system code execution, sandbox escape, privilege escalation, or supply-chain compromise.",
+        "Favor deep trust-boundary failures, cross-component composition, and powerful attacker-controlled pivots over incremental variants. Exclude local-only or single-object outcomes unless the goal explains a credible path to systemic impact.",
+        "Leave the vulnerable mechanism open. Do not turn a remembered lead into a binary verification task, center one function or route, or begin with verify, confirm, or determine whether.",
       ],
       promptInstructions: [
         "Pursue a high-upside vulnerability direction where a confirmed flaw could plausibly support reportable high or critical impact.",
@@ -973,7 +975,9 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
       goalSuggestionCount: 4,
       goalSuggestionInstructions: [
         "Choose a concrete high-upside leverage point toward a major advance: a decisive conjecture, new invariant, unexpected equivalence, cross-domain connection, obstruction, or tractable special case.",
+        "Every goal must open a research program with an explicit breakthrough-scale ceiling, such as a general theorem, unifying framework, foundational obstruction, or new method that unlocks a broad problem class.",
         "Favor bold but technically grounded directions over generic requests to solve an entire famous problem, and make the source of possible leverage explicit.",
+        "Leave the decisive construction or argument open. Do not reduce Longshot to verifying one lemma, checking one example, or settling a binary whether-question.",
       ],
       promptInstructions: [
         "Pursue a major mathematical advance through a specific leverage point while keeping assumptions, dependencies, computations, and proof gaps explicit.",

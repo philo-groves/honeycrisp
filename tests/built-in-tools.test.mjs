@@ -64,14 +64,28 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
   }));
 
   try {
-    const registry = createResearchToolRegistry([
-      createShellTool({
-        workspaceRoot: root,
-        shellOptionsPath: optionsPath,
-        protectedDirectories: [protectedDirectory],
-        authorize: allowShell,
-      }),
-    ]);
+    const shellTool = createShellTool({
+      workspaceRoot: root,
+      shellOptionsPath: optionsPath,
+      protectedDirectories: [protectedDirectory],
+      authorize: allowShell,
+    });
+    assert.equal(shellTool.parameters.type, "object");
+    assert.equal("anyOf" in shellTool.parameters, false);
+    assert.equal("oneOf" in shellTool.parameters, false);
+    const registry = createResearchToolRegistry([shellTool]);
+    const missingInvocation = await registry.execute({
+      id: "shell_missing_invocation",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: {},
+    });
+    const conflictingInvocation = await registry.execute({
+      id: "shell_conflicting_invocation",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { command: "echo safe", utility: "printf" },
+    });
     const disabled = await registry.execute({
       id: "shell_disabled",
       actionClass: "experiment",
@@ -124,6 +138,10 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
         ],
       },
     });
+    assert.equal(missingInvocation.result.status, "error");
+    assert.match(missingInvocation.result.error.message, /requires command or utility/);
+    assert.equal(conflictingInvocation.result.status, "error");
+    assert.match(conflictingInvocation.result.error.message, /not both/);
     const protectedDelete = await registry.execute({
       id: "shell_protected_delete",
       actionClass: "experiment",

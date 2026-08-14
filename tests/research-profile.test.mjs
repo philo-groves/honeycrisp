@@ -84,11 +84,14 @@ test("bundled profiles define domain-specific Longshot workflows", () => {
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);
   assert.match(securityLongshot?.description ?? "", /reportable high- or critical-severity vulnerabilities/);
+  assert.match(securityLongshot?.goalSuggestionInstructions.join(" ") ?? "", /broad attack surface.*explicit systemic impact ceiling/);
+  assert.match(securityLongshot?.goalSuggestionInstructions.join(" ") ?? "", /not.*binary verification task/);
   assert.match(securityLongshot?.promptInstructions.join(" ") ?? "", /severity, and reportability evidence-gated/);
   assert.equal(mathematicsLongshot?.name, "Longshot");
   assert.equal(mathematicsLongshot?.goalSuggestionCount, 4);
   assert.match(mathematicsLongshot?.description ?? "", /major mathematical breakthrough/);
   assert.match(mathematicsLongshot?.goalSuggestionInstructions.join(" ") ?? "", /specific leverage point|source of possible leverage/);
+  assert.match(mathematicsLongshot?.goalSuggestionInstructions.join(" ") ?? "", /open a research program.*breakthrough-scale ceiling/);
 });
 
 test("profile collaboration guidance selects only the active workflow recipe", () => {
