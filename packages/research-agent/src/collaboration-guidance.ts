@@ -8,7 +8,7 @@ export function createCollaborationSystemGuidance(
   return [
     `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
     "For an explicit collaborator route, pass provider and model as separate fields with fork_turns set to none or a bounded number. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the parent route.",
-    `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations across the session.`,
+    `Use no more than ${config.maxConcurrentRooms * config.maxMembersPerRoom} concurrently active subagent turns, ${config.maxConcurrentRooms} concurrent rooms, and ${config.maxMembersPerRoom} members per room. There is no lifetime collaborator-invocation budget; completed turns leave all later delegation capacity available.`,
     "A single delegated worker is a normal subagent. Use create_room to form every breakout room atomically with at least two role-defined members.",
     "The lead agent is not a breakout-room member. If the lead perspective is needed in a room, spawn a separate subagent on the lead provider/model to represent it; use partial or no inheritance when explicit routing overrides are required.",
     config.independentFirstPass

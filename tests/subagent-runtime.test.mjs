@@ -118,6 +118,55 @@ test("single-worker delegation remains a normal subagent without breakout metada
   );
 });
 
+test("subagent concurrency releases capacity without a lifetime invocation budget", async () => {
+  const requests = [];
+  const releases = [];
+  const manager = new SubagentManager({
+    rootModel: "parent-model",
+    maxThreads: 1,
+    maxTotalInvocations: 2,
+    run(request) {
+      requests.push(request);
+      return new Promise((resolve) => {
+        releases.push(() => resolve(resultFor(request, `completed ${request.path}`)));
+      });
+    },
+  });
+  const tools = toolsByName(manager, "root");
+
+  const first = await tools.spawn_agent.execute("spawn_first", {
+    task_name: "first",
+    message: "First bounded task.",
+    fork_turns: "none",
+  });
+  await assert.rejects(tools.spawn_agent.execute("spawn_while_busy", {
+    task_name: "blocked_while_busy",
+    message: "Must wait for active capacity.",
+    fork_turns: "none",
+  }), /Subagent concurrency limit reached \(1\)/);
+
+  releases.shift()();
+  await manager.settle();
+  for (const taskName of ["second", "third"]) {
+    await tools.spawn_agent.execute(`spawn_${taskName}`, {
+      task_name: taskName,
+      message: `${taskName} bounded task.`,
+      fork_turns: "none",
+    });
+    releases.shift()();
+    await manager.settle();
+  }
+
+  await tools.followup_task.execute("followup_first", {
+    target: first.details.agent_id,
+    message: "Revisit the first result after later work completed.",
+  });
+  releases.shift()();
+  await manager.settle();
+
+  assert.equal(requests.length, 4);
+});
+
 test("subagent runtime creates heterogeneous rooms atomically", async () => {
   const requests = [];
   const releases = [];
@@ -257,9 +306,9 @@ test("collaboration config decoder allows distinct models per provider and rejec
     peerChallengeRounds: 1,
     maxConcurrentRooms: 2,
     maxMembersPerRoom: 3,
-    maxTotalInvocations: 8,
   };
   assert.deepEqual(decodeResearchCollaborationConfig(valid), valid);
+  assert.deepEqual(decodeResearchCollaborationConfig({ ...valid, maxTotalInvocations: 7 }), valid);
   assert.throws(
     () => decodeResearchCollaborationConfig({ ...valid, maxConcurrentRooms: 6 }),
     /maxConcurrentRooms must be an integer from 1 to 5/,

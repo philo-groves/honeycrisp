@@ -335,7 +335,6 @@ export function createPiAgentExecutor(
               requireRoomBeforeFinal: collaboration.mode === "always",
               maxConcurrentRooms: collaboration.maxConcurrentRooms,
               maxMembersPerRoom: collaboration.maxMembersPerRoom,
-              maxTotalInvocations: collaboration.maxTotalInvocations,
               providerPreferences: collaboration.providers.map((preference) => ({
                 provider: preference.provider,
                 model: preference.model,

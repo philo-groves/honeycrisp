@@ -239,7 +239,6 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               requireRoomBeforeFinal: collaboration.mode === "always",
               maxConcurrentRooms: collaboration.maxConcurrentRooms,
               maxMembersPerRoom: collaboration.maxMembersPerRoom,
-              maxTotalInvocations: collaboration.maxTotalInvocations,
               providerPreferences: collaboration.providers.map((preference) => ({
                 provider: preference.provider,
                 model: preference.model,
@@ -369,7 +368,10 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
 
         await collaborationManager?.settle();
         let collaborationFollowUp = collaborationManager?.collaborationFollowUp("root") ?? [];
-        const maxCollaborationContinuations = Math.max(2, (collaboration?.maxTotalInvocations ?? 0) + 2);
+        const maxCollaborationContinuations = Math.max(
+          2,
+          ((collaboration?.peerChallengeRounds ?? 0) * 2 + 3) * (collaboration?.maxConcurrentRooms ?? 1),
+        );
         let collaborationContinuationCount = 0;
         while (collaborationFollowUp.length > 0) {
           if (collaborationContinuationCount >= maxCollaborationContinuations) {

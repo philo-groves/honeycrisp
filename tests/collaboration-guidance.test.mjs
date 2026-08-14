@@ -14,7 +14,6 @@ const BASE_CONFIG = {
   peerChallengeRounds: 1,
   maxConcurrentRooms: 2,
   maxMembersPerRoom: 3,
-  maxTotalInvocations: 8,
 };
 
 test("adaptive collaboration guidance promotes delegation throughout discovery", () => {
@@ -27,6 +26,9 @@ test("adaptive collaboration guidance promotes delegation throughout discovery",
   assert.match(guidance, /During discovery, actively use ordinary subagents beyond the opening phase/);
   assert.match(guidance, /newly exposed primitive is a reason to reconsider delegation/);
   assert.match(guidance, /do not spawn merely to satisfy the mode/);
+  assert.match(guidance, /6 concurrently active subagent turns/);
+  assert.match(guidance, /no lifetime collaborator-invocation budget/i);
+  assert.match(guidance, /completed turns leave all later delegation capacity available/i);
 });
 
 test("discovery-specific collaboration guidance does not leak into other workflows", () => {

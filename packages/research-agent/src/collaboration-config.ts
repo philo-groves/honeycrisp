@@ -28,7 +28,6 @@ export function decodeResearchCollaborationConfig(value: unknown): ResearchColla
     peerChallengeRounds: boundedInteger(value.peerChallengeRounds, 0, 3, "peerChallengeRounds"),
     maxConcurrentRooms: boundedInteger(value.maxConcurrentRooms, 1, 5, "maxConcurrentRooms"),
     maxMembersPerRoom: boundedInteger(value.maxMembersPerRoom, 2, 5, "maxMembersPerRoom"),
-    maxTotalInvocations: boundedInteger(value.maxTotalInvocations, 2, 24, "maxTotalInvocations"),
   };
 }
 

@@ -289,7 +289,6 @@ export interface ResearchCollaborationConfig {
   peerChallengeRounds: number;
   maxConcurrentRooms: number;
   maxMembersPerRoom: number;
-  maxTotalInvocations: number;
 }
 
 export interface ResearchAgentExecutionInput {

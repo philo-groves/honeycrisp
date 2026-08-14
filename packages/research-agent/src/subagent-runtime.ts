@@ -59,7 +59,6 @@ export interface CreateSubagentManagerOptions {
   maxDepth?: number;
   maxConcurrentRooms?: number;
   maxMembersPerRoom?: number;
-  maxTotalInvocations?: number;
   peerChallengeRounds?: number;
   requireRoomBeforeFinal?: boolean;
   providerPreferences?: readonly SubagentProviderPreference[];
@@ -198,10 +197,8 @@ export class SubagentManager {
   private readonly maxDepth: number;
   private readonly maxConcurrentRooms: number;
   private readonly maxMembersPerRoom: number;
-  private readonly maxTotalInvocations: number;
   private readonly peerChallengeRounds: number;
   private readonly requireRoomBeforeFinal: boolean;
-  private totalInvocations = 0;
   private readonly providerPreferences: readonly SubagentProviderPreference[];
   private providerPreferenceCursor = 0;
   private activityVersion = 0;
@@ -212,7 +209,6 @@ export class SubagentManager {
     this.maxDepth = nonNegativeInteger(options.maxDepth) ?? DEFAULT_MAX_DEPTH;
     this.maxConcurrentRooms = positiveInteger(options.maxConcurrentRooms) ?? this.maxThreads;
     this.maxMembersPerRoom = positiveInteger(options.maxMembersPerRoom) ?? this.maxThreads;
-    this.maxTotalInvocations = positiveInteger(options.maxTotalInvocations) ?? Number.MAX_SAFE_INTEGER;
     this.peerChallengeRounds = nonNegativeInteger(options.peerChallengeRounds) ?? 0;
     this.requireRoomBeforeFinal = options.requireRoomBeforeFinal === true;
     this.providerPreferences = (options.providerPreferences ?? []).filter((preference) => preference.enabled);
@@ -588,7 +584,6 @@ export class SubagentManager {
     if (activeRooms >= this.maxConcurrentRooms) throw new Error(`Breakout room concurrency limit reached (${this.maxConcurrentRooms}).`);
     const activeAgents = [...this.sessions.values()].filter((session) => session.id !== "root" && session.status === "running").length;
     if (activeAgents + input.members.length > this.maxThreads) throw new Error(`Subagent concurrency limit reached (${this.maxThreads}).`);
-    if (this.totalInvocations + input.members.length > this.maxTotalInvocations) throw new Error(`Session collaborator invocation limit reached (${this.maxTotalInvocations}).`);
     const memberInputs = input.members.map((value, index) => {
       if (!isRecord(value)) throw new Error(`members[${index}] must be an object.`);
       const taskName = requiredString(value.task_name, `members[${index}].task_name`);
@@ -632,7 +627,6 @@ export class SubagentManager {
         session?.controller?.abort();
         this.sessions.delete(memberId);
       }
-      this.totalInvocations = Math.max(0, this.totalInvocations - room.memberIds.length);
       this.providerPreferenceCursor = providerPreferenceCursorBefore;
       this.rooms.delete(roomName);
       throw error;
@@ -708,9 +702,6 @@ export class SubagentManager {
     if (roomName && roomMemberCount >= this.maxMembersPerRoom) {
       throw new Error(`Breakout room ${roomName} member limit reached (${this.maxMembersPerRoom}).`);
     }
-    if (this.totalInvocations >= this.maxTotalInvocations) {
-      throw new Error(`Session collaborator invocation limit reached (${this.maxTotalInvocations}).`);
-    }
     const id = `agent_${randomUUID().replaceAll("-", "")}`;
     const child: SubagentSession = {
       id,
@@ -738,7 +729,6 @@ export class SubagentManager {
     };
     this.sessions.set(id, child);
     if (roomName) this.rooms.get(roomName)?.memberIds.push(id);
-    this.totalInvocations += 1;
     if (!deferLaunch) {
       this.launch(child, message, inheritedMessages);
       void this.emitSessionActivity(child, { type: "spawned", message });
@@ -774,10 +764,7 @@ export class SubagentManager {
     const envelope = agentMessages(author.path, author.model, message);
     const wasIdle = target.status !== "running";
     if (triggerTurn && wasIdle) {
-      if (this.totalInvocations >= this.maxTotalInvocations) {
-        throw new Error(`Session collaborator invocation limit reached (${this.maxTotalInvocations}).`);
-      }
-      this.totalInvocations += 1;
+      this.assertThreadCapacity();
       this.launch(target, message, target.messages);
     } else {
       target.mailbox.push(...envelope);
@@ -929,8 +916,7 @@ export class SubagentManager {
       for (const memberId of room.memberIds) {
         const member = this.ensureSession(memberId);
         if (member.status !== "completed" && member.status !== "interrupted") continue;
-        if (this.totalInvocations >= this.maxTotalInvocations) break;
-        this.totalInvocations += 1;
+        if (!this.hasThreadCapacity()) break;
         this.launch(member, `Room ${room.name} advanced to ${room.phase} phase. Review the simultaneously released peer packets with room_status, publish your ${requiredKind} packet, and use room_wait for the next phase.`, member.messages);
         void this.emitSessionActivity(member, { type: "followup", authorAgentPath: "/root", message: `Room advanced to ${room.phase}.` });
       }
@@ -1066,8 +1052,7 @@ export class SubagentManager {
       const requiredKind = room && room.phase !== "synthesis" && room.phase !== "completed" ? packetKindForPhase(room.phase) : null;
       const missingRequiredPacket = Boolean(room && requiredKind && !room.packets.some((packet) =>
         packet.authorId === session.id && packet.kind === requiredKind && packet.challengeRound === room.challengeRound));
-      if (missingRequiredPacket && requiredKind && room && this.totalInvocations < this.maxTotalInvocations) {
-        this.totalInvocations += 1;
+      if (missingRequiredPacket && requiredKind && room && this.hasThreadCapacity()) {
         this.launch(session, `Room protocol recovery: publish your ${requiredKind} packet for ${room.phase} phase, then use room_wait instead of concluding while peers are active.`, result.messages);
         void this.emitSessionActivity(session, { type: "followup", authorAgentPath: "/root", message: "Room protocol recovery." });
         return;
@@ -1088,6 +1073,20 @@ export class SubagentManager {
     });
     session.promise = promise;
     this.notifyActivity();
+  }
+
+  private activeThreadCount(): number {
+    return [...this.sessions.values()].filter((session) => session.id !== "root" && session.status === "running").length;
+  }
+
+  private hasThreadCapacity(additional = 1): boolean {
+    return this.activeThreadCount() + additional <= this.maxThreads;
+  }
+
+  private assertThreadCapacity(additional = 1): void {
+    if (!this.hasThreadCapacity(additional)) {
+      throw new Error(`Subagent concurrency limit reached (${this.maxThreads}).`);
+    }
   }
 
   private enqueueParentNotification(session: SubagentSession, text: string): void {
