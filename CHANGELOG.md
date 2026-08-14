@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Adaptive collaboration guidance now keeps delegation active across the full research session, prompts reassessment at evidence and phase transitions, favors relevant subagent follow-ups over duplicate spawns, and gives discovery workflows concrete later-session delegation opportunities.
 - Bounded and batch-hydrated memory recall candidates before context ranking, combined prompt-term recall into one query, and restricted relationship loading to candidate nodes.
 - Split lightweight CLI commands from the full research runtime, moved cybersecurity rejection checks ahead of database and tool initialization, and limited concurrent MCP discovery to allowlisted servers.
 - Research runs now honor host-supplied per-provider Subscription or API key preferences across lead agents, collaborator agents, and title generation. Explicit subscription usage-cap and API-credit exhaustion errors switch once to an available alternate source without falling back for policy, authentication, or ordinary transient errors.

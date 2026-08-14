@@ -15,6 +15,7 @@ import {
 } from "./auth-routing.js";
 import { researchProfileHash, researchProfileWorkflow, type ResearchProfile } from "./research-profile.js";
 import { createResearchSystemPrompt } from "./system-prompt.js";
+import { createCollaborationSystemGuidance } from "./collaboration-guidance.js";
 import { SubagentManager, type SubagentRunRequest, type SubagentRunResult } from "./subagent-runtime.js";
 import {
   getToolTransportName,
@@ -319,7 +320,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                       hasReportTools: hasTool(options.toolRegistry, "report_list"),
                       hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
                       hasCollaborationTools: collaborationMcpTools.length > 0,
-                      ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
+                      ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id) } : {}),
                       goalEnabled: false,
                       ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
                       researchProfile: options.researchProfile,
@@ -402,7 +403,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                     hasReportTools: hasTool(options.toolRegistry, "report_list"),
                     hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
                     hasCollaborationTools: collaborationMcpTools.length > 0,
-                    ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
+                    ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id) } : {}),
                     goalEnabled: false,
                     ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
                     researchProfile: options.researchProfile,
@@ -549,22 +550,6 @@ function agentToolAsSdkTool(candidate: AgentTool, signal: AbortSignal) {
       return { content: [{ type: "text" as const, text: text || "{}" }] };
     },
   );
-}
-
-function collaborationSystemGuidance(config: ResearchCollaborationConfig): string {
-  const enabled = config.providers.filter((provider) => provider.enabled);
-  return [
-    `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
-    "For an explicit collaborator route, pass provider and model as separate fields with fork_turns set to none or a bounded number. With fork_turns=all, omit provider, model, and reasoning_effort.",
-    `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations.`,
-    config.independentFirstPass
-      ? "Require an independent evidence memo from each member before peer messaging."
-      : "Independent first passes are optional.",
-    `Use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"} per room; create rooms atomically with create_room and publish structured evidence packets.`,
-    config.mode === "adaptive"
-      ? "Create rooms only for decomposable coverage, meaningful disagreement, evidence review, or proving work."
-      : "Use rooms for every materially separable research stage.",
-  ].join(" ");
 }
 
 export function appendClaudeAgentProgressGuidance(systemPrompt: string): string {

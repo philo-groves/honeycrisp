@@ -59,6 +59,7 @@ import { createResearchSystemPrompt } from "./system-prompt.js";
 import {
   type MemoryTypeDescriptionsInput,
 } from "./memory-taxonomy.js";
+import { createCollaborationSystemGuidance } from "./collaboration-guidance.js";
 import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   normalizeResearchProfile,
@@ -121,24 +122,6 @@ const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
 const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
 const MAX_TRANSIENT_MODEL_RETRIES = 4;
 const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition"]);
-
-function collaborationSystemGuidance(config: ResearchCollaborationConfig): string {
-  const enabled = config.providers.filter((provider) => provider.enabled);
-  return [
-    `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
-    "For an explicit collaborator route, pass provider and model as separate fields with fork_turns set to none or a bounded number. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the parent route.",
-    `Use no more than ${config.maxConcurrentRooms} concurrent rooms, ${config.maxMembersPerRoom} members per room, and ${config.maxTotalInvocations} collaborator invocations across the session.`,
-    "A single delegated worker is a normal subagent. Use create_room to form every breakout room atomically with at least two role-defined members.",
-    "The lead agent is not a breakout-room member. If the lead perspective is needed in a room, spawn a separate subagent on the lead provider/model to represent it; use partial or no inheritance when explicit routing overrides are required.",
-    config.independentFirstPass
-      ? "Require each room member to produce an independent evidence memo before peer messages or convergence."
-      : "Independent first passes are optional for this session.",
-    `After independent work, use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"} per room.`,
-    config.mode === "adaptive"
-      ? "Create breakout rooms only for decomposable coverage, meaningful disagreement, evidence review, or proving work; keep tightly sequential work in the lead session."
-      : "Use breakout rooms for materially separable stages that benefit from collaboration between at least two subagents; use an ordinary subagent for single-worker delegation.",
-  ].join(" ");
-}
 
 export interface PiAgentResumableState {
   schemaVersion: 1 | 2 | 3;
@@ -720,7 +703,7 @@ export function createPiAgentExecutor(
               hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,
               ...(request.root && !options.agentIdentity ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "create_room" || tool.name === "room_publish"),
-              ...(collaboration ? { collaborationGuidance: collaborationSystemGuidance(collaboration) } : {}),
+              ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id) } : {}),
               goalEnabled: request.root === true && goalRuntime !== null,
               researchProfile,
               workflowId: workflow.id,
