@@ -8,13 +8,8 @@ export function createCollaborationSystemGuidance(
   return [
     `Collaboration mode is ${config.mode} with ${config.intensity} intensity. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model}`).join(", ") || "none"}.`,
     "For an explicit collaborator route, pass provider and model as separate fields with fork_turns set to none or a bounded number. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the parent route.",
-    `Use no more than ${config.maxConcurrentRooms * config.maxMembersPerRoom} concurrently active subagent turns, ${config.maxConcurrentRooms} concurrent rooms, and ${config.maxMembersPerRoom} members per room. There is no lifetime collaborator-invocation budget; completed turns leave all later delegation capacity available.`,
-    "A single delegated worker is a normal subagent. Use create_room to form every breakout room atomically with at least two role-defined members.",
-    "The lead agent is not a breakout-room member. If the lead perspective is needed in a room, spawn a separate subagent on the lead provider/model to represent it; use partial or no inheritance when explicit routing overrides are required.",
-    config.independentFirstPass
-      ? "Require each room member to produce an independent evidence memo before peer messages or convergence."
-      : "Independent first passes are optional for this session.",
-    `After independent work, use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"} per room.`,
+    `Concurrency limits: ${config.maxConcurrentRooms * config.maxMembersPerRoom} active subagent turns, ${config.maxConcurrentRooms} rooms, and ${config.maxMembersPerRoom} members per room.`,
+    `For a room, ${config.independentFirstPass ? "require" : "do not require"} independent first-pass memos and use at most ${config.peerChallengeRounds} peer challenge round${config.peerChallengeRounds === 1 ? "" : "s"}.`,
     ...modeGuidance(config.mode, workflowId),
   ].join(" ");
 }
@@ -25,15 +20,13 @@ function modeGuidance(
 ): readonly string[] {
   if (mode === "adaptive") {
     return [
-      "Adaptive collaboration remains available throughout the session; do not treat initial decomposition as the only delegation point.",
-      "Reassess whether collaboration would materially improve coverage or confidence whenever evidence changes the plan, a hypothesis is confirmed or refuted, work crosses a subsystem or trust boundary, proving or verification begins, or final synthesis approaches.",
-      "At each such transition, choose deliberately among following up a relevant existing subagent, spawning one bounded independent subagent, opening a breakout room for genuinely multi-agent work, or continuing in the lead alone.",
-      "Use list_agents when needed to review active and reusable agents. Prefer followup_task when an existing agent's context matches the new work, and avoid duplicate assignments.",
+      "Adaptive mode makes collaboration available, not required. Delegate only when clean separation or independent review is likely to produce materially better evidence than continuing in the lead.",
+      "At major evidence or subsystem transitions, continue solo when work is sequential or coordination cost outweighs the expected gain.",
+      "Prefer followup_task when an existing agent's context matches new work, and avoid duplicate assignments.",
       ...(workflowId === "discovery" ? [
-        "During discovery, actively use ordinary subagents beyond the opening phase for parallel source-to-sink tracing, adjacent attack-surface exploration, historical or variant analysis, and independent falsification of promising hypotheses.",
-        "A refuted lead or newly exposed primitive is a reason to reconsider delegation across the surrounding attack surface, not a reason to stop collaborating.",
+        "Discovery may benefit from parallel source-to-sink tracing, adjacent attack-surface exploration, variant analysis, or independent falsification; these are opportunities, not a delegation requirement.",
       ] : []),
-      "Create breakout rooms only for decomposable coverage, meaningful disagreement, evidence review, or proving work. Keep tightly sequential work in the lead session, and do not spawn merely to satisfy the mode.",
+      "Use a breakout room only for genuinely multi-agent coverage, disagreement, or review. Do not spawn merely to satisfy the mode.",
     ];
   }
   if (mode === "always") {

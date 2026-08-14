@@ -315,6 +315,10 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   assert.match(contexts[0].systemPrompt, /Do not narrate routine memory updates unless they materially affect the conclusion/);
   assert.match(contexts[0].systemPrompt, /use the commentary channel for short, concrete, user-visible progress updates/);
   assert.match(contexts[0].systemPrompt, /send a final response only when the current task is complete/);
+  assert.match(contexts[0].systemPrompt, /Collaboration is optional/);
+  assert.match(contexts[0].systemPrompt, /expected evidence gain justifies the added context and coordination cost/);
+  assert.doesNotMatch(contexts[0].systemPrompt, /Use collaboration tools for independent work/);
+  assert.doesNotMatch(contexts[0].systemPrompt, /Preferred profile collaboration recipe/);
   assert.match(contexts[0].systemPrompt, /use the Tart VM with SIP enabled/);
   assert.doesNotMatch(contexts[0].systemPrompt, /decide how to investigate it and when the work is complete/);
 });

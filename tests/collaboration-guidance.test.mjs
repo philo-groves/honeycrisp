@@ -16,26 +16,25 @@ const BASE_CONFIG = {
   maxMembersPerRoom: 3,
 };
 
-test("adaptive collaboration guidance promotes delegation throughout discovery", () => {
+test("adaptive collaboration guidance makes delegation evidence-driven", () => {
   const guidance = createCollaborationSystemGuidance(BASE_CONFIG, "discovery");
 
-  assert.match(guidance, /remains available throughout the session/);
-  assert.match(guidance, /do not treat initial decomposition as the only delegation point/);
-  assert.match(guidance, /whenever evidence changes the plan/);
+  assert.match(guidance, /makes collaboration available, not required/);
+  assert.match(guidance, /materially better evidence than continuing in the lead/);
+  assert.match(guidance, /coordination cost outweighs the expected gain/);
   assert.match(guidance, /Prefer followup_task when an existing agent's context matches/);
-  assert.match(guidance, /During discovery, actively use ordinary subagents beyond the opening phase/);
-  assert.match(guidance, /newly exposed primitive is a reason to reconsider delegation/);
-  assert.match(guidance, /do not spawn merely to satisfy the mode/);
-  assert.match(guidance, /6 concurrently active subagent turns/);
-  assert.match(guidance, /no lifetime collaborator-invocation budget/i);
-  assert.match(guidance, /completed turns leave all later delegation capacity available/i);
+  assert.match(guidance, /these are opportunities, not a delegation requirement/);
+  assert.match(guidance, /Do not spawn merely to satisfy the mode/);
+  assert.match(guidance, /Concurrency limits: 6 active subagent turns/);
+  assert.doesNotMatch(guidance, /actively use ordinary subagents/);
+  assert.doesNotMatch(guidance, /no lifetime collaborator-invocation budget/i);
 });
 
 test("discovery-specific collaboration guidance does not leak into other workflows", () => {
   const guidance = createCollaborationSystemGuidance(BASE_CONFIG, "verification");
 
-  assert.match(guidance, /remains available throughout the session/);
-  assert.doesNotMatch(guidance, /During discovery/);
+  assert.match(guidance, /makes collaboration available, not required/);
+  assert.doesNotMatch(guidance, /Discovery may benefit/);
 });
 
 test("solo and always collaboration guidance retain their distinct postures", () => {
@@ -43,6 +42,6 @@ test("solo and always collaboration guidance retain their distinct postures", ()
   const solo = createCollaborationSystemGuidance({ ...BASE_CONFIG, mode: "solo" }, "discovery");
 
   assert.match(always, /throughout every materially separable research stage/);
-  assert.doesNotMatch(always, /do not treat initial decomposition/);
+  assert.doesNotMatch(always, /makes collaboration available, not required/);
   assert.match(solo, /Do not initiate collaboration unless the user explicitly requests it/);
 });
