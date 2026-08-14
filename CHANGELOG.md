@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added Z.ai provider support with GLM-5.3 and GLM-5-Turbo catalog entries, `ZAI_API_KEY` routing through Pi, official ZCode app-server execution for subscription-backed lead and collaborator agents, resumable ZCode sessions, a session-scoped governed MCP tool bridge, and cybersecurity policy-risk preflight acknowledgement.
 - Added a bounded provider-neutral auxiliary text-completion boundary for host support jobs, including authentication preference and usage-limit fallback routing; Anthropic requests use the official Claude Agent SDK and CLI path.
 - Added atomic, provider-neutral collaboration rooms with phase-gated independent memos, targeted peer challenges, responses, lead-owned synthesis, structured evidence/confidence/uncertainty packets, and bounded continuation recovery. Research profiles now own workflow-specific collaboration recipes; bundled Security Research 1.4.0 and Mathematics 1.3.0 define separate domain roles and review protocols.
 - Added the access-restricted `gpt-daybreak-red-latest` OpenAI Codex model with the same runtime capabilities as Daybreak Blue; host frontends may gate its visibility behind an explicit opt-in.
@@ -54,6 +55,7 @@
 
 ### Fixed
 
+- ZCode subscription readiness now recognizes the official desktop app's shared OAuth credential without requiring the unrelated CLI config file.
 - Subscription-preferred model routes now mask ambient provider API keys until an explicit usage-limit fallback, preventing xAI subscription sessions, title generation, and shell review from silently using API-key billing when OAuth credentials are unavailable.
 - Made live model deltas incremental instead of repeating accumulated text, and serialized CLI event-stream writes with stdout backpressure.
 - Multi-repository search now accepts an explicit configured root, uses a 30-second default bound, and returns clearly marked partial results at the deadline instead of discarding prior matches; raw search utilities use a shorter default timeout and report exit status 1 as a no-match outcome.

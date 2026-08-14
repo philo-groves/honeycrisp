@@ -4,7 +4,7 @@ import {
   type Models,
 } from "@earendil-works/pi-ai";
 
-export const RESEARCH_MODEL_PROVIDER_IDS = ["openai-codex", "anthropic", "xai"] as const;
+export const RESEARCH_MODEL_PROVIDER_IDS = ["openai-codex", "anthropic", "xai", "zai"] as const;
 
 export type ResearchModelProviderId = typeof RESEARCH_MODEL_PROVIDER_IDS[number];
 export type ProviderAuthenticationMethod = "subscription" | "api_key";
@@ -14,6 +14,7 @@ const API_KEY_ENVIRONMENT_VARIABLES: Readonly<Record<ResearchModelProviderId, st
   "openai-codex": "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
   xai: "XAI_API_KEY",
+  zai: "ZAI_API_KEY",
 };
 
 export function readProviderAuthenticationPreferences(

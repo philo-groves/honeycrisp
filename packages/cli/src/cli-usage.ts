@@ -23,6 +23,7 @@ export function usage(): string {
     "  --openai-trusted-access-cyber-risk-acknowledged  Confirm host-recorded OpenAI Trusted Access for Cyber and policy-risk acceptance",
     "  --anthropic-cvp-risk-acknowledged  Confirm host-recorded Anthropic CVP risk acceptance",
     "  --xai-policy-risk-acknowledged  Confirm host-recorded xAI policy-risk acceptance",
+    "  --zai-policy-risk-acknowledged  Confirm host-recorded Z.ai policy-risk acceptance",
     "  --model <model>        Override configured/default model for real mode",
     "  --title-model <model>  Generate a session title with this model from the selected provider",
     "  --title-effort <level> Reasoning effort for session title generation (default: medium)",

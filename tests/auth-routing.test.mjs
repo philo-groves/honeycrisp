@@ -12,10 +12,30 @@ test("authentication preferences parse only supported providers and methods", ()
     anthropic: "subscription",
     unsupported: "api_key",
     xai: "invalid",
+    zai: "subscription",
   })), {
     "openai-codex": "api_key",
     anthropic: "subscription",
+    zai: "subscription",
   });
+});
+
+test("Z.ai API-key preference exposes only the dedicated ZAI_API_KEY route", async () => {
+  const previous = process.env.ZAI_API_KEY;
+  process.env.ZAI_API_KEY = "test-zai-key";
+  try {
+    const router = new ProviderAuthenticationRouter({ zai: "api_key" });
+    assert.equal(router.method("zai"), "api_key");
+    assert.equal(router.requestApiKey("zai"), "test-zai-key");
+    const context = router.authContext({
+      env: async (name) => process.env[name],
+      fileExists: async () => false,
+    });
+    assert.equal(await context.env("ZAI_API_KEY"), "test-zai-key");
+  } finally {
+    if (previous === undefined) delete process.env.ZAI_API_KEY;
+    else process.env.ZAI_API_KEY = previous;
+  }
 });
 
 test("OpenAI API-key preference routes the same model through the API provider", () => {

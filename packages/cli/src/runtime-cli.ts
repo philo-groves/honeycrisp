@@ -20,8 +20,10 @@ import {
   createPiAgentExecutor,
   extractCompatiblePiAgentResumableState,
   createClaudeAgentExecutor,
+  createZCodeAgentExecutor,
   decodeResearchCollaborationConfig,
   extractCompatibleClaudeAgentResumableState,
+  extractCompatibleZCodeAgentResumableState,
   createRepositorySearchTool,
   createResearchAgentFlowCapture,
   createResearchStorageLayout,
@@ -64,6 +66,7 @@ import {
   researchProfileWorkflow,
   resolveResearchProfile,
   readProviderAuthenticationPreferences,
+  ProviderAuthenticationRouter,
   verifyProviderAuth,
   workspaceContextFileReadHints,
   writeResearchModelConfig,
@@ -89,6 +92,7 @@ import type {
   ResearchModelConfigPreference,
   PiAgentResumableState,
   ClaudeAgentResumableState,
+  ZCodeAgentResumableState,
   MemoryEvidenceRef,
   MemoryNodeStatus,
   MemoryNodeType,
@@ -210,6 +214,7 @@ interface ParsedArgs {
   openAiTrustedAccessCyberRiskAcknowledged: boolean;
   anthropicCvpRiskAcknowledged: boolean;
   xaiPolicyRiskAcknowledged: boolean;
+  zaiPolicyRiskAcknowledged: boolean;
   model: string | undefined;
   titleModel: string | undefined;
   titleEffort: ResearchModelEffort | undefined;
@@ -319,6 +324,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let openAiTrustedAccessCyberRiskAcknowledged = false;
   let anthropicCvpRiskAcknowledged = false;
   let xaiPolicyRiskAcknowledged = false;
+  let zaiPolicyRiskAcknowledged = false;
   let model: string | undefined;
   let titleModel: string | undefined;
   let titleEffort: ResearchModelEffort | undefined;
@@ -434,6 +440,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       anthropicCvpRiskAcknowledged = true;
     } else if (arg === "--xai-policy-risk-acknowledged") {
       xaiPolicyRiskAcknowledged = true;
+    } else if (arg === "--zai-policy-risk-acknowledged") {
+      zaiPolicyRiskAcknowledged = true;
     } else if (arg === "--model") {
       model = readOptionValue(argv, index, arg);
       index += 1;
@@ -633,6 +641,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     openAiTrustedAccessCyberRiskAcknowledged,
     anthropicCvpRiskAcknowledged,
     xaiPolicyRiskAcknowledged,
+    zaiPolicyRiskAcknowledged,
     model,
     titleModel,
     titleEffort,
@@ -1415,6 +1424,7 @@ function usage(): string {
     "  --openai-trusted-access-cyber-risk-acknowledged  Confirm host-recorded OpenAI Trusted Access for Cyber and policy-risk acceptance",
     "  --anthropic-cvp-risk-acknowledged  Confirm host-recorded Anthropic CVP risk acceptance",
     "  --xai-policy-risk-acknowledged  Confirm host-recorded xAI policy-risk acceptance",
+    "  --zai-policy-risk-acknowledged  Confirm host-recorded Z.ai policy-risk acceptance",
     "  --model <model>        Override configured/default model for real mode",
     "  --title-model <model>  Generate a session title with this model from the selected provider",
     "  --title-effort <level> Reasoning effort for session title generation (default: medium)",
@@ -1852,7 +1862,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         ...(preparedRuntimeConfig ? { preparedRuntimeConfig } : {}),
       });
       const dispositionRecorder = runtimeConfig.dispositionRecorder;
-      let resumableState: PiAgentResumableState | ClaudeAgentResumableState | undefined;
+      let resumableState: PiAgentResumableState | ClaudeAgentResumableState | ZCodeAgentResumableState | undefined;
       let effectivePrompt = args.resumeFallbackPrompt ?? args.prompt;
       let agentExecutor: ResearchAgentExecutor;
       if (args.mock) {
@@ -2012,16 +2022,23 @@ async function loadCompatibleResumeState(
   modelConfig: ResolvedResearchModelConfig,
   researchProfileHash: string,
   workflowId: string,
-): Promise<PiAgentResumableState | ClaudeAgentResumableState | undefined> {
+): Promise<PiAgentResumableState | ClaudeAgentResumableState | ZCodeAgentResumableState | undefined> {
   try {
     const capture = JSON.parse(await readFile(resolve(capturePath), "utf8")) as unknown;
     if (!isRecord(capture) || !isRecord(capture.agent)) return undefined;
+    const authenticationRouter = new ProviderAuthenticationRouter(readProviderAuthenticationPreferences());
     return modelConfig.provider === "anthropic"
       ? extractCompatibleClaudeAgentResumableState(
           capture.agent.raw,
           modelConfig.model,
           { researchProfileHash, workflowId },
         )
+      : modelConfig.provider === "zai" && authenticationRouter.method("zai") === "subscription"
+        ? extractCompatibleZCodeAgentResumableState(
+            capture.agent.raw,
+            modelConfig.model,
+            { researchProfileHash, workflowId },
+          )
       : extractCompatiblePiAgentResumableState(
           capture.agent.raw,
           modelConfig.provider,
@@ -2041,7 +2058,7 @@ function createRealAgentExecutor(
   modelConfig: ResolvedResearchModelConfig,
   dispositionRecorder: ResearchDispositionRecorder,
   controlStream: HoneycrispControlStream | undefined,
-  resumableState?: PiAgentResumableState | ClaudeAgentResumableState,
+  resumableState?: PiAgentResumableState | ClaudeAgentResumableState | ZCodeAgentResumableState,
   collaboration?: ResearchCollaborationConfig,
 ): ResearchAgentExecutor {
   const authenticationPreferences = readProviderAuthenticationPreferences();
@@ -2065,7 +2082,7 @@ function createRealAgentExecutor(
     : undefined;
 
   if (modelConfig.provider === "anthropic") {
-    const claudeResumableState = resumableState && !("api" in resumableState)
+    const claudeResumableState = resumableState && !("api" in resumableState) && resumableState.provider === "anthropic"
       ? resumableState
       : undefined;
     return createClaudeAgentExecutor({
@@ -2080,6 +2097,30 @@ function createRealAgentExecutor(
       ...(collaboration ? { collaboration } : {}),
       ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
       ...(claudeResumableState ? { resumableState: claudeResumableState } : {}),
+      ...(controlStream
+        ? {
+            waitForSteeringMessages: (signal?: AbortSignal) =>
+              controlStream.waitForSteeringInstructions(signal),
+          }
+        : {}),
+    });
+  }
+
+  const authenticationRouter = new ProviderAuthenticationRouter(authenticationPreferences);
+  if (modelConfig.provider === "zai" && authenticationRouter.method("zai") === "subscription") {
+    const zcodeResumableState = resumableState && !("api" in resumableState) && resumableState.provider === "zai"
+      ? resumableState
+      : undefined;
+    return createZCodeAgentExecutor({
+      model: modelConfig.model,
+      workspaceRoot: args.workspaceRoot,
+      ...(modelConfig.effort ? { reasoning: modelConfig.effort } : {}),
+      ...(toolRegistry ? { toolRegistry } : {}),
+      researchProfile: resolvedResearchProfile.profile,
+      workflowId,
+      ...(collaboration ? { collaboration } : {}),
+      ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
+      ...(zcodeResumableState ? { resumableState: zcodeResumableState } : {}),
       ...(controlStream
         ? {
             waitForSteeringMessages: (signal?: AbortSignal) =>
@@ -2150,6 +2191,7 @@ function createProviderNeutralSubagentRunner({
 }): (request: SubagentRunRequest, rootInput: ResearchAgentExecutionInput) => Promise<SubagentRunResult> {
   return async (request, rootInput) => {
     const identity = { id: request.id, path: request.path, parentId: request.parentId };
+    const authenticationRouter = new ProviderAuthenticationRouter(authenticationPreferences);
     const executor = request.provider === "anthropic"
       ? createClaudeAgentExecutor({
           model: request.model,
@@ -2163,7 +2205,19 @@ function createProviderNeutralSubagentRunner({
           agentIdentity: identity,
           authenticationPreferences,
         })
-      : createPiAgentExecutor({
+      : request.provider === "zai" && authenticationRouter.method("zai") === "subscription"
+        ? createZCodeAgentExecutor({
+            model: request.model,
+            workspaceRoot,
+            ...(request.reasoning ? { reasoning: request.reasoning } : {}),
+            ...(toolRegistry ? { toolRegistry } : {}),
+            researchProfile: resolvedResearchProfile.profile,
+            workflowId,
+            subagents: false,
+            collaborationTools: request.collaborationTools,
+            agentIdentity: identity,
+          })
+        : createPiAgentExecutor({
           provider: request.provider,
           model: request.model,
           ...(request.reasoning ? { reasoning: request.reasoning } : {}),
@@ -2234,6 +2288,9 @@ async function validateCollaborationProviders(
     }
     if (preference.provider === "xai" && !args.xaiPolicyRiskAcknowledged) {
       throw new Error("xAI breakout-room agents require policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.");
+    }
+    if (preference.provider === "zai" && !args.zaiPolicyRiskAcknowledged) {
+      throw new Error("Z.ai breakout-room agents require policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.");
     }
   }
 }
@@ -3127,6 +3184,11 @@ function validateCybersecurityRunPreflight(
   if (modelConfig.provider === "xai" && !args.xaiPolicyRiskAcknowledged) {
     throw new Error(
       "xAI cybersecurity research requires policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
+    );
+  }
+  if (modelConfig.provider === "zai" && !args.zaiPolicyRiskAcknowledged) {
+    throw new Error(
+      "Z.ai cybersecurity research requires policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
     );
   }
 }

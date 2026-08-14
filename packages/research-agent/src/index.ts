@@ -31,6 +31,7 @@ export * from "./experiment-config.js";
 export * from "./skills.js";
 export * from "./agent-executor.js";
 export * from "./claude-agent-executor.js";
+export * from "./zcode-agent-executor.js";
 export * from "./collaboration-config.js";
 export * from "./agent-instructions.js";
 export * from "./research-focus-guard.js";

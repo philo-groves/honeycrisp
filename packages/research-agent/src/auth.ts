@@ -75,6 +75,55 @@ type CredentialFile = Record<string, Credential>;
 const execFileAsync = promisify(execFile);
 
 const ADDITIONAL_PROVIDER_MODELS: Readonly<Record<string, readonly Model<Api>[]>> = {
+  zai: [
+    {
+      id: "glm-5.3",
+      name: "GLM-5.3",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: true,
+        thinkingFormat: "zai",
+        zaiToolStream: true,
+      },
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "high",
+        high: "high",
+        max: "max",
+      },
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+    {
+      id: "glm-5-turbo",
+      name: "GLM-5-Turbo",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: true,
+        thinkingFormat: "zai",
+        zaiToolStream: true,
+      },
+      reasoning: true,
+      thinkingLevelMap: { off: null, minimal: null, low: "high", medium: "high", high: "high" },
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 128_000,
+    },
+  ],
   anthropic: [
     {
       id: "claude-mythos-5",
@@ -446,6 +495,13 @@ export async function getAuthStatus(
             ? { ...provider, storedCredentialType: "oauth" as const }
             : provider;
         }
+        if (
+          provider.id === "zai"
+          && shouldUseZCodeSubscriptionAuth(options)
+          && await getZCodeSubscriptionAuthStatus()
+        ) {
+          return { ...provider, storedCredentialType: "oauth" as const };
+        }
         const credential = await store.read(provider.id);
         return credential
           ? {
@@ -555,6 +611,24 @@ export async function verifyProviderAuth(
         ? { source: "ANTHROPIC_API_KEY" }
         : cliStatus.loggedIn
           ? { source: "Claude CLI subscription" }
+          : {}),
+    };
+  }
+
+  if (providerId === "zai") {
+    const apiKeyConfigured = Boolean(process.env.ZAI_API_KEY?.trim());
+    const subscriptionStatus = apiKeyConfigured || !shouldUseZCodeSubscriptionAuth(options)
+      ? false
+      : await getZCodeSubscriptionAuthStatus();
+    return {
+      providerId: provider.id,
+      providerName: provider.name,
+      modelId: model.id,
+      configured: apiKeyConfigured || subscriptionStatus,
+      ...(apiKeyConfigured
+        ? { source: "ZAI_API_KEY" }
+        : subscriptionStatus
+          ? { source: "ZCode subscription" }
           : {}),
     };
   }
@@ -677,6 +751,26 @@ interface ClaudeCliAuthStatus {
   loggedIn: boolean;
 }
 
+export async function getZCodeSubscriptionAuthStatus(userHome = homedir()): Promise<boolean> {
+  try {
+    const credentialsText = await readFile(
+      join(userHome, ".zcode", "v2", "credentials.json"),
+      "utf8",
+    );
+    const credentials = JSON.parse(credentialsText) as unknown;
+    const accessToken = isRecord(credentials)
+      ? credentials["oauth:zai:access_token"]
+      : undefined;
+    return typeof accessToken === "string" && accessToken.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function shouldUseZCodeSubscriptionAuth(options: FileCredentialStoreOptions): boolean {
+  return !options.authFile && !process.env.HONEYCRISP_AUTH_FILE?.trim();
+}
+
 function shouldUseClaudeCliAuth(options: FileCredentialStoreOptions): boolean {
   return !options.authFile && !process.env.HONEYCRISP_AUTH_FILE?.trim();
 }
@@ -744,4 +838,8 @@ function isNotFoundError(error: unknown): boolean {
     "code" in error &&
     (error as NodeJS.ErrnoException).code === "ENOENT"
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

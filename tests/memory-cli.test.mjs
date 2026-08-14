@@ -185,6 +185,35 @@ test("xAI cybersecurity runs require policy-use risk acknowledgement", async () 
   }
 });
 
+test("Z.ai cybersecurity runs require policy-use risk acknowledgement", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const { workspaceRoot, contextPath } = await createAuthorizedWorkspaceContext("zai-policy");
+  try {
+    const result = runTopCli([
+      "--provider",
+      "zai",
+      "--model",
+      "glm-5.3",
+      "--workspace-root",
+      workspaceRoot,
+      "--workspace-context",
+      contextPath,
+      "-p",
+      "Inspect the authorized target.",
+    ], {
+      HONEYCRISP_AUTH_FILE: authFile,
+      HONEYCRISP_PROVIDER_AUTH_PREFERENCES: JSON.stringify({ zai: "api_key" }),
+      ZAI_API_KEY: "test-only-key",
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Z.ai cybersecurity research requires policy-use risk acknowledgement/);
+    assert.match(result.stderr, /Beale Settings > Providers/);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("main CLI supports deterministic mock mode without auth", async () => {
   const authFile = await createEmptyAuthFilePath();
   const result = runTopCli(

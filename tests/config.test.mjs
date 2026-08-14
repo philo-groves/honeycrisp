@@ -19,6 +19,7 @@ test("authenticated model catalog includes current supplemental models", () => {
   const daybreak = models.getModel("openai-codex", "gpt-daybreak-blue-latest");
   const daybreakRed = models.getModel("openai-codex", "gpt-daybreak-red-latest");
   const grok46 = models.getModel("xai", "grok-4.6");
+  const glm53 = models.getModel("zai", "glm-5.3");
 
   assert.equal(models.getProvider("anthropic"), undefined);
   assert.equal(models.getModel("anthropic", "claude-opus-5"), undefined);
@@ -31,6 +32,10 @@ test("authenticated model catalog includes current supplemental models", () => {
   assert.equal(grok46?.name, "Grok 4.6");
   assert.equal(grok46?.provider, "xai");
   assert.equal(grok46?.contextWindow, 500_000);
+  assert.equal(glm53?.name, "GLM-5.3");
+  assert.equal(glm53?.provider, "zai");
+  assert.equal(glm53?.contextWindow, 1_000_000);
+  assert.equal(glm53?.maxTokens, 128_000);
 });
 
 test("credential store treats legacy Anthropic credentials as cleanup-only", async () => {
@@ -54,6 +59,7 @@ test("credential store treats legacy Anthropic credentials as cleanup-only", asy
 test("provider catalogs expose current supplemental models to frontends", () => {
   const [anthropic] = getProviderModelCatalog("anthropic");
   const [openai] = getProviderModelCatalog("openai-codex");
+  const [zai] = getProviderModelCatalog("zai");
 
   assert.ok(anthropic?.models.some((model) => model.id === "claude-opus-5"));
   const fable = anthropic?.models.find((model) => model.id === "claude-fable-5");
@@ -73,6 +79,10 @@ test("provider catalogs expose current supplemental models to frontends", () => 
   assert.deepEqual(daybreak?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(daybreakRed?.effortLevels, daybreak?.effortLevels);
   assert.equal(daybreakRed?.contextWindow, daybreak?.contextWindow);
+  const glm53 = zai?.models.find((model) => model.id === "glm-5.3");
+  assert.equal(glm53?.name, "GLM-5.3");
+  assert.equal(glm53?.contextWindow, 1_000_000);
+  assert.equal(glm53?.maxTokens, 128_000);
 });
 
 test("provider catalog reports Pi model names and model-specific effort levels", () => {

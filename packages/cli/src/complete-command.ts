@@ -3,7 +3,7 @@ import {
   type ResearchModelProviderId,
 } from "@honeycrisp/research-agent";
 
-const PROVIDERS = new Set<ResearchModelProviderId>(["openai-codex", "anthropic", "xai"]);
+const PROVIDERS = new Set<ResearchModelProviderId>(["openai-codex", "anthropic", "xai", "zai"]);
 type CompletionEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 const EFFORTS = new Set<CompletionEffort>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const MAX_INPUT_CHARS = 8_000_000;
