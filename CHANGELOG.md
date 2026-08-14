@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a Longshot workflow to bundled Security Research 1.6.0 and Mathematics 1.4.0. Security Longshots hunt for evidence-gated reportable high- or critical-severity vulnerabilities, while Mathematics Longshots pursue concrete leverage points toward major breakthroughs.
 - Added Z.ai provider support with GLM-5.3 and GLM-5-Turbo catalog entries, `ZAI_API_KEY` routing through Pi, official ZCode app-server execution for subscription-backed lead and collaborator agents, resumable ZCode sessions, a session-scoped governed MCP tool bridge, and cybersecurity policy-risk preflight acknowledgement.
 - Added a bounded provider-neutral auxiliary text-completion boundary for host support jobs, including authentication preference and usage-limit fallback routing; Anthropic requests use the official Claude Agent SDK and CLI path.
 - Added atomic, provider-neutral collaboration rooms with phase-gated independent memos, targeted peer challenges, responses, lead-owned synthesis, structured evidence/confidence/uncertainty packets, and bounded continuation recovery. Research profiles now own workflow-specific collaboration recipes; bundled Security Research 1.4.0 and Mathematics 1.3.0 define separate domain roles and review protocols.
@@ -20,7 +21,7 @@
 ### Changed
 
 - `shell.run` now accepts complete platform shell commands as well as direct executable-plus-argv calls, permits executable paths, and preserves host HOME-family environment variables while retaining shell authorization and credential-variable filtering.
-- Repository search can now target any readable absolute host directory, not only configured workspace repository hints. The bundled Security Research profile advances to 1.5.0 and enables bounded repository search and file reads alongside shell access by default.
+- Repository search can now target any readable absolute host directory, not only configured workspace repository hints. Security Research 1.5.0 introduced bounded repository search and file reads alongside shell access by default.
 - Adaptive collaboration is now explicitly optional and evidence-driven: agents stay solo for sequential work, delegate only when expected evidence gain justifies coordination cost, reuse relevant subagents, and treat discovery parallelism as an opportunity rather than a requirement.
 - Bounded and batch-hydrated memory recall candidates before context ranking, combined prompt-term recall into one query, and restricted relationship loading to candidate nodes.
 - Split lightweight CLI commands from the full research runtime, moved cybersecurity rejection checks ahead of database and tool initialization, and limited concurrent MCP discovery to allowlisted servers.

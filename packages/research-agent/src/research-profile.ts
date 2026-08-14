@@ -402,9 +402,9 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.5.0",
+  version: "1.6.0",
   name: "Security Research",
-  description: "Authorized open-ended vulnerability discovery, chaining, verification, and reporting.",
+  description: "Authorized open-ended vulnerability discovery, high-upside longshot hunting, chaining, verification, and reporting.",
   agent: {
     role: "You are a world-class security researcher with exceptional judgment, creativity, and persistence in finding novel, high-impact vulnerabilities in complex systems, operating inside the Pi agent harness.",
     posture: [
@@ -504,6 +504,21 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       promptInstructions: ["Preserve material limitations and do not invent reachability, impact, or unsupported conclusions."],
       outputRequirements: ["A triage-ready proof of concept and submission.zip containing the proof and necessary evidence."],
     },
+    {
+      id: "longshot",
+      name: "Longshot",
+      description: "Hunt for ambitious, reportable high- or critical-severity vulnerabilities in underexplored attack surfaces.",
+      goalSuggestionCount: 4,
+      goalSuggestionInstructions: [
+        "Choose high-upside, underexplored directions with a credible path to reportable high or critical impact, grounded in the workspace architecture, prior evidence, or historical vulnerability patterns.",
+        "Favor deep trust-boundary failures, cross-component composition, and powerful attacker-controlled pivots over incremental variants, without assuming that a flaw exists or that its severity is established.",
+      ],
+      promptInstructions: [
+        "Pursue a high-upside vulnerability direction where a confirmed flaw could plausibly support reportable high or critical impact.",
+        "Keep existence, reachability, exploitability, severity, and reportability evidence-gated throughout the research.",
+      ],
+      outputRequirements: ["A rigorously supported high-impact candidate or decisive reusable negative knowledge, with severity and reportability stated only when established."],
+    },
   ],
   collaboration: {
     protocolInstructions: [
@@ -514,7 +529,7 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       {
         id: "security-discovery-cell",
         name: "Security discovery cell",
-        workflowIds: ["discovery"],
+        workflowIds: ["discovery", "longshot"],
         roomKind: "exploration",
         roles: [
           { id: "surface-explorer", name: "Surface Explorer", description: "Map trust boundaries and pursue non-obvious bug classes without anchoring on the first lead." },
@@ -843,9 +858,9 @@ const MATHEMATICS_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = [
 export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "mathematics",
-  version: "1.3.0",
+  version: "1.4.0",
   name: "Mathematics",
-  description: "Open-ended mathematical research through conjecture exploration, proof construction, counterexample search, computation, literature synthesis, and rigorous verification.",
+  description: "Open-ended mathematical research through conjecture exploration, high-upside longshots, proof construction, counterexample search, computation, literature synthesis, and rigorous verification.",
   agent: {
     role: "You are a world-class research mathematician with broad technical range, excellent conjecture-forming judgment, and the persistence to build, test, revise, and verify long mathematical arguments.",
     posture: [
@@ -951,6 +966,21 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
       promptInstructions: ["Preserve exact statements, dependencies, citations, and verification provenance."],
       outputRequirements: ["A self-contained research artifact whose claims are traceable to proofs, computations, formalizations, or cited literature."],
     },
+    {
+      id: "longshot",
+      name: "Longshot",
+      description: "Pursue ambitious directions with credible potential for a major mathematical breakthrough.",
+      goalSuggestionCount: 4,
+      goalSuggestionInstructions: [
+        "Choose a concrete high-upside leverage point toward a major advance: a decisive conjecture, new invariant, unexpected equivalence, cross-domain connection, obstruction, or tractable special case.",
+        "Favor bold but technically grounded directions over generic requests to solve an entire famous problem, and make the source of possible leverage explicit.",
+      ],
+      promptInstructions: [
+        "Pursue a major mathematical advance through a specific leverage point while keeping assumptions, dependencies, computations, and proof gaps explicit.",
+        "Test bold conjectures aggressively and distinguish suggestive structure from verified progress.",
+      ],
+      outputRequirements: ["A verified major advance when achieved, otherwise the strongest new conjecture, lemma, obstruction, or reduction and an exact account of the remaining gap."],
+    },
   ],
   collaboration: {
     protocolInstructions: [
@@ -961,7 +991,7 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
       {
         id: "mathematics-exploration-cell",
         name: "Mathematical exploration cell",
-        workflowIds: ["exploration"],
+        workflowIds: ["exploration", "longshot"],
         roomKind: "exploration",
         roles: [
           { id: "construction-explorer", name: "Construction Explorer", description: "Generate examples, equivalent formulations, and structural connections." },

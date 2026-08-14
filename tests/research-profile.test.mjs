@@ -67,10 +67,28 @@ test("bundled profiles give reports domain-specific share-readiness guidance", (
 test("bundled profiles gate collaboration recipes by domain and workflow", () => {
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
-  assert.deepEqual(security.collaboration.recipes.map((recipe) => recipe.workflowIds), [["discovery"], ["chaining"], ["reporting"]]);
-  assert.deepEqual(mathematics.collaboration.recipes.map((recipe) => recipe.workflowIds), [["exploration"], ["proof"], ["verification"], ["synthesis"]]);
+  assert.deepEqual(security.collaboration.recipes.map((recipe) => recipe.workflowIds), [["discovery", "longshot"], ["chaining"], ["reporting"]]);
+  assert.deepEqual(mathematics.collaboration.recipes.map((recipe) => recipe.workflowIds), [["exploration", "longshot"], ["proof"], ["verification"], ["synthesis"]]);
   assert.ok(security.collaboration.recipes.every((recipe) => recipe.roles.length >= 2));
   assert.ok(mathematics.collaboration.recipes.every((recipe) => recipe.roles.length >= 2));
+});
+
+test("bundled profiles define domain-specific Longshot workflows", () => {
+  const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
+  const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
+  const mathematicsLongshot = mathematics.workflows.find((workflow) => workflow.id === "longshot");
+
+  assert.equal(security.version, "1.6.0");
+  assert.equal(mathematics.version, "1.4.0");
+  assert.equal(securityLongshot?.name, "Longshot");
+  assert.equal(securityLongshot?.goalSuggestionCount, 4);
+  assert.match(securityLongshot?.description ?? "", /reportable high- or critical-severity vulnerabilities/);
+  assert.match(securityLongshot?.promptInstructions.join(" ") ?? "", /severity, and reportability evidence-gated/);
+  assert.equal(mathematicsLongshot?.name, "Longshot");
+  assert.equal(mathematicsLongshot?.goalSuggestionCount, 4);
+  assert.match(mathematicsLongshot?.description ?? "", /major mathematical breakthrough/);
+  assert.match(mathematicsLongshot?.goalSuggestionInstructions.join(" ") ?? "", /specific leverage point|source of possible leverage/);
 });
 
 test("profile collaboration guidance selects only the active workflow recipe", () => {
@@ -82,6 +100,18 @@ test("profile collaboration guidance selects only the active workflow recipe", (
   assert.match(mathematicsPrompt, /Proof development cell/);
   assert.match(mathematicsPrompt, /assumption-auditor/);
   assert.doesNotMatch(mathematicsPrompt, /Mitigation Challenger/);
+});
+
+test("Longshot sessions receive their domain workflow and exploration recipe", () => {
+  const securityPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE, workflowId: "longshot" });
+  const mathematicsPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_MATHEMATICS_RESEARCH_PROFILE, workflowId: "longshot" });
+
+  assert.match(securityPrompt, /Active research workflow: Longshot/);
+  assert.match(securityPrompt, /reportable high or critical impact/);
+  assert.match(securityPrompt, /Security discovery cell/);
+  assert.match(mathematicsPrompt, /Active research workflow: Longshot/);
+  assert.match(mathematicsPrompt, /major mathematical advance/);
+  assert.match(mathematicsPrompt, /Mathematical exploration cell/);
 });
 test("research profile validation rejects silent schema drift", () => {
   const unknownRootField = { ...structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE), typoedWorkflows: [] };
