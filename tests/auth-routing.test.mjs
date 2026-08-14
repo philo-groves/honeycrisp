@@ -55,6 +55,26 @@ test("usage exhaustion switches once to the available alternate authentication s
   }
 });
 
+test("subscription preference hides ambient API keys until an intentional usage fallback", async () => {
+  const previous = process.env.XAI_API_KEY;
+  process.env.XAI_API_KEY = "test-key";
+  try {
+    const router = new ProviderAuthenticationRouter({ xai: "subscription" });
+    const context = router.authContext({
+      env: async (name) => process.env[name],
+      fileExists: async () => false,
+    });
+
+    assert.equal(await context.env("XAI_API_KEY"), undefined);
+    assert.equal(await context.env("PATH"), process.env.PATH);
+    assert.equal(router.tryFallback("xai", "Subscription usage limit reached"), true);
+    assert.equal(await context.env("XAI_API_KEY"), "test-key");
+  } finally {
+    if (previous === undefined) delete process.env.XAI_API_KEY;
+    else process.env.XAI_API_KEY = previous;
+  }
+});
+
 test("Anthropic subscription preference removes API billing from the Agent SDK environment", () => {
   const router = new ProviderAuthenticationRouter({ anthropic: "subscription" });
   const env = router.claudeEnvironment({ ANTHROPIC_API_KEY: "test-key", PATH: "test-path" });

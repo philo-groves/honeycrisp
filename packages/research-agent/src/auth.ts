@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type {
   Api,
+  AuthContext,
   AuthInteraction,
   Credential,
   CredentialInfo,
@@ -383,10 +384,11 @@ export function createCredentialStore(
 }
 
 export function createAuthenticatedModels(
-  options: FileCredentialStoreOptions = {},
+  options: FileCredentialStoreOptions & { authContext?: AuthContext } = {},
 ): Models {
   const models = honeycrispModels({
     credentials: createCredentialStore(options),
+    ...(options.authContext ? { authContext: options.authContext } : {}),
   });
   models.deleteProvider("anthropic");
   return models;

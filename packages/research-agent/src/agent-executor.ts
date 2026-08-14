@@ -305,12 +305,15 @@ export function createPiAgentExecutor(
     name: `pi:${options.provider}/${options.model}:agent`,
     ...(controlToolDescriptors.length > 0 ? { collaborationTools: controlToolDescriptors } : {}),
     async execute(input) {
+      const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
       const models =
         options.models ??
         createAuthenticatedModels(
-          options.authFile ? { authFile: options.authFile } : {},
+          {
+            ...(options.authFile ? { authFile: options.authFile } : {}),
+            authContext: authenticationRouter.authContext(),
+          },
         );
-      const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
       const model = getPiModel(models, options.provider, options.model);
       if (!model) {
         throw new Error(`Unknown model ${options.provider}/${options.model}`);

@@ -46,8 +46,10 @@ export async function generateResearchSessionTitle(
   options: GenerateResearchSessionTitleOptions,
 ): Promise<string> {
   const useOfficialClaude = options.provider === "anthropic";
-  const models = useOfficialClaude ? undefined : options.models ?? createAuthenticatedModels();
   const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
+  const models = useOfficialClaude
+    ? undefined
+    : options.models ?? createAuthenticatedModels({ authContext: authenticationRouter.authContext() });
   let model = useOfficialClaude
     ? undefined
     : authenticationRouter.routePiModel(models!, options.provider, options.model);

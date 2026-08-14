@@ -302,8 +302,8 @@ function autoReviewSystemPrompt(researchProfileName?: string): string {
 export function createShellSafetyAuthorizer(
   options: CreateShellSafetyAuthorizerOptions,
 ): ShellCommandAuthorizer {
-  const models = options.models ?? createAuthenticatedModels();
   const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
+  const models = options.models ?? createAuthenticatedModels({ authContext: authenticationRouter.authContext() });
   return async (request, signal) => {
     const mode = options.getMode();
     const approvalRequestId = createId("shell_approval");

@@ -51,6 +51,7 @@
 
 ### Fixed
 
+- Subscription-preferred model routes now mask ambient provider API keys until an explicit usage-limit fallback, preventing xAI subscription sessions, title generation, and shell review from silently using API-key billing when OAuth credentials are unavailable.
 - Made live model deltas incremental instead of repeating accumulated text, and serialized CLI event-stream writes with stdout backpressure.
 - Multi-repository search now accepts an explicit configured root, uses a 30-second default bound, and returns clearly marked partial results at the deadline instead of discarding prior matches; raw search utilities use a shorter default timeout and report exit status 1 as a no-match outcome.
 - Model streams that stall or end after reasoning without actionable output now retry automatically before exposing uncommitted reasoning, while explicit subagent routes accept either separate provider/model fields or a validated provider/model route.

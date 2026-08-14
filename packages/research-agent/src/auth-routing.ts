@@ -1,4 +1,8 @@
-import type { Models } from "@earendil-works/pi-ai";
+import {
+  defaultProviderAuthContext,
+  type AuthContext,
+  type Models,
+} from "@earendil-works/pi-ai";
 
 export const RESEARCH_MODEL_PROVIDER_IDS = ["openai-codex", "anthropic", "xai"] as const;
 
@@ -66,6 +70,17 @@ export class ProviderAuthenticationRouter {
     return this.method(providerId) === "api_key" ? this.apiKey(providerId) : undefined;
   }
 
+  authContext(base: AuthContext = defaultProviderAuthContext()): AuthContext {
+    return {
+      env: async (name) => {
+        const providerId = providerForApiKeyEnvironmentVariable(name);
+        if (providerId && this.method(providerId) === "subscription") return undefined;
+        return base.env(name);
+      },
+      fileExists: (path) => base.fileExists(path),
+    };
+  }
+
   tryFallback(providerId: string, errorMessage: string): boolean {
     if (!isResearchModelProviderId(providerId)) return false;
     if (this.#fallbackProviders.has(providerId)) return false;
@@ -114,6 +129,10 @@ export function isAuthenticationUsageExhaustion(
 
 function isResearchModelProviderId(value: string): value is ResearchModelProviderId {
   return RESEARCH_MODEL_PROVIDER_IDS.includes(value as ResearchModelProviderId);
+}
+
+function providerForApiKeyEnvironmentVariable(name: string): ResearchModelProviderId | undefined {
+  return RESEARCH_MODEL_PROVIDER_IDS.find((providerId) => API_KEY_ENVIRONMENT_VARIABLES[providerId] === name);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
