@@ -189,6 +189,8 @@ pnpm start \
 
 Review the capture for `runtimeConfig.modelConfig.source`, `runtimeConfig.toolConfig`, selected tools, injected graph-memory context, storage directories, storage manifest entries, and tool events. Runtime tool preferences may be persisted with `honeycrisp tools config ...`, which writes `.honeycrisp/tools.json` under the workspace by default. Add `--mcp-config` plus `--allow-mcp-server` for one-off live MCP server runs, or persist them with `tools config set mcp-config <path>` and `tools config add allow-mcp-server <name>`.
 
+`repository.search` accepts a configured repository path or label as a context hint and also accepts any readable absolute directory path in its `root` input. `file.read` likewise treats workspace and repository roots as context hints rather than access fences. Both tools run with the current user's host filesystem permissions; use an operator-managed VM or container when filesystem isolation is required.
+
 ### Host control stream
 
 Hosts can add `--control-stream` to send schema-versioned JSONL commands over

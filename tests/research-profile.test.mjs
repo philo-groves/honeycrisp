@@ -34,6 +34,7 @@ test("bundled profiles own their session heat palettes and memory-status default
   const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
 
   assert.equal(security.capabilities.reportsEnabled, true);
+  assert.deepEqual(security.capabilities.defaultToolFamilies, ["shell", "repository-search", "file-read"]);
   assert.equal(mathematics.capabilities.reportsEnabled, true);
   assert.equal(Object.hasOwn(normalizeResearchProfile(generalResearchProfile()).capabilities, "reportsEnabled"), false);
   assert.deepEqual(security.presentation.sessionHeatPalette, {

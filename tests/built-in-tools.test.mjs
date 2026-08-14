@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import test from "node:test";
@@ -594,12 +594,14 @@ test("repository search bounds and interrupts non-Git traversal", async () => {
 
 test("repository search scopes configured roots and preserves bounded partial results", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-roots-"));
+  const external = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-external-"));
   const first = join(workspace, "first-repository");
   const second = join(workspace, "second-repository");
   await mkdir(first);
   await mkdir(second);
   await writeFile(join(first, "first.txt"), "scoped needle\n");
   await writeFile(join(second, "second.txt"), "scoped needle\n");
+  await writeFile(join(external, "external.txt"), "external needle\n");
   try {
     const scopedTool = createRepositorySearchTool({ roots: [first, second] });
     const scoped = await createResearchToolRegistry([scopedTool]).execute({
@@ -617,6 +619,18 @@ test("repository search scopes configured roots and preserves bounded partial re
       ["first-repository", "second-repository"],
     );
 
+    const externalTool = createRepositorySearchTool({});
+    const externalResult = await createResearchToolRegistry([externalTool]).execute({
+      id: "search_external_root",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "external needle", root: external },
+    });
+    assert.equal(externalResult.result.status, "complete");
+    assert.equal(externalResult.result.output.matches.length, 1);
+    assert.equal(externalResult.result.output.matches[0].path, "external.txt");
+    assert.deepEqual(externalResult.result.output.attemptedRoots, [await realpath(external)]);
+
     const partialTool = createRepositorySearchTool({
       roots: [first, second],
       maxDurationMs: 0,
@@ -633,6 +647,7 @@ test("repository search scopes configured roots and preserves bounded partial re
     assert.match(partial.result.summary, /partial match/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
+    await rm(external, { recursive: true, force: true });
   }
 });
 

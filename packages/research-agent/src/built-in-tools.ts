@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import {
   basename,
   dirname,
+  isAbsolute,
   join,
   relative,
   resolve,
@@ -148,7 +149,7 @@ export function createRepositorySearchTool(
     name: "repository.search",
     transportName: "repository_search",
     description:
-      "Search for a case-insensitive literal text phrase under repository and source context paths. In multi-repository workspaces, pass root as a configured path or unique root label to keep searches fast and targeted. Time-limited searches return explicitly marked partial results instead of discarding prior matches.",
+      "Search for a case-insensitive literal text phrase under repository and source context paths. Pass root as a configured path, unique root label, or any readable absolute directory path to keep searches fast and targeted. Time-limited searches return explicitly marked partial results instead of discarding prior matches.",
     actionClasses: ["search", "inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
@@ -156,7 +157,7 @@ export function createRepositorySearchTool(
     artifactLocations: rootHints,
     metadata: {
       provider: "honeycrisp.built_in",
-      safetyProfile: "workspace-context-filesystem-read",
+      safetyProfile: "host-filesystem-read",
       defaultBudget: {
         maxToolCalls: 1,
         maxFiles: DEFAULT_MAX_RESULTS,
@@ -176,17 +177,17 @@ export function createRepositorySearchTool(
           action.input.maxResults,
           options.maxResults ?? DEFAULT_MAX_RESULTS,
         );
+        const requestedRoot = typeof action.input.root === "string"
+          ? action.input.root.trim()
+          : "";
         const availableRoots = await resolveExistingRoots(rootHints);
-        if (availableRoots.length === 0) {
+        if (availableRoots.length === 0 && !requestedRoot) {
           throw new Error(
             "repository.search has no readable repository or source context paths.",
           );
         }
-        const requestedRoot = typeof action.input.root === "string"
-          ? action.input.root.trim()
-          : "";
         const roots = requestedRoot
-          ? selectRepositorySearchRoots(availableRoots, requestedRoot)
+          ? await resolveRepositorySearchRoots(availableRoots, requestedRoot)
           : availableRoots;
         const maxDurationMs = options.maxDurationMs ?? DEFAULT_REPOSITORY_SEARCH_TIMEOUT_MS;
         const searchState = {
@@ -225,7 +226,7 @@ export function createRepositorySearchTool(
 
         return completeResult(action, startedAt, {
           summary: timedOut
-            ? `Repository search reached its ${maxDurationMs}ms limit and returned ${matches.length} partial match(es). Retry with root set to one of the available root labels.`
+            ? `Repository search reached its ${maxDurationMs}ms limit and returned ${matches.length} partial match(es). Retry with a configured root label or a narrower absolute directory path.`
             : `Repository search found ${matches.length} match(es) across ${attemptedRoots.length} context root(s) for: ${query}`,
           output: {
             roots,
@@ -861,6 +862,28 @@ function selectRepositorySearchRoots(
   throw new Error(
     `repository.search root "${requestedRoot}" is not configured. Available root labels: ${labels}`,
   );
+}
+
+async function resolveRepositorySearchRoots(
+  configuredRoots: readonly string[],
+  requestedRoot: string,
+): Promise<string[]> {
+  try {
+    return selectRepositorySearchRoots(configuredRoots, requestedRoot);
+  } catch (error) {
+    if (!isAbsolute(requestedRoot)) throw error;
+  }
+
+  const [resolvedRoot] = await resolveExistingRoots([requestedRoot]);
+  const rootStat = resolvedRoot
+    ? await stat(resolvedRoot).catch(() => undefined)
+    : undefined;
+  if (!resolvedRoot || !rootStat?.isDirectory()) {
+    throw new Error(
+      `repository.search root "${requestedRoot}" is not a readable directory.`,
+    );
+  }
+  return [resolvedRoot];
 }
 
 function portableRelativePath(root: string, path: string): string {

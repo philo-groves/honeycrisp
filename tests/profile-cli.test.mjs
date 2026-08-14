@@ -460,7 +460,7 @@ test("workspace profiles cannot grant executable capabilities outside explicit h
   }
 });
 
-test("the code-owned bundled security profile deliberately retains its local shell defaults", async () => {
+test("the code-owned bundled security profile enables local research reads by default", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-profile-bundled-capabilities-"));
   try {
     const result = runCli([
@@ -474,9 +474,11 @@ test("the code-owned bundled security profile deliberately retains its local she
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
 
-    assert.deepEqual(payload.toolFamilies.requested, ["shell"]);
-    assert.deepEqual(payload.toolFamilies.enabled, ["shell"]);
+    assert.deepEqual(payload.toolFamilies.requested, ["shell", "repository-search", "file-read"]);
+    assert.deepEqual(payload.toolFamilies.enabled, ["shell", "repository-search", "file-read"]);
     assert.equal(payload.tools.some((tool) => tool.name === "shell.run"), true);
+    assert.equal(payload.tools.some((tool) => tool.name === "repository.search"), true);
+    assert.equal(payload.tools.some((tool) => tool.name === "file.read"), true);
     assert.deepEqual(payload.governance.allowedSideEffects, ["none", "read", "write", "process"]);
     assert.equal(payload.governance.allowedSideEffects.includes("network"), false);
   } finally {

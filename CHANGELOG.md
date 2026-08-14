@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Repository search can now target any readable absolute host directory, not only configured workspace repository hints. The bundled Security Research profile advances to 1.5.0 and enables bounded repository search and file reads alongside shell access by default.
 - Adaptive collaboration guidance now keeps delegation active across the full research session, prompts reassessment at evidence and phase transitions, favors relevant subagent follow-ups over duplicate spawns, and gives discovery workflows concrete later-session delegation opportunities.
 - Bounded and batch-hydrated memory recall candidates before context ranking, combined prompt-term recall into one query, and restricted relationship loading to candidate nodes.
 - Split lightweight CLI commands from the full research runtime, moved cybersecurity rejection checks ahead of database and tool initialization, and limited concurrent MCP discovery to allowlisted servers.

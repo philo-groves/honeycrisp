@@ -402,7 +402,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.4.0",
+  version: "1.5.0",
   name: "Security Research",
   description: "Authorized open-ended vulnerability discovery, chaining, verification, and reporting.",
   agent: {
@@ -549,7 +549,7 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     ],
   },
   capabilities: {
-    defaultToolFamilies: ["shell"],
+    defaultToolFamilies: ["shell", "repository-search", "file-read"],
     disabledToolFamilies: [],
     allowedSideEffects: ["none", "read", "write", "process"],
     selectedSkillIds: [],

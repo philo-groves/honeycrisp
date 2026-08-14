@@ -829,7 +829,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
   assert.equal(workspaceDefault.status, 0, workspaceDefault.stderr);
   assert.deepEqual(
     workspaceDefaultPayload.tools.map((tool) => tool.name),
-    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "report.list", "report.get", "report.create", "report.revise", "shell.run", "repository.search"],
+    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "report.list", "report.get", "report.create", "report.revise", "shell.run", "repository.search", "file.read"],
   );
   assert.equal(
     workspaceDefaultPayload.workspaceContext.workspaceRoot,
@@ -863,7 +863,7 @@ test("tools CLI requires experiment config and lists configured experiments", as
     assert.match(missingConfig.stderr, /requires --experiment-config/);
     assert.equal(listed.status, 0, listed.stderr);
     assert.ok(payload.tools.some((tool) => tool.name === "experiment.run"));
-    assert.deepEqual(payload.toolFamilies.enabled, ["shell", "experiment"]);
+    assert.deepEqual(payload.toolFamilies.enabled, ["shell", "repository-search", "file-read", "experiment"]);
     assert.equal(
       payload.tools.find((tool) => tool.name === "experiment.run").metadata.experiments[0].name,
       "echo",
