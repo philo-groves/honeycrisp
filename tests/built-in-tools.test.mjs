@@ -84,6 +84,22 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
       toolName: "shell.run",
       input: { utility: "printf", args: ["%s", "argv-safe"] },
     });
+    const pathCompleted = await registry.execute({
+      id: "shell_path_completed",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: process.execPath, args: ["-e", "process.stdout.write('path-safe')"] },
+    });
+    const commandCompleted = await registry.execute({
+      id: "shell_command_completed",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: {
+        command: process.platform === "win32"
+          ? "echo command-one&&echo command-two"
+          : "printf command-one && printf command-two",
+      },
+    });
     const homeReference = await registry.execute({
       id: "shell_home_reference",
       actionClass: "inspect",
@@ -104,7 +120,7 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
         utility: "node",
         args: [
           "-e",
-          "process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([name]) => ['HOME', 'CODEX_HOME', 'HOMEDRIVE', 'HOMEPATH'].includes(name.toUpperCase())))))",
+          "process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([name]) => ['HOME', 'CODEX_HOME', 'HOMEDRIVE', 'HOMEPATH', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA'].includes(name.toUpperCase())))))",
         ],
       },
     });
@@ -150,22 +166,22 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
     assert.equal(completed.result.status, "complete");
     assert.equal(completed.result.output.stdout, "argv-safe");
     assert.equal(completed.result.output.cwd, root);
-    assert.equal(homeReference.result.status, "error");
-    assert.match(homeReference.result.error.message, /cannot reference or assign \$HOME/);
-    assert.equal(homeAssignment.result.status, "error");
-    assert.match(homeAssignment.result.error.message, /cannot reference or assign \$HOME/);
+    assert.equal(pathCompleted.result.status, "complete");
+    assert.equal(pathCompleted.result.output.stdout, "path-safe");
+    assert.equal(commandCompleted.result.status, "complete");
+    assert.match(commandCompleted.result.output.stdout, /command-one/);
+    assert.match(commandCompleted.result.output.stdout, /command-two/);
+    assert.equal(homeReference.result.status, "complete");
+    assert.match(homeReference.result.output.stdout, /HOME/);
+    assert.equal(homeAssignment.result.status, "complete");
+    assert.equal(homeAssignment.result.output.stdout, "safe");
     assert.equal(environment.result.status, "complete");
     const homeEnvironment = JSON.parse(environment.result.output.stdout);
-    if (process.platform === "win32") {
-      assert.equal(
-        resolve(`${homeEnvironment.HOMEDRIVE}${homeEnvironment.HOMEPATH}`),
-        resolve(root),
-      );
-      assert.equal("HOME" in homeEnvironment, false);
-      assert.equal("CODEX_HOME" in homeEnvironment, false);
-    } else {
-      assert.deepEqual(homeEnvironment, {});
-    }
+    const homeNames = new Set(["HOME", "CODEX_HOME", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "APPDATA", "LOCALAPPDATA"]);
+    const expectedHomeEnvironment = Object.fromEntries(
+      Object.entries(process.env).filter(([name, value]) => value !== undefined && homeNames.has(name.toUpperCase())),
+    );
+    assert.deepEqual(homeEnvironment, expectedHomeEnvironment);
     assert.equal(protectedDelete.result.status, "error");
     assert.match(protectedDelete.result.error.message, /Folder delete guard blocked rm/);
     assert.equal(workspaceDelete.result.status, "error");

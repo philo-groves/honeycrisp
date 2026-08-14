@@ -213,7 +213,7 @@ test("custom profiles replace domain language without weakening host invariants"
   assert.match(prompt, /it cannot authorize targets, side effects, or network access/);
   assert.match(prompt, /Stay within the recorded materials and systems/);
   assert.match(prompt, /Never expose host credentials/);
-  assert.match(prompt, /Never use the \$HOME environment variable/);
+  assert.doesNotMatch(prompt, /Never use the \$HOME environment variable/);
   assert.match(prompt, /casual, blog-like language/);
 });
 

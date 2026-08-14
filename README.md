@@ -97,6 +97,8 @@ Profile feature switches choose harness topology inside that boundary: memory an
 
 Shell authorization records recognized network intent for review and audit, but Honeycrisp does not apply network profiles, destination allowlists, or an application-level network veto. Network commands proceed through the selected Danger Mode, Manual Approval, or Auto-Review flow like other commands. Because Honeycrisp runs target processes with the current user's host privileges, engineers must enforce any required network isolation with an externally launched VM/container, host firewall, proxy, or equivalent system boundary.
 
+`shell.run` accepts either a complete platform shell `command` for pipelines, chaining, redirects, and other shell syntax, or a direct `utility` plus `args` tuple. Direct utilities may be executable paths. HOME-family environment variables are inherited from the host; credential-like environment values remain filtered, and every normalized invocation still passes through the selected shell authorization mode before spawn.
+
 Run with stored auth. If no config is provided, Honeycrisp first checks `.honeycrisp/config.json` under `--workspace-root`, then falls back to the first authorized provider/model from the CLI auth store. A config file is only a model preference file; credentials still come from `honeycrisp auth login`.
 
 ```sh

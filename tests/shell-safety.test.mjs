@@ -111,6 +111,13 @@ test("network intent is audit metadata and does not create an application-level 
   assert.equal(windowsExecutable.decision, "approved");
   assert.equal(windowsExecutable.network.classification, "network utility curl");
 
+  const pathExecutable = await createShellSafetyAuthorizer(baseOptions)({
+    ...request,
+    utility: process.platform === "win32" ? "C:\\Tools\\curl.exe" : "/usr/bin/curl",
+  });
+  assert.equal(pathExecutable.decision, "approved");
+  assert.equal(pathExecutable.network.classification, "network utility curl");
+
   const commandInterpreter = await createShellSafetyAuthorizer(baseOptions)({
     ...request,
     utility: "cmd.exe",

@@ -483,7 +483,7 @@ test("direct Pi Agent executor runs Honeycrisp tools through lifecycle hooks", a
     "run_fixture_affinity",
   ]);
   assert.doesNotMatch(contexts[0].systemPrompt, /Use durable memory as a concise research graph/);
-  assert.match(contexts[0].systemPrompt, /Never use the \$HOME environment variable/);
+  assert.doesNotMatch(contexts[0].systemPrompt, /Never use the \$HOME environment variable/);
   const initialMessage = contexts[0].messageContents.join("\n");
   assert.match(initialMessage, /### memory/);
   assert.match(initialMessage, /mem_fixture_parser/);
@@ -526,7 +526,7 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   });
 
   const systemPrompt = contexts[0].systemPrompt;
-  assert.match(systemPrompt, /Never use the \$HOME environment variable/);
+  assert.doesNotMatch(systemPrompt, /Never use the \$HOME environment variable/);
   assert.match(systemPrompt, /Use durable memory as a concise research graph/);
   assert.match(systemPrompt, /specific, testable, currently unproven security proposition/);
   assert.match(systemPrompt, /Evidence is attached to graph nodes as supporting references/);

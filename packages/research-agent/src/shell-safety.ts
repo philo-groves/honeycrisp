@@ -273,7 +273,9 @@ function isScriptUtility(utility: string): boolean {
 }
 
 function normalizedShellUtility(value: string): string {
-  return value.trim().toLowerCase().replace(/\.(?:bat|cmd|com|exe)$/u, "");
+  return (value.trim().split(/[\\/]+/u).at(-1) ?? "")
+    .toLowerCase()
+    .replace(/\.(?:bat|cmd|com|exe)$/u, "");
 }
 
 function isWindowsDriveLikeScpMatch(match: RegExpMatchArray): boolean {

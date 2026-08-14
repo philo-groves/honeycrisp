@@ -57,7 +57,6 @@ export function createResearchSystemPrompt(
     ] : []),
     "Never perform destructive actions against out-of-scope systems, unapproved accounts, or unauthorized devices.",
     "Never expose host credentials, authentication material, or Honeycrisp's global database through model-visible tool results.",
-    "Never use the $HOME environment variable in commands, scripts, paths, or assignments; use explicit narrowly scoped paths instead.",
     options.hasTools ? "Use the available tools as needed." : "No tools are available in this session.",
     ...(options.hasTools ? [
       "Prefer repository.search for literal source discovery. In multi-repository workspaces, set its root to a configured path or unique root label; treat partial=true as incomplete evidence. When a raw shell search is necessary, use a narrow working directory or path and a bounded timeout.",

@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, open, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, parse, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { nowIso } from "./ids.js";
 import type {
   ResearchExecutableTool,
@@ -26,22 +26,25 @@ const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_CONCURRENCY = 64;
 const LEASE_RETRY_MS = 50;
 const NEW_LEASE_GRACE_MS = 5_000;
-const UTILITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/u;
-const FORBIDDEN_HOME_REFERENCE_PATTERN = /(?:\$(?:HOME|home|CODEX_HOME)(?![A-Za-z0-9_])|\$\{(?:HOME|home|CODEX_HOME)\b)/u;
-const FORBIDDEN_HOME_ASSIGNMENT_PATTERN = /(?:^|[\s;])(?:export\s+)?(?:HOME|home|CODEX_HOME)\s*=/u;
-
 const SHELL_PARAMETERS = {
   type: "object",
-  required: ["utility"],
+  anyOf: [
+    { required: ["command"] },
+    { required: ["utility"] },
+  ],
   properties: {
+    command: {
+      type: "string",
+      description: "Complete platform shell command. Supports pipelines, chaining, redirects, and other shell syntax. Do not combine with utility or args.",
+    },
     utility: {
       type: "string",
-      description: "Executable name without a path, such as rg, git, make, or clang.",
+      description: "Executable name or path for direct argv execution. Do not combine with command.",
     },
     args: {
       type: "array",
       items: { type: "string" },
-      description: "Arguments passed directly to the executable without shell interpolation.",
+      description: "Arguments passed directly to utility without shell interpolation.",
     },
     cwd: {
       type: "string",
@@ -93,7 +96,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       name: "shell.run",
       transportName: "shell_run",
       description:
-        "Run one host utility with explicit argv. Use repository.search first for literal discovery; raw search utilities should use a narrow cwd or path and a bounded timeout. Exit status 1 from rg, grep, findstr, or git grep is reported as a successful no-match result. Utility policy, shell safety authorization, recognized network-intent policy, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
+        "Run a platform shell command or execute a host utility directly with explicit argv. Use repository.search first for literal discovery; raw search commands should use a narrow cwd or path and a bounded timeout. Exit status 1 from direct rg, grep, findstr, or git grep execution is reported as a successful no-match result. Shell safety authorization, recognized network-intent policy, utility policy for direct execution, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
       actionClasses: ["search", "inspect", "analyze", "experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],
@@ -109,22 +112,21 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
     async execute(action, context) {
       const startedAt = nowIso();
       try {
-        const utility = readUtility(action.input.utility);
-        const args = readArguments(action.input.args);
+        const { utility, args } = readShellInvocation(action.input);
         const cwd = readWorkingDirectory(action.input.cwd, workspaceRoot);
         const stdin = readOptionalString(action.input.stdin, "stdin");
-        assertNoHomeVariableUsage([cwd, ...args, ...(stdin === undefined ? [] : [stdin])]);
         const timeoutMs = Math.min(
           positiveInteger(action.input.timeoutMs, defaultUtilityTimeoutMs(utility, args)),
           MAX_TIMEOUT_MS,
         );
         const policy = await loadShellOptions(options.shellOptionsPath);
-        const concurrency = policy.utilities[utility] ?? policy.defaultConcurrency;
+        const policyUtility = utilityPolicyName(utility);
+        const concurrency = policy.utilities[utility] ?? policy.utilities[policyUtility] ?? policy.defaultConcurrency;
         if (concurrency === 0) {
           return errorResult(
             action,
             startedAt,
-            `Shell utility ${utility} is disabled by the harness-wide Shell Options policy.`,
+            `Shell utility ${policyUtility} is disabled by the harness-wide Shell Options policy.`,
           );
         }
         await assertFolderDeleteAllowed(utility, args, cwd, protectedDirectories);
@@ -502,7 +504,7 @@ async function runUtility(input: {
     const output = createOutputCollector(input.maxOutputBytes);
     const child = spawn(input.utility, input.args, {
       cwd: input.cwd,
-      env: shellEnvironment(input.cwd),
+      env: shellEnvironment(),
       detached: process.platform !== "win32",
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
@@ -660,41 +662,14 @@ function createOutputCollector(maxBytes: number): {
   };
 }
 
-function shellEnvironment(cwd: string): NodeJS.ProcessEnv {
+function shellEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (value === undefined || isSensitiveEnvironmentName(name) || isHomeEnvironmentName(name)) continue;
+    if (value === undefined || isSensitiveEnvironmentName(name)) continue;
     environment[name] = value;
-  }
-  if (process.platform === "win32") {
-    const resolvedCwd = resolve(cwd);
-    const root = parse(resolvedCwd).root;
-    environment.HOMEDRIVE = root.endsWith("\\") ? root.slice(0, -1) : root;
-    environment.HOMEPATH = resolvedCwd.slice(Math.max(0, root.length - 1)) || "\\";
   }
   environment.HONEYCRISP_SHELL = "1";
   return environment;
-}
-
-function assertNoHomeVariableUsage(values: readonly string[]): void {
-  if (values.some((value) => FORBIDDEN_HOME_REFERENCE_PATTERN.test(value) || FORBIDDEN_HOME_ASSIGNMENT_PATTERN.test(value))) {
-    throw new Error(
-      "Shell input cannot reference or assign $HOME, $home, or $CODEX_HOME; use an explicit narrowly scoped path.",
-    );
-  }
-}
-
-function isHomeEnvironmentName(name: string): boolean {
-  const normalizedName = name.toUpperCase();
-  return (
-    normalizedName === "HOME" ||
-    normalizedName === "CODEX_HOME" ||
-    normalizedName === "HOMEDRIVE" ||
-    normalizedName === "HOMEPATH" ||
-    normalizedName === "USERPROFILE" ||
-    normalizedName === "APPDATA" ||
-    normalizedName === "LOCALAPPDATA"
-  );
 }
 
 function isSensitiveEnvironmentName(name: string): boolean {
@@ -702,10 +677,38 @@ function isSensitiveEnvironmentName(name: string): boolean {
 }
 
 function readUtility(value: unknown): string {
-  if (typeof value !== "string" || !UTILITY_PATTERN.test(value)) {
-    throw new Error("shell.run utility must be a simple executable name without a path or whitespace.");
+  if (typeof value !== "string" || !value.trim() || value.includes("\0")) {
+    throw new Error("shell.run utility must be a non-empty executable name or path without null bytes.");
+  }
+  return value.trim();
+}
+
+function readShellInvocation(input: Record<string, unknown>): { utility: string; args: string[] } {
+  const hasCommand = input.command !== undefined;
+  const hasUtility = input.utility !== undefined;
+  if (hasCommand && (hasUtility || input.args !== undefined)) {
+    throw new Error("shell.run accepts command or utility with args, not both.");
+  }
+  if (hasCommand) return platformShellInvocation(readCommand(input.command));
+  if (!hasUtility) throw new Error("shell.run requires command or utility.");
+  return { utility: readUtility(input.utility), args: readArguments(input.args) };
+}
+
+function readCommand(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.includes("\0")) {
+    throw new Error("shell.run command must be a non-empty string without null bytes.");
   }
   return value;
+}
+
+function platformShellInvocation(command: string): { utility: string; args: string[] } {
+  return process.platform === "win32"
+    ? { utility: process.env.ComSpec?.trim() || "cmd.exe", args: ["/d", "/s", "/c", command] }
+    : { utility: "/bin/sh", args: ["-lc", command] };
+}
+
+function utilityPolicyName(utility: string): string {
+  return basename(utility).toLowerCase().replace(/\.(?:bat|cmd|com|exe)$/u, "");
 }
 
 function readArguments(value: unknown): string[] {
