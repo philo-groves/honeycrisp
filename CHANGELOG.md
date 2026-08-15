@@ -4,6 +4,7 @@
 
 ### Added
 
+- Auto-Review denials can now pause for a correlated one-command researcher override, with compact trusted authorization and operator-managed execution context supplied to the reviewer.
 - Added a Longshot workflow to bundled Security Research 1.6.0 and Mathematics 1.4.0. Security Longshots hunt for evidence-gated reportable high- or critical-severity vulnerabilities, while Mathematics Longshots pursue concrete leverage points toward major breakthroughs.
 - Added Z.ai provider support with GLM-5.3 and GLM-5-Turbo catalog entries, `ZAI_API_KEY` routing through Pi, official ZCode app-server execution for subscription-backed lead and collaborator agents, resumable ZCode sessions, a session-scoped governed MCP tool bridge, and cybersecurity policy-risk preflight acknowledgement.
 - Added a bounded provider-neutral auxiliary text-completion boundary for host support jobs, including authentication preference and usage-limit fallback routing; Anthropic requests use the official Claude Agent SDK and CLI path.

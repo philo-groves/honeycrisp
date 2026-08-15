@@ -169,7 +169,8 @@ test("network commands continue through the configured shell approval mode witho
   assert.equal(approved.decision, "approved");
   assert.deepEqual(approved.network.destinations, ["api.example.test"]);
   assert.match(calls[0].context.messages[0].content, /"classification":"network utility curl"/);
-  assert.doesNotMatch(calls[0].context.messages[0].content, /authorizationRecorded|scopeId|networkProfile/);
+  assert.match(calls[0].context.messages[0].content, /"authorizationRecorded":false/);
+  assert.doesNotMatch(calls[0].context.messages[0].content, /scopeId|networkProfile/);
 });
 
 test("Manual Approval waits for one correlated human decision", async () => {
@@ -406,6 +407,10 @@ test("Auto-Review uses the active provider small model and emits a redacted audi
     getMode: () => "auto_review",
     getReviewerSelection: () => reviewer,
     requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    reviewContext: {
+      authorizationRecorded: true,
+      executionPosture: "operator_managed",
+    },
     models,
   });
 
@@ -432,6 +437,9 @@ test("Auto-Review uses the active provider small model and emits a redacted audi
   assert.equal(calls[0].options.reasoning, "medium");
   assert.equal(calls[0].options.maxTokens, 256);
   assert.match(calls[0].context.messages[0].content, /password=stdin-secret/);
+  assert.match(calls[0].context.messages[0].content, /"authorizationRecorded":true/);
+  assert.match(calls[0].context.messages[0].content, /"executionPosture":"operator_managed"/);
+  assert.match(calls[0].context.systemPrompt, /existing target-admin access/);
 
   reviewer = {
     provider: "xai",
@@ -441,6 +449,58 @@ test("Auto-Review uses the active provider small model and emits a redacted audi
   await authorize(BASE_REQUEST);
   assert.equal(calls[1].provider, "xai");
   assert.equal(calls[1].modelId, "grok-4.3");
+});
+
+test("Auto-Review denial waits for a correlated one-command researcher override", async () => {
+  const requested = [];
+  const resolved = [];
+  let resolveOverride;
+  const reviewer = {
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "medium",
+  };
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: (request) => {
+      requested.push(request);
+      return new Promise((resolve) => {
+        resolveOverride = resolve;
+      });
+    },
+    onRequested: (event) => requested.push(event),
+    onResolved: (event) => resolved.push(event),
+    models: fixtureModels(
+      '{"decision":"denied","reason":"Remote target execution needs researcher confirmation."}',
+      [],
+    ),
+  });
+
+  let settled = false;
+  const pending = authorize({ ...BASE_REQUEST, utility: "ssh", args: ["admin@192.168.64.81", "/tmp/proof"] })
+    .then((decision) => {
+      settled = true;
+      return decision;
+    });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(settled, false);
+  assert.equal(requested[0]?.approvalKind, "auto_review_override");
+  assert.equal(requested[0]?.mode, "auto_review");
+  assert.equal(requested[0]?.reviewReason, "Remote target execution needs researcher confirmation.");
+  assert.equal(requested[1]?.type, "shell_authorization_requested");
+  assert.equal(requested[1]?.approvalKind, "auto_review_override");
+  assert.deepEqual(requested[1]?.reviewer, reviewer);
+  assert.equal(resolved.length, 0);
+
+  resolveOverride({ decision: "approved", reason: "Approved once by the researcher." });
+  const decision = await pending;
+  assert.equal(decision.decision, "approved");
+  assert.equal(decision.source, "human");
+  assert.match(decision.reason, /approved this command once/);
+  assert.deepEqual(decision.reviewer, reviewer);
+  assert.equal(resolved.length, 1);
 });
 
 test("Auto-Review fails closed for missing, malformed, oversized, and timed-out reviews", async () => {

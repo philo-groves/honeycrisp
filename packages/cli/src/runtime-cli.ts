@@ -1830,6 +1830,10 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       }
       const shellAuthorizer = createShellSafetyAuthorizer({
         researchProfileName: resolvedResearchProfile.profile.name,
+        reviewContext: {
+          authorizationRecorded: preparedRuntimeConfig?.workspaceContext.authorization?.recorded === true,
+          executionPosture: "operator_managed",
+        },
         getMode: () => controlStream?.getShellSafetyMode() ?? args.shellSafetyMode,
         getReviewerSelection: (): ShellReviewerSelection | undefined => {
           const provider =
