@@ -193,26 +193,24 @@ Review the capture for `runtimeConfig.modelConfig.source`, `runtimeConfig.toolCo
 
 `repository.search` accepts a configured repository path or label as a context hint and also accepts any readable absolute directory path in its `root` input. `file.read` likewise treats workspace and repository roots as context hints rather than access fences. Both tools run with the current user's host filesystem permissions; use an operator-managed VM or container when filesystem isolation is required.
 
-### Host control stream
+### Host WebSocket transport
 
-Hosts can add `--control-stream` to send schema-versioned JSONL commands over
-stdin while a run is active:
+Clients can launch a run with `--websocket-transport --session-id <id>` and set a random `HONEYCRISP_TRANSPORT_TOKEN` in the child environment. Honeycrisp binds an ephemeral endpoint to `127.0.0.1` and writes one non-secret `HONEYCRISP_TRANSPORT` bootstrap record to stdout. The client authenticates with `Authorization: Bearer <token>`, then sends `client.hello` as its first message. Protocol v1 uses client-neutral envelopes:
 
-```jsonl
-{"schemaVersion":1,"type":"pause"}
-{"schemaVersion":1,"type":"resume"}
-{"schemaVersion":1,"type":"steer","requestId":"steer-42","instruction":"Inspect the authorization boundary next."}
-{"schemaVersion":1,"type":"configure","modelSelection":{"provider":"openai-codex","model":"gpt-5.6-sol","reasoningEffort":"high"}}
-{"schemaVersion":1,"type":"stop"}
+```json
+{"protocolVersion":1,"type":"client.hello","sessionId":"session-1","client":{"name":"example","version":"1.0.0"}}
+{"protocolVersion":1,"type":"session.control","sessionId":"session-1","requestId":"steer-42","control":{"schemaVersion":1,"type":"steer","requestId":"steer-42","instruction":"Inspect the authorization boundary next."}}
 ```
+
+Honeycrisp replies with `server.hello`, streams existing live event objects inside `session.event`, and reports accepted or rejected controls as `control.received` agent events. One authenticated client is allowed per run. Messages are capped at 1 MiB, and disconnecting that client stops the active run. The bearer token is never included in the bootstrap record. TypeScript clients can import the public envelope types and constants from `honeycrisp/websocket-protocol`.
+
+The older `--event-stream` and `--control-stream` flags remain available for compatibility with existing hosts. When `--websocket-transport` is present, WebSocket event and control delivery takes precedence.
 
 Pause holds the agent at its next safe turn boundary until resume arrives.
 Steering is injected as a user message into the active Pi agent loop before its
-next model turn. Stop aborts the root and every pending or running child. With
-`--event-stream`, accepted or rejected control messages
-are reported as `agent.event` records with `eventType: "control.received"`.
+next model turn. Stop aborts the root and every pending or running child. Accepted or rejected control messages are reported as `agent.event` records with `eventType: "control.received"`.
 Any control may include a non-empty `requestId` of at most 200 characters; the
-accepted or rejected event echoes it so a host can correlate stdin delivery.
+accepted or rejected event echoes it so a client can correlate delivery.
 Model selections received through `configure` or `steer` apply to the root
 agent's next provider call; they do not interrupt an in-flight call.
 

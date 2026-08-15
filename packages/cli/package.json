@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/cli.d.ts",
       "import": "./dist/cli.js"
+    },
+    "./websocket-protocol": {
+      "types": "./dist/websocket-protocol.d.ts",
+      "import": "./dist/websocket-protocol.js"
     }
   },
   "files": [
@@ -22,7 +26,8 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
-    "@honeycrisp/research-agent": "workspace:*"
+    "@honeycrisp/research-agent": "workspace:*",
+    "ws": "8.21.0"
   },
   "license": "UNLICENSED",
   "engines": {

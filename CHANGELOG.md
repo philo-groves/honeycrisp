@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a versioned client-neutral WebSocket session transport for live events and controls, with loopback-only binding, bearer authentication, one client per run, bounded messages, correlated control envelopes, and fail-closed disconnect handling.
 - Auto-Review denials can now pause for a correlated one-command researcher override, with compact trusted authorization and operator-managed execution context supplied to the reviewer.
 - Added a Longshot workflow to bundled Security Research 1.6.0 and Mathematics 1.4.0. Security Longshots hunt for evidence-gated reportable high- or critical-severity vulnerabilities, while Mathematics Longshots pursue concrete leverage points toward major breakthroughs.
 - Added Z.ai provider support with GLM-5.3 and GLM-5-Turbo catalog entries, `ZAI_API_KEY` routing through Pi, official ZCode app-server execution for subscription-backed lead and collaborator agents, resumable ZCode sessions, a session-scoped governed MCP tool bridge, and cybersecurity policy-risk preflight acknowledgement.
@@ -21,6 +22,7 @@
 
 ### Changed
 
+- WebSocket transport now takes precedence over the legacy stdout event and stdin control streams when both are requested, allowing Beale and future clients to share one Honeycrisp-owned protocol.
 - `shell.run` now accepts complete platform shell commands as well as direct executable-plus-argv calls, permits executable paths, and preserves host HOME-family environment variables while retaining shell authorization and credential-variable filtering.
 - Repository search can now target any readable absolute host directory, not only configured workspace repository hints. Security Research 1.5.0 introduced bounded repository search and file reads alongside shell access by default.
 - Adaptive collaboration is now explicitly optional and evidence-driven: agents stay solo for sequential work, delegate only when expected evidence gain justifies coordination cost, reuse relevant subagents, and treat discovery parallelism as an opportunity rather than a requirement.
@@ -79,6 +81,7 @@
 
 ### Security
 
+- WebSocket bearer tokens are consumed and removed from Honeycrisp's process environment before runtime tools can inherit it.
 - Enforced the official Claude boundary for Anthropic: Pi executors now reject Anthropic, Pi-authenticated model registries omit it, auxiliary title and shell-review jobs always use the Claude Agent SDK, and legacy Honeycrisp Anthropic credentials are cleanup-only.
 - Real cybersecurity-profile runs now fail closed unless their workspace context contains a host-recorded authorization boundary.
 - Kept stored workspace binding and profile results free of database, storage, and profile-source paths so host-held credential references remain withheld.

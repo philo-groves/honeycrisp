@@ -23,6 +23,9 @@ importers:
       '@honeycrisp/research-agent':
         specifier: workspace:*
         version: link:../research-agent
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
 
   packages/research-agent:
     dependencies:
