@@ -206,6 +206,8 @@ Honeycrisp replies with `server.hello`, streams existing live event objects insi
 
 The older `--event-stream` and `--control-stream` flags remain available for compatibility with existing hosts. When `--websocket-transport` is present, WebSocket event and control delivery takes precedence.
 
+Honeycrisp's transport-neutral client contract is versioned separately from individual data schemas. `honeycrisp protocol describe --json` returns the supported protocol version, operations, CLI framing, and WebSocket capabilities in a standard success envelope. TypeScript clients can import the shared envelopes and descriptor types from `honeycrisp/protocol`; WebSocket-specific messages remain available from `honeycrisp/websocket-protocol` and use the same protocol version.
+
 Pause holds the agent at its next safe turn boundary until resume arrives.
 Steering is injected as a user message into the active Pi agent loop before its
 next model turn. Stop aborts the root and every pending or running child. Accepted or rejected control messages are reported as `agent.event` records with `eventType: "control.received"`.

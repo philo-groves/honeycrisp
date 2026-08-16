@@ -16,6 +16,10 @@
     "./websocket-protocol": {
       "types": "./dist/websocket-protocol.d.ts",
       "import": "./dist/websocket-protocol.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js"
     }
   },
   "files": [

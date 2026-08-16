@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the exported `honeycrisp/protocol` v1 client contract with versioned success/error envelopes and `honeycrisp protocol describe --json` capability discovery shared by CLI and WebSocket clients. Operations enter the advertised registry only after adopting the envelope.
 - Added a versioned client-neutral WebSocket session transport for live events and controls, with loopback-only binding, bearer authentication, one client per run, bounded messages, correlated control envelopes, and fail-closed disconnect handling.
 - Auto-Review denials can now pause for a correlated one-command researcher override, with compact trusted authorization and operator-managed execution context supplied to the reviewer.
 - Added a Longshot workflow to bundled Security Research 1.6.0 and Mathematics 1.4.0. Security Longshots hunt for evidence-gated reportable high- or critical-severity vulnerabilities, while Mathematics Longshots pursue concrete leverage points toward major breakthroughs.
