@@ -208,6 +208,8 @@ The older `--event-stream` and `--control-stream` flags remain available for com
 
 Honeycrisp's transport-neutral client contract is versioned separately from individual data schemas. `honeycrisp protocol describe --json` returns the supported protocol version, operations, CLI framing, and WebSocket capabilities in a standard success envelope. TypeScript clients can import the shared envelopes and descriptor types from `honeycrisp/protocol`; WebSocket-specific messages remain available from `honeycrisp/websocket-protocol` and use the same protocol version.
 
+Honeycrisp protocol v1 also owns session persistence. `session create`, `begin-attempt`, `append-event`, `transition`, `import-capture`, `get`, and `list` operate on one revisioned session aggregate in the Honeycrisp database. Capture import and lifecycle changes are transactional and revision-guarded, and the runtime records live events and imports its final capture before exiting. Clients query this aggregate instead of maintaining a second session projection or writing Honeycrisp tables directly.
+
 Pause holds the agent at its next safe turn boundary until resume arrives.
 Steering is injected as a user message into the active Pi agent loop before its
 next model turn. Stop aborts the root and every pending or running child. Accepted or rejected control messages are reported as `agent.event` records with `eventType: "control.received"`.

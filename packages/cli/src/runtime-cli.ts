@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
@@ -77,6 +78,7 @@ import {
   writeResearchToolConfig,
   ResearchDispositionRecorder,
   selectResearchGoalObjective,
+  HoneycrispSessionStore,
 } from "@honeycrisp/research-agent";
 import type {
   AuthEvent,
@@ -241,6 +243,7 @@ interface ParsedArgs {
   runtimeTools: RuntimeToolConfig;
   capturePath: string | undefined;
   sessionId: string | undefined;
+  attemptId: string | undefined;
   resumeCapturePath: string | undefined;
   resumeFallbackPrompt: string | undefined;
   resumeFallbackPromptPath: string | undefined;
@@ -349,6 +352,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let inspectBytes: number | undefined;
   let capturePath: string | undefined;
   let sessionId: string | undefined;
+  let attemptId: string | undefined;
   let resumeCapturePath: string | undefined;
   let resumeFallbackPrompt: string | undefined;
   let resumeFallbackPromptPath: string | undefined;
@@ -594,6 +598,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--session-id") {
       sessionId = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--attempt-id") {
+      attemptId = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--resume-capture") {
       resumeCapturePath = readOptionValue(argv, index, arg);
       index += 1;
@@ -698,6 +705,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     },
     capturePath,
     sessionId,
+    attemptId,
     resumeCapturePath,
     resumeFallbackPrompt,
     resumeFallbackPromptPath,
@@ -1819,8 +1827,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       }
     }
 
-    const liveEventSink = webSocketTransport?.eventSink
+    const transportEventSink = webSocketTransport?.eventSink
       ?? (args.eventStream ? createCliLiveEventSink() : undefined);
+    const sessionStore = args.sessionId && args.attemptId
+      ? new HoneycrispSessionStore()
+      : undefined;
+    if (sessionStore && !sessionStore.get(args.sessionId!)) {
+      sessionStore.close();
+      throw new Error(`Honeycrisp session was not created before launch: ${args.sessionId}`);
+    }
+    const liveEventSink = sessionStore && args.sessionId
+      ? createPersistedSessionEventSink(sessionStore, args.sessionId, transportEventSink)
+      : transportEventSink;
     const controlInput = webSocketTransport?.controlInput ?? input;
     const controlStream = webSocketTransport || args.controlStream
       ? new HoneycrispControlStream(controlInput, (event) => {
@@ -1975,7 +1993,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       await sessionTitle;
 
       if (args.capturePath) {
-        const capturePath = await writeFlowCapture(
+        const writtenCapture = await writeFlowCapture(
           args.capturePath,
           result,
           {
@@ -1985,8 +2003,14 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
               : { mode: "mock" },
           },
         );
+        if (sessionStore && args.sessionId && args.attemptId) {
+          sessionStore.importCapture(args.sessionId, {
+            attemptId: args.attemptId,
+            capture: writtenCapture.capture,
+          });
+        }
         if (!args.json) {
-          if (!args.eventStream && !args.websocketTransport) console.log(`Flow capture: ${capturePath}`);
+          if (!args.eventStream && !args.websocketTransport) console.log(`Flow capture: ${writtenCapture.path}`);
         }
       }
 
@@ -2000,6 +2024,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       controlStream?.close();
       await webSocketTransport?.close();
       await runtimeConfig?.cleanup?.();
+      sessionStore?.close();
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -3989,21 +4014,51 @@ async function writeFlowCapture(
   capturePath: string,
   result: Awaited<ReturnType<typeof runResearchAgent>>,
   runtimeConfig?: Record<string, unknown>,
-): Promise<string> {
+): Promise<{ path: string; capture: unknown }> {
   const absolutePath = resolve(capturePath);
   await mkdir(dirname(absolutePath), { recursive: true });
-  const capture = createResearchAgentFlowCapture(result);
+  const baseCapture = createResearchAgentFlowCapture(result);
+  const capture = runtimeConfig ? { ...baseCapture, runtimeConfig } : baseCapture;
   await writeFile(
     absolutePath,
     `${JSON.stringify(
-      runtimeConfig ? { ...capture, runtimeConfig } : capture,
+      capture,
       null,
       2,
     )}\n`,
     "utf8",
   );
 
-  return absolutePath;
+  return { path: absolutePath, capture };
+}
+
+function createPersistedSessionEventSink(
+  store: HoneycrispSessionStore,
+  sessionId: string,
+  downstream: ResearchLiveEventSink | undefined,
+): ResearchLiveEventSink {
+  return async (event) => {
+    const payload = isRecord(event.payload) ? event.payload : {};
+    const nestedEvent = isRecord(payload.event) ? payload.event : {};
+    store.appendEvent(sessionId, {
+      id: nonEmptySessionText(payload.eventId)
+        ?? nonEmptySessionText(nestedEvent.id)
+        ?? nonEmptySessionText(payload.approvalRequestId)
+        ?? randomUUID(),
+      kind: event.kind,
+      timestamp: event.timestamp,
+      summary: nonEmptySessionText(payload.summary) ?? nonEmptySessionText(payload.eventType) ?? event.kind,
+      payload: event.payload,
+      ...(nonEmptySessionText(payload.agentId) ? { agentId: nonEmptySessionText(payload.agentId)! } : {}),
+      ...(nonEmptySessionText(payload.agentPath) ? { agentPath: nonEmptySessionText(payload.agentPath)! } : {}),
+      ...(nonEmptySessionText(payload.parentAgentId) ? { parentAgentId: nonEmptySessionText(payload.parentAgentId)! } : {}),
+    });
+    await downstream?.(event);
+  };
+}
+
+function nonEmptySessionText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 async function handleAuthCommand(argv: readonly string[]): Promise<void> {

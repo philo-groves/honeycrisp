@@ -3,6 +3,13 @@ export const HONEYCRISP_PROTOCOL_VERSION = 1 as const;
 
 export const HONEYCRISP_PROTOCOL_OPERATIONS = [
   "protocol.describe",
+  "session.create",
+  "session.begin_attempt",
+  "session.append_event",
+  "session.transition",
+  "session.import_capture",
+  "session.get",
+  "session.list",
 ] as const;
 
 export type HoneycrispProtocolOperation = (typeof HONEYCRISP_PROTOCOL_OPERATIONS)[number];

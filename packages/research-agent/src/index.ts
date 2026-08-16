@@ -20,6 +20,7 @@ export * from "./shell-safety.js";
 export * from "./tool-policy.js";
 export * from "./ids.js";
 export * from "./flow-capture.js";
+export * from "./session-store.js";
 export * from "./workspace-context.js";
 export * from "./workspace-binding.js";
 export * from "./storage.js";

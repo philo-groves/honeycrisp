@@ -37,6 +37,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       await runProtocolCommand(argv.slice(1));
       return;
     }
+    if (argv[0] === "session") {
+      const { runSessionCommand } = await import("./session-command.js");
+      await runSessionCommand(argv.slice(1));
+      return;
+    }
     const { main: runRuntimeCli } = await import("./runtime-cli.js");
     await runRuntimeCli(argv);
   } catch (error) {
