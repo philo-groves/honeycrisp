@@ -92,6 +92,20 @@ export type HoneycrispSessionSummary = Omit<
   attempts: HoneycrispSessionAttemptSummary[];
 };
 
+export interface HoneycrispSessionUpdate {
+  session: HoneycrispSessionSummary;
+  finalResponse: string | null;
+  events: HoneycrispSessionEvent[];
+  eventOffset: number;
+}
+
+export interface HoneycrispSessionMutationReceipt {
+  sessionId: string;
+  status: HoneycrispSessionStatus;
+  revision: number;
+  updatedAt: string;
+}
+
 export interface CreateHoneycrispSessionInput {
   id: string;
   workspaceId: string;
@@ -276,28 +290,23 @@ export class HoneycrispSessionStore {
   }
 
   public listSummaries(workspaceId: string, limit = 100): HoneycrispSessionSummary[] {
-    return this.list(workspaceId, limit).map((session) => ({
-      schemaVersion: session.schemaVersion,
-      id: session.id,
-      workspaceId: session.workspaceId,
-      status: session.status,
-      title: session.title,
-      prompt: session.prompt,
-      summary: session.summary,
-      provider: session.provider,
-      model: session.model,
-      reasoningEffort: session.reasoningEffort,
-      workflowId: session.workflowId,
-      profile: session.profile,
-      metadata: session.metadata,
-      finalDisposition: session.finalDisposition,
-      attempts: session.attempts.map(({ capture: _capture, ...attempt }) => attempt),
-      createdAt: session.createdAt,
-      startedAt: session.startedAt,
-      endedAt: session.endedAt,
-      updatedAt: session.updatedAt,
-      revision: session.revision,
-    }));
+    return this.list(workspaceId, limit).map(sessionSummary);
+  }
+
+  public getUpdate(sessionId: string, afterEventId?: string | null): HoneycrispSessionUpdate | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    const normalizedAfterEventId = optionalString(afterEventId);
+    const matchedIndex = normalizedAfterEventId
+      ? session.events.findIndex((event) => event.id === normalizedAfterEventId)
+      : -1;
+    const eventOffset = matchedIndex >= 0 ? matchedIndex + 1 : 0;
+    return {
+      session: sessionSummary(session),
+      finalResponse: session.finalResponse,
+      events: session.events.slice(eventOffset),
+      eventOffset,
+    };
   }
 
   public recoverInterrupted(
@@ -427,6 +436,10 @@ export class HoneycrispSessionStore {
     });
   }
 
+  public appendEventReceipt(sessionId: string, event: HoneycrispSessionEvent): HoneycrispSessionMutationReceipt {
+    return sessionMutationReceipt(this.appendEvent(sessionId, event));
+  }
+
   public transition(sessionId: string, input: HoneycrispSessionTransitionInput): HoneycrispSessionRecord {
     return this.mutate(sessionId, input.expectedRevision, (session) => {
       const now = input.at ?? new Date().toISOString();
@@ -535,6 +548,40 @@ export class HoneycrispSessionStore {
       throw error;
     }
   }
+}
+
+function sessionSummary(session: HoneycrispSessionRecord): HoneycrispSessionSummary {
+  return {
+    schemaVersion: session.schemaVersion,
+    id: session.id,
+    workspaceId: session.workspaceId,
+    status: session.status,
+    title: session.title,
+    prompt: session.prompt,
+    summary: session.summary,
+    provider: session.provider,
+    model: session.model,
+    reasoningEffort: session.reasoningEffort,
+    workflowId: session.workflowId,
+    profile: session.profile,
+    metadata: session.metadata,
+    finalDisposition: session.finalDisposition,
+    attempts: session.attempts.map(({ capture: _capture, ...attempt }) => attempt),
+    createdAt: session.createdAt,
+    startedAt: session.startedAt,
+    endedAt: session.endedAt,
+    updatedAt: session.updatedAt,
+    revision: session.revision,
+  };
+}
+
+function sessionMutationReceipt(session: HoneycrispSessionRecord): HoneycrispSessionMutationReceipt {
+  return {
+    sessionId: session.id,
+    status: session.status,
+    revision: session.revision,
+    updatedAt: session.updatedAt,
+  };
 }
 
 function decodeStoredSession(value: unknown): HoneycrispSessionRecord {

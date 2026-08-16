@@ -143,6 +143,66 @@ test("session summary lists stay bounded when canonical sessions contain large e
   assert.equal(Object.hasOwn(listed.result[0].attempts[0], "capture"), false);
 });
 
+test("session cursor updates omit prior events and capture bodies", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-update-"));
+  const databasePath = join(directory, "memory.sqlite");
+  const store = new HoneycrispSessionStore({ databasePath });
+  try {
+    store.create({
+      id: "session_update",
+      workspaceId: "workspace_update",
+      attemptId: "attempt_update",
+      title: "Cursor update",
+      prompt: "Return only new events.",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    store.appendEvent("session_update", {
+      id: "event_before_cursor",
+      kind: "agent.event",
+      timestamp: "2026-08-16T12:00:00.000Z",
+      summary: "Before cursor",
+      payload: { output: "x".repeat(2 * 1024 * 1024) },
+    });
+    store.appendEvent("session_update", {
+      id: "event_after_cursor",
+      kind: "agent.event",
+      timestamp: "2026-08-16T12:01:00.000Z",
+      summary: "After cursor",
+      payload: { output: "bounded" },
+    });
+  } finally {
+    store.close();
+  }
+
+  const updated = runCli(
+    ["session", "get-update", "--session-id", "session_update", "--after-event-id", "event_before_cursor", "--json"],
+    { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+  );
+  assert.equal(updated.operation, "session.get_update");
+  assert.deepEqual(updated.result.events.map((event) => event.id), ["event_after_cursor"]);
+  assert.equal(updated.result.eventOffset, 1);
+  assert.equal(Object.hasOwn(updated.result.session, "events"), false);
+  assert.equal(Object.hasOwn(updated.result.session.attempts[0], "capture"), false);
+  assert.ok(JSON.stringify(updated).length < 20_000);
+
+  const appendPath = join(directory, "append.json");
+  await writeFile(appendPath, JSON.stringify({
+    id: "event_receipt",
+    kind: "agent.event",
+    timestamp: "2026-08-16T12:02:00.000Z",
+    summary: "Compact append response",
+    payload: { output: "receipt" },
+  }));
+  const appended = runCli([
+    "session", "append-event-receipt", "--session-id", "session_update", "--input", appendPath, "--json",
+  ], { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath });
+  assert.equal(appended.operation, "session.append_event_receipt");
+  assert.equal(appended.result.sessionId, "session_update");
+  assert.equal(appended.result.revision, 4);
+  assert.ok(JSON.stringify(appended).length < 1_000);
+});
+
 test("versioned session CLI imports captures and serves the canonical query", async () => {
   const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-protocol-"));
   const databasePath = join(directory, "memory.sqlite");
@@ -238,13 +298,16 @@ test("session CLI writers wait for a short competing writer instead of returning
   const lockClosed = once(lockHolder, "close");
   await once(lockHolder.stdout, "data");
   const appended = runCli([
-    "session", "append-event",
+    "session", "append-event-receipt",
     "--session-id", "session_write_lock",
     "--input", inputPath,
     "--json",
   ], { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath });
   assert.equal(appended.ok, true);
-  assert.equal(appended.result.events.at(-1).id, "event_after_lock");
+  assert.equal(appended.result.sessionId, "session_write_lock");
+  assert.equal(appended.result.status, "active");
+  assert.equal(appended.result.revision, 2);
+  assert.equal(Object.hasOwn(appended.result, "events"), false);
   await lockClosed;
 });
 

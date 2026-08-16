@@ -4,7 +4,7 @@ export function usage(): string {
     "       honeycrisp tools list [options]",
     "       honeycrisp memory <command> [options]",
     "       honeycrisp protocol describe [--json]",
-    "       honeycrisp session <create|begin-attempt|append-event|transition|recover-interrupted|import-capture|get|list|list-summaries> ... --json",
+    "       honeycrisp session <create|begin-attempt|append-event|append-event-receipt|transition|recover-interrupted|import-capture|get|get-update|list|list-summaries> ... --json",
     "       honeycrisp knowledge <summary|dreaming-*|runbook-get|report-get|artifact-resolve> --input <json> --json",
     "       honeycrisp harness <model-job-resolve|provider-describe|source-*|plugin-*|maintenance-*> --input <json> --json",
     "       honeycrisp complete --json < request.json",

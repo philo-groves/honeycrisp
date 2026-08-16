@@ -13,8 +13,8 @@ export const HONEYCRISP_TRANSPORT_PREFIX = HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX;
 export const HONEYCRISP_TRANSPORT_PATH = HONEYCRISP_PROTOCOL_WEBSOCKET_PATH;
 
 export const HONEYCRISP_PROTOCOL_OPERATIONS = [
-  "protocol.describe", "session.create", "session.begin_attempt", "session.append_event",
-  "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.list", "session.list_summaries",
+  "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
+  "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.list", "session.list_summaries",
   "memory.summary", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
   "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.get",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Added bounded `session.get_update` and `session.append_event_receipt` protocol DTOs so clients can poll event suffixes and persist live events without retransferring prior events or capture bodies.
+
 ### Added
 
 - Added protocol-v1 operations and exported harness services for auxiliary model-job resolution, provider semantics and completion, source inspection/materialization, Agent Plugin registry/runtime assembly, and workspace Dejunk maintenance.

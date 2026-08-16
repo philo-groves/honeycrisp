@@ -27,7 +27,7 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
 
   let store: HoneycrispSessionStore | undefined;
   try {
-    store = new HoneycrispSessionStore({ readOnly: command === "get" || command === "list" || command === "list-summaries" });
+    store = new HoneycrispSessionStore({ readOnly: command === "get" || command === "get-update" || command === "list" || command === "list-summaries" });
     const sessionId = option(argv, "--session-id");
     let result: unknown;
     switch (command) {
@@ -39,6 +39,9 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
         break;
       case "append-event":
         result = store.appendEvent(requiredOption(sessionId, "--session-id"), await readJsonOption<HoneycrispSessionEvent>(argv, "--input"));
+        break;
+      case "append-event-receipt":
+        result = store.appendEventReceipt(requiredOption(sessionId, "--session-id"), await readJsonOption<HoneycrispSessionEvent>(argv, "--input"));
         break;
       case "transition":
         result = store.transition(requiredOption(sessionId, "--session-id"), await readJsonOption<HoneycrispSessionTransitionInput>(argv, "--input"));
@@ -57,6 +60,13 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
       }
       case "get":
         result = store.get(requiredOption(sessionId, "--session-id"));
+        if (!result) throw new Error(`Session not found: ${sessionId}`);
+        break;
+      case "get-update":
+        result = store.getUpdate(
+          requiredOption(sessionId, "--session-id"),
+          option(argv, "--after-event-id"),
+        );
         if (!result) throw new Error(`Session not found: ${sessionId}`);
         break;
       case "list":
@@ -87,10 +97,12 @@ function operationForCommand(command: string): HoneycrispProtocolOperation | nul
     case "create": return "session.create";
     case "begin-attempt": return "session.begin_attempt";
     case "append-event": return "session.append_event";
+    case "append-event-receipt": return "session.append_event_receipt";
     case "transition": return "session.transition";
     case "recover-interrupted": return "session.recover_interrupted";
     case "import-capture": return "session.import_capture";
     case "get": return "session.get";
+    case "get-update": return "session.get_update";
     case "list": return "session.list";
     case "list-summaries": return "session.list_summaries";
     default: return null;
