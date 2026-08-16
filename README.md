@@ -46,7 +46,7 @@ Runbooks are workspace-scoped, revisioned Jupyter `nbformat 4` artifacts for reu
 
 ## Client protocol
 
-`honeycrisp protocol describe --json` advertises the versioned protocol operations available to Beale and other clients. In addition to revisioned sessions, protocol v1 owns workspace memory summaries, Memory Dreaming preparation/plan parsing/application/failure/restore, runbook and report document reads, and manifest-backed artifact resolution. CLI calls use one JSON success/error envelope and file-backed JSON inputs; live session events and controls use the authenticated loopback WebSocket transport with the same protocol version. Clients render and route these results but do not open Honeycrisp's database.
+`honeycrisp protocol describe --json` advertises the versioned protocol operations available to Beale and other clients. In addition to revisioned sessions and knowledge operations, protocol v1 owns auxiliary model-job routing and completion semantics, provider defaults, source discovery and repository materialization, Agent Plugin registry/runtime assembly, and retained workspace maintenance. CLI calls use one JSON success/error envelope and file-backed JSON inputs; live session events and controls use the authenticated loopback WebSocket transport with the same protocol version. Clients render results, inject host credentials and client-specific built-ins, and apply UI authorization gates without reimplementing harness behavior or opening Honeycrisp's database.
 
 ## Research profiles
 

@@ -224,6 +224,8 @@ interface ParsedArgs {
   model: string | undefined;
   titleModel: string | undefined;
   titleEffort: ResearchModelEffort | undefined;
+  titleModelDefault: string | undefined;
+  titleEffortDefault: ResearchModelEffort | undefined;
   shellSafetyMode: ShellSafetyMode;
   shellReviewModels: Readonly<Record<string, string>> | undefined;
   shellReviewEffort: ResearchModelEffort | undefined;
@@ -336,6 +338,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let model: string | undefined;
   let titleModel: string | undefined;
   let titleEffort: ResearchModelEffort | undefined;
+  let titleModelDefault: string | undefined;
+  let titleEffortDefault: ResearchModelEffort | undefined;
   let shellSafetyMode: ShellSafetyMode = "auto_review";
   let shellReviewModels: Readonly<Record<string, string>> | undefined;
   let shellReviewEffort: ResearchModelEffort | undefined;
@@ -460,6 +464,12 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
     } else if (arg === "--title-effort") {
       titleEffort = parseReasoning(readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg === "--title-model-default") {
+      titleModelDefault = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--title-effort-default") {
+      titleEffortDefault = parseReasoning(readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg === "--executor") {
       executor = parseExecutor(readOptionValue(argv, index, arg));
@@ -660,6 +670,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     model,
     titleModel,
     titleEffort,
+    titleModelDefault,
+    titleEffortDefault,
     shellSafetyMode,
     shellReviewModels,
     shellReviewEffort,
@@ -1445,6 +1457,8 @@ function usage(): string {
     "  --model <model>        Override configured/default model for real mode",
     "  --title-model <model>  Generate a session title with this model from the selected provider",
     "  --title-effort <level> Reasoning effort for session title generation (default: medium)",
+    "  --title-model-default <model>  Host fallback used only when the profile has no applicable title model",
+    "  --title-effort-default <level> Host fallback used only when the profile has no applicable title effort",
     "  --executor <kind>      agent (default: agent)",
     "  --max-tokens <n>       Max output tokens for real mode",
     "  --effort <level>       Model effort for real mode: minimal, low, medium, high, xhigh, max",
@@ -1657,8 +1671,9 @@ function resolveSessionTitleRoute(
   const activeProvider = modelConfig?.provider;
   const profileRouteApplies =
     !job?.provider || !activeProvider || job.provider === activeProvider;
-  const model =
-    args.titleModel ?? (profileRouteApplies ? job?.model : undefined);
+  const model = args.titleModel
+    ?? (profileRouteApplies ? job?.model : undefined)
+    ?? args.titleModelDefault;
   if (!model) return undefined;
   const provider = activeProvider ?? job?.provider;
   if (!provider) {
@@ -1670,11 +1685,10 @@ function resolveSessionTitleRoute(
     provider,
     model,
     effort:
-      args.titleEffort ??
-      (profileRouteApplies
-        ? parseResearchProfileModelJobEffort(job, "sessionTitle")
-        : undefined) ??
-      "medium",
+      args.titleEffort
+      ?? (profileRouteApplies ? parseResearchProfileModelJobEffort(job, "sessionTitle") : undefined)
+      ?? args.titleEffortDefault
+      ?? "medium",
   };
   validateModelRoute("Session title", route);
   return route;
@@ -1691,7 +1705,7 @@ function resolveShellReviewerSelection(
   const model =
     args.shellReviewModels?.[provider] ??
     (profileRouteApplies ? job?.model : undefined) ??
-    DEFAULT_SHELL_REVIEW_MODELS[provider];
+    DEFAULT_SHELL_REVIEW_MODELS[provider as keyof typeof DEFAULT_SHELL_REVIEW_MODELS];
   if (!model) return undefined;
   const selection: ShellReviewerSelection = {
     provider,

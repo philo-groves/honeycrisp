@@ -47,6 +47,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       await runKnowledgeCommand(argv.slice(1));
       return;
     }
+    if (argv[0] === "harness") {
+      const { runHarnessCommand } = await import("./harness-command.js");
+      await runHarnessCommand(argv.slice(1));
+      return;
+    }
     const { main: runRuntimeCli } = await import("./runtime-cli.js");
     await runRuntimeCli(argv);
   } catch (error) {

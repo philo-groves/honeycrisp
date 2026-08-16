@@ -2,6 +2,7 @@ import {
   completeAuxiliaryText,
   type ResearchModelProviderId,
 } from "@honeycrisp/research-agent";
+import { honeycrispProtocolFailure, honeycrispProtocolSuccess } from "./protocol.js";
 
 const PROVIDERS = new Set<ResearchModelProviderId>(["openai-codex", "anthropic", "xai", "zai"]);
 type CompletionEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -20,13 +21,22 @@ interface CompleteCommandRequest {
 }
 
 export async function runCompleteCommand(argv: readonly string[]): Promise<void> {
-  if (argv.length > 0 && !(argv.length === 1 && argv[0] === "--json")) {
-    throw new Error("Usage: honeycrisp complete [--json] < request.json");
+  try {
+    if (argv.length > 0 && !(argv.length === 1 && argv[0] === "--json")) {
+      throw new Error("Usage: honeycrisp complete [--json] < request.json");
+    }
+    const raw = await readStandardInput();
+    const request = decodeRequest(JSON.parse(raw) as unknown);
+    const completion = await completeAuxiliaryText(request);
+    process.stdout.write(`${JSON.stringify(honeycrispProtocolSuccess("provider.complete", completion))}\n`);
+  } catch (error) {
+    process.stdout.write(`${JSON.stringify(honeycrispProtocolFailure(
+      "provider.complete",
+      "provider_completion_failed",
+      error instanceof Error ? error.message : String(error),
+    ))}\n`);
+    process.exitCode = 1;
   }
-  const raw = await readStandardInput();
-  const request = decodeRequest(JSON.parse(raw) as unknown);
-  const completion = await completeAuxiliaryText(request);
-  process.stdout.write(`${JSON.stringify({ schemaVersion: 1, ...completion })}\n`);
 }
 
 async function readStandardInput(): Promise<string> {

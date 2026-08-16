@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added protocol-v1 operations and exported harness services for auxiliary model-job resolution, provider semantics and completion, source inspection/materialization, Agent Plugin registry/runtime assembly, and workspace Dejunk maintenance.
 - Added protocol-v1 operations for workspace memory summaries, complete Memory Dreaming preparation and reversible state management, runbook/report document reads, and manifest-backed artifact resolution so non-Beale clients can use the same Honeycrisp-owned boundary.
 - Added Honeycrisp-owned revisioned session aggregates with transactional capture import, lifecycle transitions, live-event persistence, and versioned CLI create/query operations.
 - Added the exported `honeycrisp/protocol` v1 client contract with versioned success/error envelopes and `honeycrisp protocol describe --json` capability discovery shared by CLI and WebSocket clients. Operations enter the advertised registry only after adopting the envelope.
@@ -25,6 +26,7 @@
 
 ### Changed
 
+- Centralized provider small-model defaults, profile job applicability, plugin validation, repository checkout behavior, and retained maintenance policy in Honeycrisp so clients no longer duplicate those semantics.
 - WebSocket transport now takes precedence over the legacy stdout event and stdin control streams when both are requested, allowing Beale and future clients to share one Honeycrisp-owned protocol.
 - `shell.run` now accepts complete platform shell commands as well as direct executable-plus-argv calls, permits executable paths, and preserves host HOME-family environment variables while retaining shell authorization and credential-variable filtering.
 - Repository search can now target any readable absolute host directory, not only configured workspace repository hints. Security Research 1.5.0 introduced bounded repository search and file reads alongside shell access by default.

@@ -19,6 +19,19 @@ export const HONEYCRISP_PROTOCOL_OPERATIONS = [
   "runbook.get",
   "report.get",
   "artifact.resolve",
+  "provider.complete",
+  "provider.describe",
+  "model_job.resolve",
+  "source.inspect",
+  "source.materialize",
+  "plugin.list",
+  "plugin.add_filesystem",
+  "plugin.add_repository",
+  "plugin.set_enabled",
+  "plugin.remove",
+  "plugin.runtime",
+  "maintenance.summary",
+  "maintenance.run",
 ] as const;
 
 export type HoneycrispProtocolOperation = (typeof HONEYCRISP_PROTOCOL_OPERATIONS)[number];

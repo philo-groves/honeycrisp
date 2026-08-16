@@ -30,12 +30,8 @@ export interface ShellNetworkAuthorizationAudit {
   reason: string;
 }
 
-export const DEFAULT_SHELL_REVIEW_MODELS: Readonly<Record<string, string>> = Object.freeze({
-  "openai-codex": "gpt-5.6-luna",
-  anthropic: "claude-haiku-4-5",
-  xai: "grok-4.3",
-  zai: "glm-5-turbo",
-});
+export { DEFAULT_SMALL_MODELS as DEFAULT_SHELL_REVIEW_MODELS } from "./provider-semantics.js";
+import { DEFAULT_SMALL_MODELS as DEFAULT_SHELL_REVIEW_MODELS } from "./provider-semantics.js";
 
 export interface ShellAuthorizationRequest {
   actionId: string;

@@ -25,6 +25,10 @@
     "./knowledge": {
       "types": "./dist/knowledge.d.ts",
       "import": "./dist/knowledge.js"
+    },
+    "./harness": {
+      "types": "./dist/harness.d.ts",
+      "import": "./dist/harness.js"
     }
   },
   "files": [
