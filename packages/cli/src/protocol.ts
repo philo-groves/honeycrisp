@@ -10,6 +10,15 @@ export const HONEYCRISP_PROTOCOL_OPERATIONS = [
   "session.import_capture",
   "session.get",
   "session.list",
+  "memory.summary",
+  "dreaming.prepare",
+  "dreaming.parse_plan",
+  "dreaming.apply",
+  "dreaming.record_failure",
+  "dreaming.restore",
+  "runbook.get",
+  "report.get",
+  "artifact.resolve",
 ] as const;
 
 export type HoneycrispProtocolOperation = (typeof HONEYCRISP_PROTOCOL_OPERATIONS)[number];

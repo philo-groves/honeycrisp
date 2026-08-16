@@ -44,6 +44,10 @@ Every durable graph node belongs to exactly one subject and records lists of the
 
 Runbooks are workspace-scoped, revisioned Jupyter `nbformat 4` artifacts for reusable proof sequences, environment setup, diagnostics, and investigation procedures. `runbook.list`, `runbook.get`, `runbook.create`, and `runbook.append` preserve ordered markdown/code cells and bounded decisive outputs. Honeycrisp does not require Jupyter and never executes a notebook directly; commands remain subject to the normal `shell.run` broker and its utility controls.
 
+## Client protocol
+
+`honeycrisp protocol describe --json` advertises the versioned protocol operations available to Beale and other clients. In addition to revisioned sessions, protocol v1 owns workspace memory summaries, Memory Dreaming preparation/plan parsing/application/failure/restore, runbook and report document reads, and manifest-backed artifact resolution. CLI calls use one JSON success/error envelope and file-backed JSON inputs; live session events and controls use the authenticated loopback WebSocket transport with the same protocol version. Clients render and route these results but do not open Honeycrisp's database.
+
 ## Research profiles
 
 Honeycrisp is a general research harness with bundled `security-research` and `mathematics` profiles; security research remains the default. A research profile controls the agent role and posture, workflows, collaboration recipes, durable-memory vocabulary and validation, capability requests and feature switches, workspace language, auxiliary model jobs, and presentation labels. It does not replace host safety policy or grant authority.

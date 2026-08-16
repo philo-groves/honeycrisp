@@ -21,6 +21,10 @@
     "./research-profile": {
       "types": "./dist/research-profile.d.ts",
       "import": "./dist/research-profile.js"
+    },
+    "./knowledge": {
+      "types": "./dist/knowledge.d.ts",
+      "import": "./dist/knowledge.js"
     }
   },
   "files": [

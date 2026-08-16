@@ -42,6 +42,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       await runSessionCommand(argv.slice(1));
       return;
     }
+    if (argv[0] === "knowledge") {
+      const { runKnowledgeCommand } = await import("./knowledge-command.js");
+      await runKnowledgeCommand(argv.slice(1));
+      return;
+    }
     const { main: runRuntimeCli } = await import("./runtime-cli.js");
     await runRuntimeCli(argv);
   } catch (error) {
