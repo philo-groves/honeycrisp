@@ -136,7 +136,7 @@ pnpm start config show
 
 CLI flags such as `--provider`, `--model`, and `--effort` override the config file for a run. The selected provider/model must already be authorized through the auth CLI.
 
-Hosts may pass `--title-model <model>` with `--title-effort <level>` to generate a short prompt-derived session title concurrently with the research run. Successful titles are emitted as `session.title` live events when `--event-stream` is active; title failures do not interrupt research.
+Hosts may pass `--title-model <model>` with `--title-effort <level>` to generate a short prompt-derived session title concurrently with the research run. Successful titles are emitted as `session.title` events on the WebSocket session transport; title failures do not interrupt research.
 
 Inspect the provider models and model-specific reasoning levels supplied by the installed Pi runtime with:
 
@@ -208,7 +208,7 @@ Clients can launch a run with `--websocket-transport --session-id <id>` and set 
 
 Honeycrisp replies with `server.hello`, streams existing live event objects inside `session.event`, and reports accepted or rejected controls as `control.received` agent events. One authenticated client is allowed per run. Messages are capped at 1 MiB, and disconnecting that client stops the active run. The bearer token is never included in the bootstrap record. TypeScript clients can import the public envelope types and constants from `honeycrisp/websocket-protocol`.
 
-The older `--event-stream` and `--control-stream` flags remain available for compatibility with existing hosts. When `--websocket-transport` is present, WebSocket event and control delivery takes precedence.
+The WebSocket session transport is the sole live event and control boundary. One-shot CLI protocol operations continue to use their versioned single-JSON envelopes.
 
 Honeycrisp's transport-neutral client contract is versioned separately from individual data schemas. `honeycrisp protocol describe --json` returns the supported protocol version, operations, CLI framing, and WebSocket capabilities in a standard success envelope. TypeScript clients can import the shared envelopes and descriptor types from `honeycrisp/protocol`; WebSocket-specific messages remain available from `honeycrisp/websocket-protocol` and use the same protocol version.
 

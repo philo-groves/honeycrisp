@@ -79,8 +79,6 @@ export function usage(): string {
     "  --resume-capture <p>  Resume compatible model context from a prior capture",
     "  --resume-fallback-prompt <text>  Prompt used when prior state is unavailable",
     "  --resume-fallback-prompt-file <p> Read that fallback prompt from a UTF-8 file",
-    "  --event-stream         Write prefixed live JSON events to stdout",
-    "  --control-stream       Read host control JSONL from stdin",
     "  --websocket-transport  Host an authenticated loopback WebSocket for live events and controls",
     "  --workspace-root <p>   Workspace root for durable runtime memory",
     "  --json                 Print the initialized run as JSON",

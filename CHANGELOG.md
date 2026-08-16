@@ -27,7 +27,7 @@
 ### Changed
 
 - Centralized provider small-model defaults, profile job applicability, plugin validation, repository checkout behavior, and retained maintenance policy in Honeycrisp so clients no longer duplicate those semantics.
-- WebSocket transport now takes precedence over the legacy stdout event and stdin control streams when both are requested, allowing Beale and future clients to share one Honeycrisp-owned protocol.
+- The authenticated WebSocket session transport is now the sole live event and control boundary for Beale and future clients.
 - `shell.run` now accepts complete platform shell commands as well as direct executable-plus-argv calls, permits executable paths, and preserves host HOME-family environment variables while retaining shell authorization and credential-variable filtering.
 - Repository search can now target any readable absolute host directory, not only configured workspace repository hints. Security Research 1.5.0 introduced bounded repository search and file reads alongside shell access by default.
 - Adaptive collaboration is now explicitly optional and evidence-driven: agents stay solo for sequential work, delegate only when expected evidence gain justifies coordination cost, reuse relevant subagents, and treat discovery parallelism as an opportunity rather than a requirement.

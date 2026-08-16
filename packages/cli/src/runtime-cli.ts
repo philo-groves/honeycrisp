@@ -123,7 +123,6 @@ import type {
 } from "@honeycrisp/research-agent";
 
 const VERSION = "0.1.0";
-const LIVE_EVENT_PREFIX = "HONEYCRISP_EVENT ";
 const PROFILE_CATALOG_PROTOCOL_VERSION = 1 as const;
 const MAX_MEMORY_ATTRIBUTES_JSON_CHARACTERS = 64_000;
 const MAX_MEMORY_EVIDENCE_JSON_CHARACTERS = 64_000;
@@ -249,8 +248,6 @@ interface ParsedArgs {
   resumeCapturePath: string | undefined;
   resumeFallbackPrompt: string | undefined;
   resumeFallbackPromptPath: string | undefined;
-  eventStream: boolean;
-  controlStream: boolean;
   websocketTransport: boolean;
   workspaceRoot: string;
   json: boolean;
@@ -360,8 +357,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let resumeCapturePath: string | undefined;
   let resumeFallbackPrompt: string | undefined;
   let resumeFallbackPromptPath: string | undefined;
-  let eventStream = false;
-  let controlStream = false;
   let websocketTransport = false;
   let workspaceRoot = process.cwd();
   const toolFamilies: ToolFamily[] = [];
@@ -620,10 +615,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--resume-fallback-prompt-file") {
       resumeFallbackPromptPath = readOptionValue(argv, index, arg);
       index += 1;
-    } else if (arg === "--event-stream") {
-      eventStream = true;
-    } else if (arg === "--control-stream") {
-      controlStream = true;
     } else if (arg === "--websocket-transport") {
       websocketTransport = true;
     } else if (arg === "--workspace-root") {
@@ -721,8 +712,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     resumeCapturePath,
     resumeFallbackPrompt,
     resumeFallbackPromptPath,
-    eventStream,
-    controlStream,
     websocketTransport,
     workspaceRoot,
     json,
@@ -1506,8 +1495,6 @@ function usage(): string {
     "  --resume-capture <p>  Resume compatible model context from a prior capture",
     "  --resume-fallback-prompt <text>  Prompt used when prior state is unavailable",
     "  --resume-fallback-prompt-file <p> Read that fallback prompt from a UTF-8 file",
-    "  --event-stream         Write prefixed live JSON events to stdout",
-    "  --control-stream       Read host control JSONL from stdin",
     "  --websocket-transport  Host an authenticated loopback WebSocket for live events and controls",
     "  --workspace-root <p>   Workspace root for durable runtime memory",
     "  --json                 Print the initialized run as JSON",
@@ -1841,8 +1828,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       }
     }
 
-    const transportEventSink = webSocketTransport?.eventSink
-      ?? (args.eventStream ? createCliLiveEventSink() : undefined);
+    const transportEventSink = webSocketTransport?.eventSink;
     const sessionStore = args.sessionId && args.attemptId
       ? new HoneycrispSessionStore()
       : undefined;
@@ -1853,9 +1839,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     const liveEventSink = sessionStore && args.sessionId
       ? createPersistedSessionEventSink(sessionStore, args.sessionId, transportEventSink)
       : transportEventSink;
-    const controlInput = webSocketTransport?.controlInput ?? input;
-    const controlStream = webSocketTransport || args.controlStream
-      ? new HoneycrispControlStream(controlInput, (event) => {
+    const controlStream = webSocketTransport
+      ? new HoneycrispControlStream(webSocketTransport.controlInput, (event) => {
           void liveEventSink?.({
             schemaVersion: 1,
             kind: "agent.event",
@@ -2024,7 +2009,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
           });
         }
         if (!args.json) {
-          if (!args.eventStream && !args.websocketTransport) console.log(`Flow capture: ${writtenCapture.path}`);
+          if (!args.websocketTransport) console.log(`Flow capture: ${writtenCapture.path}`);
         }
       }
 
@@ -2033,7 +2018,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         return;
       }
 
-      if (!args.eventStream && !args.websocketTransport) console.log(result.response);
+      if (!args.websocketTransport) console.log(result.response);
     } finally {
       controlStream?.close();
       await webSocketTransport?.close();
@@ -2385,15 +2370,6 @@ function createModelConfigCapture(
     ...(modelConfig.effort ? { effort: modelConfig.effort } : {}),
     source: modelConfig.source,
     ...(modelConfig.configPath ? { configPath: modelConfig.configPath } : {}),
-  };
-}
-
-function createCliLiveEventSink(): ResearchLiveEventSink {
-  let pendingWrite = Promise.resolve();
-  return (event) => {
-    const line = `${LIVE_EVENT_PREFIX}${JSON.stringify(event)}\n`;
-    pendingWrite = pendingWrite.then(() => writeOutputWithBackpressure(line));
-    return pendingWrite;
   };
 }
 
