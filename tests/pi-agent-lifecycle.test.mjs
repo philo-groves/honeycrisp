@@ -1178,6 +1178,32 @@ test("Pi Agent retries an unexpected server error immediately in the same sessio
   )?.payload.delayMs, 0);
 });
 
+test("Pi Agent retries a provider WebSocket failure immediately in the same session", async () => {
+  const contexts = [];
+  const liveEvents = [];
+  const result = await runResearchAgent({
+    prompt: "Continue after a provider WebSocket disconnect.",
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistantError("WebSocket error"),
+        assistant("## Result\nRecovered after reconnecting the model stream."),
+      ], contexts),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.match(result.agentRun.output.text, /Recovered after reconnecting/);
+  assert.equal(contexts.length, 2);
+  assert.equal(liveEvents.find((event) =>
+    event.kind === "agent.event" && event.payload.type === "model_retry"
+  )?.payload.delayMs, 0);
+});
+
 test("Pi Agent treats an authorized safety guardrail as a likely false positive and steers the same session", async () => {
   const contexts = [];
   const liveEvents = [];

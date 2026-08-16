@@ -1618,6 +1618,9 @@ function isSafetyGuardrailAssistantError(message: AssistantMessage): boolean {
 function isRecoverableAssistantError(message: AssistantMessage): boolean {
   const normalized = message.errorMessage?.toLowerCase() ?? "";
   return isRetryableAssistantError(message)
+    || normalized.includes("websocket error")
+    || normalized.includes("websocket connection")
+    || normalized.includes("websocket closed")
     || normalized.includes("unexpected server error")
     || normalized.includes("internal server error")
     || normalized.includes("server_error")

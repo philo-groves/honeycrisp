@@ -70,6 +70,7 @@
 
 ### Fixed
 
+- Retried transient provider WebSocket disconnects in the active research turn instead of failing the entire session after an otherwise successful shell-approval pause.
 - Added compact session-list summaries that omit event timelines, capture payloads, and final responses, preventing routine client refreshes from overflowing child-process protocol buffers as session history grows.
 - Added atomic startup recovery for Honeycrisp-owned active sessions, marking their active attempts paused with explicit interruption metadata and a canonical recovery event so restarted clients cannot rediscover stale active state.
 - Session `get` and `list` now use read-only SQLite connections after one-time schema initialization, while session writers wait through brief lock contention, preventing active-run event persistence from blocking client queries or surfacing transient `database is locked` failures.
