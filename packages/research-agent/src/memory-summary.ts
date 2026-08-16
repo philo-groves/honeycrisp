@@ -76,6 +76,7 @@ export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptio
   let database: DatabaseSync | null = null;
   try {
     database = new DatabaseSync(databasePath, { readOnly: true });
+    database.exec('PRAGMA busy_timeout = 5000;');
     const hasNodes = tableExists(database, 'memory_nodes');
     const nodes = hasNodes
       ? readNodes(

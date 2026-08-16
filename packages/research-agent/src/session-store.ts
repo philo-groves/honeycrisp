@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
@@ -83,6 +83,15 @@ export interface HoneycrispSessionRecord {
   revision: number;
 }
 
+export type HoneycrispSessionAttemptSummary = Omit<HoneycrispSessionAttempt, "capture">;
+
+export type HoneycrispSessionSummary = Omit<
+  HoneycrispSessionRecord,
+  "attempts" | "events" | "finalResponse"
+> & {
+  attempts: HoneycrispSessionAttemptSummary[];
+};
+
 export interface CreateHoneycrispSessionInput {
   id: string;
   workspaceId: string;
@@ -109,6 +118,20 @@ export interface HoneycrispSessionTransitionInput {
   at?: string;
 }
 
+export interface RecoverInterruptedHoneycrispSessionsInput {
+  reason?: string;
+  at?: string;
+}
+
+export interface HoneycrispSessionRecoveryReport {
+  workspaceId: string;
+  recoveredAt: string;
+  reason: string;
+  interruptedSessions: number;
+  interruptedAttempts: number;
+  sessionIds: string[];
+}
+
 export interface ImportHoneycrispSessionCaptureInput {
   attemptId: string;
   capture: unknown;
@@ -127,6 +150,7 @@ export interface BeginHoneycrispSessionAttemptInput {
 export interface HoneycrispSessionStoreOptions {
   databasePath?: string;
   workspaceRoot?: string;
+  readOnly?: boolean;
 }
 
 export class HoneycrispSessionStore {
@@ -137,11 +161,28 @@ export class HoneycrispSessionStore {
     this.databasePath = options.databasePath
       ?? process.env.HONEYCRISP_DATABASE_PATH?.trim()
       ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
+    const readOnly = options.readOnly === true
+      && this.databasePath !== ":memory:"
+      && existsSync(this.databasePath);
+    if (readOnly) {
+      const readDatabase = new DatabaseSync(this.databasePath, { readOnly: true });
+      readDatabase.exec("PRAGMA busy_timeout = 5000;");
+      readDatabase.exec("PRAGMA foreign_keys = ON;");
+      const schema = readDatabase.prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_sessions'",
+      ).get() as { present?: unknown } | undefined;
+      if (schema?.present === 1) {
+        this.database = readDatabase;
+        return;
+      }
+      readDatabase.close();
+    }
     mkdirSync(dirname(this.databasePath), { recursive: true });
     this.database = new DatabaseSync(this.databasePath);
     if (this.databasePath !== ":memory:") chmodSync(this.databasePath, 0o600);
-    this.database.exec("PRAGMA journal_mode = WAL;");
+    this.database.exec("PRAGMA busy_timeout = 5000;");
     this.database.exec("PRAGMA foreign_keys = ON;");
+    this.database.exec("PRAGMA journal_mode = WAL;");
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS honeycrisp_sessions (
         id TEXT PRIMARY KEY,
@@ -232,6 +273,123 @@ export class HoneycrispSessionStore {
       LIMIT ?
     `).all(requiredString(workspaceId, "Workspace id"), boundedLimit) as Array<{ document_json?: unknown }>;
     return rows.map((row) => decodeStoredSession(row.document_json));
+  }
+
+  public listSummaries(workspaceId: string, limit = 100): HoneycrispSessionSummary[] {
+    return this.list(workspaceId, limit).map((session) => ({
+      schemaVersion: session.schemaVersion,
+      id: session.id,
+      workspaceId: session.workspaceId,
+      status: session.status,
+      title: session.title,
+      prompt: session.prompt,
+      summary: session.summary,
+      provider: session.provider,
+      model: session.model,
+      reasoningEffort: session.reasoningEffort,
+      workflowId: session.workflowId,
+      profile: session.profile,
+      metadata: session.metadata,
+      finalDisposition: session.finalDisposition,
+      attempts: session.attempts.map(({ capture: _capture, ...attempt }) => attempt),
+      createdAt: session.createdAt,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt,
+      updatedAt: session.updatedAt,
+      revision: session.revision,
+    }));
+  }
+
+  public recoverInterrupted(
+    workspaceId: string,
+    input: RecoverInterruptedHoneycrispSessionsInput = {},
+  ): HoneycrispSessionRecoveryReport {
+    const normalizedWorkspaceId = requiredString(workspaceId, "Workspace id");
+    const recoveredAt = input.at ?? new Date().toISOString();
+    const reason = optionalString(input.reason) ?? "workspace_open";
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const rows = this.database.prepare(`
+        SELECT document_json FROM honeycrisp_sessions
+        WHERE workspace_id = ? AND status = 'active'
+        ORDER BY updated_at ASC, id ASC
+      `).all(normalizedWorkspaceId) as Array<{ document_json?: unknown }>;
+      const sessions = rows.map((row) => decodeStoredSession(row.document_json));
+      let interruptedAttempts = 0;
+      for (const session of sessions) {
+        const recoveredAttemptIds: string[] = [];
+        for (const attempt of session.attempts) {
+          if (attempt.status !== "active") continue;
+          attempt.status = "paused";
+          attempt.summary = "Paused after the Honeycrisp process was interrupted.";
+          attempt.endedAt = null;
+          attempt.metadata = {
+            ...attempt.metadata,
+            interruptedByRecovery: true,
+            recoveryReason: reason,
+            recoveredAt,
+          };
+          recoveredAttemptIds.push(attempt.id);
+          interruptedAttempts += 1;
+        }
+        session.status = "paused";
+        session.summary = "Paused after the Honeycrisp process was interrupted.";
+        session.endedAt = null;
+        session.metadata = {
+          ...session.metadata,
+          interruptedByRecovery: true,
+          recoveryReason: reason,
+          recoveredAt,
+          previousStatus: "active",
+          recoveredAttemptIds,
+        };
+        session.events.push({
+          id: `session_recovery_${randomUUID()}`,
+          kind: "session.recovery",
+          timestamp: recoveredAt,
+          summary: "Workspace recovery paused an interrupted Honeycrisp session.",
+          payload: {
+            interruptedByRecovery: true,
+            previousStatus: "active",
+            recoveredAt,
+            reason,
+            attemptId: recoveredAttemptIds.at(-1) ?? null,
+            recoveredAttemptIds,
+          },
+          agentPath: "/root",
+        });
+        session.revision += 1;
+        session.updatedAt = recoveredAt;
+        const result = this.database.prepare(`
+          UPDATE honeycrisp_sessions
+          SET status = ?, summary = ?, document_json = ?, revision = ?, updated_at = ?
+          WHERE id = ? AND revision = ? AND status = 'active'
+        `).run(
+          session.status,
+          session.summary,
+          JSON.stringify(session),
+          session.revision,
+          session.updatedAt,
+          session.id,
+          session.revision - 1,
+        );
+        if (Number(result.changes) !== 1) {
+          throw new Error(`Session revision conflict while recovering ${session.id}.`);
+        }
+      }
+      this.database.exec("COMMIT;");
+      return {
+        workspaceId: normalizedWorkspaceId,
+        recoveredAt,
+        reason,
+        interruptedSessions: sessions.length,
+        interruptedAttempts,
+        sessionIds: sessions.map((session) => session.id),
+      };
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
   }
 
   public beginAttempt(sessionId: string, input: BeginHoneycrispSessionAttemptInput): HoneycrispSessionRecord {

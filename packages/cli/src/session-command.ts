@@ -27,7 +27,7 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
 
   let store: HoneycrispSessionStore | undefined;
   try {
-    store = new HoneycrispSessionStore();
+    store = new HoneycrispSessionStore({ readOnly: command === "get" || command === "list" || command === "list-summaries" });
     const sessionId = option(argv, "--session-id");
     let result: unknown;
     switch (command) {
@@ -43,6 +43,12 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
       case "transition":
         result = store.transition(requiredOption(sessionId, "--session-id"), await readJsonOption<HoneycrispSessionTransitionInput>(argv, "--input"));
         break;
+      case "recover-interrupted":
+        result = store.recoverInterrupted(
+          requiredOption(option(argv, "--workspace-id"), "--workspace-id"),
+          await readOptionalJsonOption(argv, "--input"),
+        );
+        break;
       case "import-capture": {
         const attemptId = requiredOption(option(argv, "--attempt-id"), "--attempt-id");
         const capture = await readJsonFile(requiredOption(option(argv, "--capture"), "--capture"));
@@ -55,6 +61,12 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
         break;
       case "list":
         result = store.list(
+          requiredOption(option(argv, "--workspace-id"), "--workspace-id"),
+          positiveIntegerOption(argv, "--limit") ?? 100,
+        );
+        break;
+      case "list-summaries":
+        result = store.listSummaries(
           requiredOption(option(argv, "--workspace-id"), "--workspace-id"),
           positiveIntegerOption(argv, "--limit") ?? 100,
         );
@@ -76,9 +88,11 @@ function operationForCommand(command: string): HoneycrispProtocolOperation | nul
     case "begin-attempt": return "session.begin_attempt";
     case "append-event": return "session.append_event";
     case "transition": return "session.transition";
+    case "recover-interrupted": return "session.recover_interrupted";
     case "import-capture": return "session.import_capture";
     case "get": return "session.get";
     case "list": return "session.list";
+    case "list-summaries": return "session.list_summaries";
     default: return null;
   }
 }
@@ -90,6 +104,11 @@ function emitFailure(operation: HoneycrispProtocolOperation, code: string, messa
 
 async function readJsonOption<T>(argv: readonly string[], name: string): Promise<T> {
   return await readJsonFile(requiredOption(option(argv, name), name)) as T;
+}
+
+async function readOptionalJsonOption<T>(argv: readonly string[], name: string): Promise<T | undefined> {
+  const path = option(argv, name);
+  return path ? await readJsonFile(path) as T : undefined;
 }
 
 async function readJsonFile(path: string): Promise<unknown> {
@@ -125,8 +144,10 @@ function sessionUsage(): string {
     "  honeycrisp session begin-attempt --session-id <id> --input <json> --json",
     "  honeycrisp session append-event --session-id <id> --input <json> --json",
     "  honeycrisp session transition --session-id <id> --input <json> --json",
+    "  honeycrisp session recover-interrupted --workspace-id <id> [--input <json>] --json",
     "  honeycrisp session import-capture --session-id <id> --attempt-id <id> --capture <json> --json",
     "  honeycrisp session get --session-id <id> --json",
     "  honeycrisp session list --workspace-id <id> [--limit <n>] --json",
+    "  honeycrisp session list-summaries --workspace-id <id> [--limit <n>] --json",
   ].join("\n");
 }

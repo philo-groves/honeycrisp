@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -55,6 +57,92 @@ test("session store owns creation, lifecycle, capture import, and queries as one
   }
 });
 
+test("session recovery atomically pauses interrupted workspace sessions and their active attempts", () => {
+  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  try {
+    store.create({
+      id: "session_interrupted",
+      workspaceId: "workspace_recovery",
+      attemptId: "attempt_interrupted",
+      title: "Interrupted session",
+      prompt: "Inspect recovery.",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    store.create({
+      id: "session_other_workspace",
+      workspaceId: "workspace_other",
+      attemptId: "attempt_other_workspace",
+      title: "Other workspace",
+      prompt: "Remain active.",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+
+    const report = store.recoverInterrupted("workspace_recovery", {
+      reason: "app_restart",
+      at: "2026-08-16T12:00:00.000Z",
+    });
+
+    assert.deepEqual(report, {
+      workspaceId: "workspace_recovery",
+      recoveredAt: "2026-08-16T12:00:00.000Z",
+      reason: "app_restart",
+      interruptedSessions: 1,
+      interruptedAttempts: 1,
+      sessionIds: ["session_interrupted"],
+    });
+    const recovered = store.get("session_interrupted");
+    assert.equal(recovered?.status, "paused");
+    assert.equal(recovered?.attempts[0]?.status, "paused");
+    assert.equal(recovered?.endedAt, null);
+    assert.equal(recovered?.metadata.interruptedByRecovery, true);
+    assert.equal(recovered?.metadata.recoveredAt, "2026-08-16T12:00:00.000Z");
+    assert.equal(recovered?.events.at(-1)?.kind, "session.recovery");
+    assert.equal(recovered?.events.at(-1)?.payload.interruptedByRecovery, true);
+    assert.equal(store.get("session_other_workspace")?.status, "active");
+    assert.equal(store.recoverInterrupted("workspace_recovery").interruptedSessions, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test("session summary lists stay bounded when canonical sessions contain large event histories", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-summary-"));
+  const databasePath = join(directory, "memory.sqlite");
+  const store = new HoneycrispSessionStore({ databasePath });
+  try {
+    store.create({
+      id: "session_large_history",
+      workspaceId: "workspace_summary",
+      attemptId: "attempt_large_history",
+      title: "Large history",
+      prompt: "Keep list DTOs bounded.",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    store.appendEvent("session_large_history", {
+      id: "event_large_history",
+      kind: "agent.event",
+      timestamp: "2026-08-16T12:00:00.000Z",
+      summary: "Large event",
+      payload: { output: "x".repeat(2 * 1024 * 1024) },
+    });
+  } finally {
+    store.close();
+  }
+
+  const listed = runCli(
+    ["session", "list-summaries", "--workspace-id", "workspace_summary", "--json"],
+    { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+  );
+  assert.equal(listed.operation, "session.list_summaries");
+  assert.equal(listed.result[0].id, "session_large_history");
+  assert.equal(Object.hasOwn(listed.result[0], "events"), false);
+  assert.equal(Object.hasOwn(listed.result[0], "finalResponse"), false);
+  assert.equal(Object.hasOwn(listed.result[0].attempts[0], "capture"), false);
+});
+
 test("versioned session CLI imports captures and serves the canonical query", async () => {
   const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-protocol-"));
   const databasePath = join(directory, "memory.sqlite");
@@ -86,6 +174,78 @@ test("versioned session CLI imports captures and serves the canonical query", as
   const queried = runCli(["session", "get", "--session-id", "session_cli", "--json"], env);
   assert.equal(queried.result.status, "completed");
   assert.equal(queried.result.finalResponse, "The parser is safe.");
+});
+
+test("session CLI reads remain available while the runtime holds a write transaction", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-read-lock-"));
+  const databasePath = join(directory, "memory.sqlite");
+  const store = new HoneycrispSessionStore({ databasePath });
+  store.create({
+    id: "session_read_lock",
+    workspaceId: "workspace_lock",
+    attemptId: "attempt_read_lock",
+    title: "Readable session",
+    prompt: "Read while writing.",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+  });
+  store.close();
+
+  const writer = new DatabaseSync(databasePath);
+  writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
+  writer.prepare("UPDATE honeycrisp_sessions SET summary = summary WHERE id = ?").run("session_read_lock");
+  try {
+    const queried = runCli(
+      ["session", "get", "--session-id", "session_read_lock", "--json"],
+      { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+    );
+    assert.equal(queried.ok, true);
+    assert.equal(queried.result.id, "session_read_lock");
+  } finally {
+    writer.exec("ROLLBACK;");
+    writer.close();
+  }
+});
+
+test("session CLI writers wait for a short competing writer instead of returning database locked", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-write-lock-"));
+  const databasePath = join(directory, "memory.sqlite");
+  const inputPath = join(directory, "event.json");
+  const store = new HoneycrispSessionStore({ databasePath });
+  store.create({
+    id: "session_write_lock",
+    workspaceId: "workspace_lock",
+    attemptId: "attempt_write_lock",
+    title: "Writable session",
+    prompt: "Wait for the writer.",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+  });
+  store.close();
+  await writeFile(inputPath, JSON.stringify({
+    id: "event_after_lock",
+    kind: "agent.event",
+    timestamp: "2026-08-16T12:00:00.000Z",
+    summary: "Writer resumed.",
+    payload: { eventType: "resumed" },
+  }));
+
+  const lockHolder = spawn(process.execPath, [
+    "-e",
+    "const { DatabaseSync } = require('node:sqlite'); const database = new DatabaseSync(process.argv[1]); database.exec('PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;'); process.stdout.write('locked\\n'); setTimeout(() => { database.exec('ROLLBACK;'); database.close(); }, 250);",
+    databasePath,
+  ], { stdio: ["ignore", "pipe", "inherit"] });
+  const lockClosed = once(lockHolder, "close");
+  await once(lockHolder.stdout, "data");
+  const appended = runCli([
+    "session", "append-event",
+    "--session-id", "session_write_lock",
+    "--input", inputPath,
+    "--json",
+  ], { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath });
+  assert.equal(appended.ok, true);
+  assert.equal(appended.result.events.at(-1).id, "event_after_lock");
+  await lockClosed;
 });
 
 function runCli(args, env) {

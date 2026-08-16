@@ -66,6 +66,9 @@
 
 ### Fixed
 
+- Added compact session-list summaries that omit event timelines, capture payloads, and final responses, preventing routine client refreshes from overflowing child-process protocol buffers as session history grows.
+- Added atomic startup recovery for Honeycrisp-owned active sessions, marking their active attempts paused with explicit interruption metadata and a canonical recovery event so restarted clients cannot rediscover stale active state.
+- Session `get` and `list` now use read-only SQLite connections after one-time schema initialization, while session writers wait through brief lock contention, preventing active-run event persistence from blocking client queries or surfacing transient `database is locked` failures.
 - ZCode subscription readiness now recognizes the official desktop app's shared OAuth credential without requiring the unrelated CLI config file.
 - Subscription-preferred model routes now mask ambient provider API keys until an explicit usage-limit fallback, preventing xAI subscription sessions, title generation, and shell review from silently using API-key billing when OAuth credentials are unavailable.
 - Made live model deltas incremental instead of repeating accumulated text, and serialized CLI event-stream writes with stdout backpressure.
