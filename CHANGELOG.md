@@ -26,6 +26,7 @@
 
 ### Changed
 
+- Consolidated CLI envelopes, WebSocket messages, transport constants, factories, and validators in `honeycrisp/protocol`; CLI operations now echo client request IDs, WebSocket protocol errors use the shared error detail DTO, and the legacy WebSocket export path remains an alias for protocol v1 compatibility.
 - Centralized provider small-model defaults, profile job applicability, plugin validation, repository checkout behavior, and retained maintenance policy in Honeycrisp so clients no longer duplicate those semantics.
 - The authenticated WebSocket session transport is now the sole live event and control boundary for Beale and future clients.
 - `shell.run` now accepts complete platform shell commands as well as direct executable-plus-argv calls, permits executable paths, and preserves host HOME-family environment variables while retaining shell authorization and credential-variable filtering.

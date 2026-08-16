@@ -37,11 +37,11 @@ interface DreamingApplyInput {
   profileInput: MemoryDreamingProfileInput;
 }
 
-export async function runKnowledgeCommand(argv: readonly string[]): Promise<void> {
+export async function runKnowledgeCommand(argv: readonly string[], requestId?: string): Promise<void> {
   const command = argv[0];
   const operation = operationForCommand(command);
   if (!operation) {
-    emitFailure("memory.summary", "unknown_operation", `Unknown knowledge command: ${command ?? ""}`);
+    emitFailure("memory.summary", "unknown_operation", `Unknown knowledge command: ${command ?? ""}`, requestId);
     return;
   }
   try {
@@ -116,9 +116,9 @@ export async function runKnowledgeCommand(argv: readonly string[]): Promise<void
       default:
         throw new Error(`Unsupported knowledge command: ${command}`);
     }
-    console.log(JSON.stringify(honeycrispProtocolSuccess(operation, result)));
+    console.log(JSON.stringify(honeycrispProtocolSuccess(operation, result, requestId)));
   } catch (error) {
-    emitFailure(operation, "knowledge_operation_failed", errorMessage(error));
+    emitFailure(operation, "knowledge_operation_failed", errorMessage(error), requestId);
   }
 }
 
@@ -149,8 +149,8 @@ function requiredText(value: string, name: string): string {
   return value.trim();
 }
 
-function emitFailure(operation: HoneycrispProtocolOperation, code: string, message: string): void {
-  console.log(JSON.stringify(honeycrispProtocolFailure(operation, code, message)));
+function emitFailure(operation: HoneycrispProtocolOperation, code: string, message: string, requestId?: string): void {
+  console.log(JSON.stringify(honeycrispProtocolFailure(operation, code, message, false, requestId)));
   process.exitCode = 1;
 }
 

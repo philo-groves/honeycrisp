@@ -6,8 +6,8 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { HoneycrispControlStream } from "./control-stream.js";
 import {
-  HONEYCRISP_TRANSPORT_PREFIX,
-} from "./websocket-protocol.js";
+  HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX,
+} from "./protocol.js";
 import { HoneycrispWebSocketTransport } from "./websocket-transport.js";
 import {
   runResearchAgent,
@@ -1819,7 +1819,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     if (webSocketTransport) {
       try {
         await writeOutputWithBackpressure(
-          `${HONEYCRISP_TRANSPORT_PREFIX}${JSON.stringify(webSocketTransport.bootstrap)}\n`,
+          `${HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX}${JSON.stringify(webSocketTransport.bootstrap)}\n`,
         );
         await webSocketTransport.waitForClient();
       } catch (error) {

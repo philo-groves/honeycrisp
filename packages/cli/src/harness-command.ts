@@ -21,11 +21,11 @@ import {
   type HoneycrispProtocolOperation,
 } from "./protocol.js";
 
-export async function runHarnessCommand(argv: readonly string[]): Promise<void> {
+export async function runHarnessCommand(argv: readonly string[], requestId?: string): Promise<void> {
   const command = argv[0];
   const operation = operationForCommand(command);
   if (!operation) {
-    emitFailure("source.inspect", "unknown_operation", `Unknown harness command: ${command ?? ""}`);
+    emitFailure("source.inspect", "unknown_operation", `Unknown harness command: ${command ?? ""}`, requestId);
     return;
   }
   try {
@@ -100,9 +100,9 @@ export async function runHarnessCommand(argv: readonly string[]): Promise<void> 
       default:
         throw new Error(`Unsupported harness command: ${command}`);
     }
-    console.log(JSON.stringify(honeycrispProtocolSuccess(operation, result)));
+    console.log(JSON.stringify(honeycrispProtocolSuccess(operation, result, requestId)));
   } catch (error) {
-    emitFailure(operation, "harness_operation_failed", errorMessage(error));
+    emitFailure(operation, "harness_operation_failed", errorMessage(error), requestId);
   }
 }
 
@@ -157,8 +157,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function emitFailure(operation: HoneycrispProtocolOperation, code: string, message: string): void {
-  console.log(JSON.stringify(honeycrispProtocolFailure(operation, code, message)));
+function emitFailure(operation: HoneycrispProtocolOperation, code: string, message: string, requestId?: string): void {
+  console.log(JSON.stringify(honeycrispProtocolFailure(operation, code, message, false, requestId)));
   process.exitCode = 1;
 }
 

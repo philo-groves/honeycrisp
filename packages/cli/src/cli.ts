@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 import { usage } from "./cli-usage.js";
+import { parseHoneycrispProtocolArguments } from "./protocol.js";
 
 const VERSION = "0.1.0";
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   try {
+    const protocolArguments = isProtocolCommand(argv[0])
+      ? parseHoneycrispProtocolArguments(argv)
+      : { args: argv };
+    argv = protocolArguments.args;
     if (argv[0] === "-h" || argv[0] === "--help") {
       console.log(usage());
       return;
@@ -29,27 +34,27 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     if (argv[0] === "complete") {
       const { runCompleteCommand } = await import("./complete-command.js");
-      await runCompleteCommand(argv.slice(1));
+      await runCompleteCommand(argv.slice(1), protocolArguments.requestId);
       return;
     }
     if (argv[0] === "protocol") {
       const { runProtocolCommand } = await import("./protocol-command.js");
-      await runProtocolCommand(argv.slice(1));
+      await runProtocolCommand(argv.slice(1), protocolArguments.requestId);
       return;
     }
     if (argv[0] === "session") {
       const { runSessionCommand } = await import("./session-command.js");
-      await runSessionCommand(argv.slice(1));
+      await runSessionCommand(argv.slice(1), protocolArguments.requestId);
       return;
     }
     if (argv[0] === "knowledge") {
       const { runKnowledgeCommand } = await import("./knowledge-command.js");
-      await runKnowledgeCommand(argv.slice(1));
+      await runKnowledgeCommand(argv.slice(1), protocolArguments.requestId);
       return;
     }
     if (argv[0] === "harness") {
       const { runHarnessCommand } = await import("./harness-command.js");
-      await runHarnessCommand(argv.slice(1));
+      await runHarnessCommand(argv.slice(1), protocolArguments.requestId);
       return;
     }
     const { main: runRuntimeCli } = await import("./runtime-cli.js");
@@ -58,6 +63,14 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
+}
+
+function isProtocolCommand(command: string | undefined): boolean {
+  return command === "complete"
+    || command === "protocol"
+    || command === "session"
+    || command === "knowledge"
+    || command === "harness";
 }
 
 await main();

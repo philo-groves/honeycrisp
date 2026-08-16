@@ -13,7 +13,7 @@ import {
   type HoneycrispProtocolOperation,
 } from "./protocol.js";
 
-export async function runSessionCommand(argv: readonly string[]): Promise<void> {
+export async function runSessionCommand(argv: readonly string[], requestId?: string): Promise<void> {
   const command = argv[0];
   if (!command || command === "--help" || command === "-h") {
     console.log(sessionUsage());
@@ -21,7 +21,7 @@ export async function runSessionCommand(argv: readonly string[]): Promise<void> 
   }
   const operation = operationForCommand(command);
   if (!operation) {
-    emitFailure("session.get", "unknown_operation", `Unknown session command: ${command}`);
+    emitFailure("session.get", "unknown_operation", `Unknown session command: ${command}`, requestId);
     return;
   }
 
@@ -62,9 +62,9 @@ export async function runSessionCommand(argv: readonly string[]): Promise<void> 
       default:
         throw new Error(`Unsupported session command: ${command}`);
     }
-    console.log(JSON.stringify(honeycrispProtocolSuccess(operation, result)));
+    console.log(JSON.stringify(honeycrispProtocolSuccess(operation, result, requestId)));
   } catch (error) {
-    emitFailure(operation, "session_operation_failed", errorMessage(error));
+    emitFailure(operation, "session_operation_failed", errorMessage(error), requestId);
   } finally {
     store?.close();
   }
@@ -83,8 +83,8 @@ function operationForCommand(command: string): HoneycrispProtocolOperation | nul
   }
 }
 
-function emitFailure(operation: HoneycrispProtocolOperation, code: string, message: string): void {
-  console.log(JSON.stringify(honeycrispProtocolFailure(operation, code, message)));
+function emitFailure(operation: HoneycrispProtocolOperation, code: string, message: string, requestId?: string): void {
+  console.log(JSON.stringify(honeycrispProtocolFailure(operation, code, message, false, requestId)));
   process.exitCode = 1;
 }
 

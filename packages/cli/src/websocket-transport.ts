@@ -5,10 +5,17 @@ import type { Duplex } from "node:stream";
 import { PassThrough } from "node:stream";
 import type { ResearchLiveEventSink } from "@honeycrisp/research-agent";
 import {
-  HONEYCRISP_TRANSPORT_PATH,
-  HONEYCRISP_TRANSPORT_PROTOCOL_VERSION,
+  HONEYCRISP_PROTOCOL_MAX_REQUEST_ID_LENGTH,
+  HONEYCRISP_PROTOCOL_WEBSOCKET_PATH,
+  decodeHoneycrispClientMessage,
+  honeycrispServerHello,
+  honeycrispSessionEvent,
+  honeycrispTransportBootstrap,
+  honeycrispWebSocketProtocolError,
+  type HoneycrispClientMessage,
+  type HoneycrispServerMessage,
   type HoneycrispTransportBootstrap,
-} from "./websocket-protocol.js";
+} from "./protocol.js";
 
 const MAX_PAYLOAD_BYTES = 1_048_576;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
@@ -69,22 +76,18 @@ export class HoneycrispWebSocketTransport {
     private readonly webSocketServer: WebSocketServerInstance,
     port: number,
   ) {
-    this.bootstrap = {
-      protocolVersion: HONEYCRISP_TRANSPORT_PROTOCOL_VERSION,
-      transport: "websocket",
-      url: `ws://127.0.0.1:${port}${HONEYCRISP_TRANSPORT_PATH}`,
-      sessionId: options.sessionId,
-    };
+    this.bootstrap = honeycrispTransportBootstrap(
+      `ws://127.0.0.1:${port}${HONEYCRISP_PROTOCOL_WEBSOCKET_PATH}`,
+      options.sessionId,
+    );
     this.handshake = new Promise<void>((resolve, reject) => {
       this.handshakeResolve = resolve;
       this.handshakeReject = reject;
     });
-    this.eventSink = (event) => this.send({
-      protocolVersion: HONEYCRISP_TRANSPORT_PROTOCOL_VERSION,
-      type: "session.event",
-      sessionId: this.options.sessionId,
-      event,
-    });
+    this.eventSink = (event) => this.send(honeycrispSessionEvent(
+      this.options.sessionId,
+      event as unknown as Record<string, unknown>,
+    ));
     this.webSocketServer.on("connection", (connection) => this.acceptClient(connection));
   }
 
@@ -101,7 +104,7 @@ export class HoneycrispWebSocketTransport {
     });
     httpServer.on("upgrade", (request, socket, head) => {
       const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (requestUrl.pathname !== HONEYCRISP_TRANSPORT_PATH) {
+      if (requestUrl.pathname !== HONEYCRISP_PROTOCOL_WEBSOCKET_PATH) {
         rejectUpgrade(socket, 404, "Not Found");
         return;
       }
@@ -188,59 +191,59 @@ export class HoneycrispWebSocketTransport {
   }
 
   private handleMessage(connection: WebSocketConnection, data: unknown): void {
-    const message = parseMessage(data);
-    if (!message) {
-      this.protocolError(connection, "Message must be a JSON object with a type.");
+    let raw: unknown;
+    try {
+      raw = JSON.parse(messageText(data)) as unknown;
+    } catch {
+      this.protocolError(connection, "invalid_json", "Message must be valid JSON.");
       return;
     }
-    if (message.protocolVersion !== HONEYCRISP_TRANSPORT_PROTOCOL_VERSION
-      || message.sessionId !== this.options.sessionId) {
-      this.protocolError(connection, "Protocol version or session ID mismatch.");
+    let message: HoneycrispClientMessage;
+    try {
+      message = decodeHoneycrispClientMessage(raw);
+    } catch (error) {
+      this.protocolError(
+        connection,
+        "invalid_message",
+        error instanceof Error ? error.message : String(error),
+        requestIdFromUnknown(raw),
+      );
+      return;
+    }
+    if (message.sessionId !== this.options.sessionId) {
+      this.protocolError(connection, "session_mismatch", "Session ID mismatch.", requestIdFromMessage(message));
       return;
     }
     if (!this.ready) {
-      if (message.type !== "client.hello"
-        || !isRecord(message.client)
-        || typeof message.client.name !== "string"
-        || !message.client.name.trim()
-        || typeof message.client.version !== "string"
-        || !message.client.version.trim()) {
-        this.protocolError(connection, "The first message must be client.hello.");
+      if (message.type !== "client.hello") {
+        this.protocolError(connection, "handshake_required", "The first message must be client.hello.", requestIdFromMessage(message));
         return;
       }
       this.ready = true;
-      void this.send({
-        protocolVersion: HONEYCRISP_TRANSPORT_PROTOCOL_VERSION,
-        type: "server.hello",
-        sessionId: this.options.sessionId,
-        server: { name: "honeycrisp", version: this.options.serverVersion },
-        capabilities: ["session.events", "session.controls"],
-      }).then(() => this.handshakeResolve?.(), (error: Error) => this.handshakeReject?.(error));
+      void this.send(honeycrispServerHello(this.options.sessionId, this.options.serverVersion))
+        .then(() => this.handshakeResolve?.(), (error: Error) => this.handshakeReject?.(error));
       return;
     }
-    if (message.type !== "session.control" || !isRecord(message.control)) {
-      this.protocolError(connection, "Expected a session.control message.");
-      return;
-    }
-    const controlRequestId = message.control.requestId;
-    if (typeof message.requestId !== "string" || controlRequestId !== message.requestId) {
-      this.protocolError(connection, "Control request IDs must match.");
+    if (message.type !== "session.control") {
+      this.protocolError(connection, "unexpected_message", "Expected a session.control message.");
       return;
     }
     this.controlInput.write(`${JSON.stringify(message.control)}\n`, "utf8");
   }
 
-  private protocolError(connection: WebSocketConnection, message: string): void {
-    connection.send(JSON.stringify({
-      protocolVersion: HONEYCRISP_TRANSPORT_PROTOCOL_VERSION,
-      type: "protocol.error",
-      sessionId: this.options.sessionId,
-      message,
-    }));
+  private protocolError(
+    connection: WebSocketConnection,
+    code: string,
+    message: string,
+    requestId?: string,
+  ): void {
+    connection.send(JSON.stringify(
+      honeycrispWebSocketProtocolError(this.options.sessionId, code, message, requestId),
+    ));
     connection.close(1002, "protocol error");
   }
 
-  private send(message: Record<string, unknown>): Promise<void> {
+  private send(message: HoneycrispServerMessage): Promise<void> {
     const client = this.client;
     if (!client || client.readyState !== 1) {
       return Promise.reject(new Error("Honeycrisp WebSocket client is unavailable."));
@@ -262,15 +265,6 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
   socket.end(`HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
-function parseMessage(data: unknown): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(messageText(data)) as unknown;
-    return isRecord(parsed) && typeof parsed.type === "string" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 function messageText(data: unknown): string {
   if (typeof data === "string") return data;
   if (Buffer.isBuffer(data)) return data.toString("utf8");
@@ -281,8 +275,18 @@ function messageText(data: unknown): string {
   throw new Error("Unsupported WebSocket message payload.");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function requestIdFromMessage(message: HoneycrispClientMessage): string | undefined {
+  return message.type === "session.control" ? message.requestId : undefined;
+}
+
+function requestIdFromUnknown(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const requestId = (value as Record<string, unknown>).requestId;
+  return typeof requestId === "string"
+    && requestId.trim()
+    && requestId.length <= HONEYCRISP_PROTOCOL_MAX_REQUEST_ID_LENGTH
+    ? requestId
+    : undefined;
 }
 
 function closeHttpServer(server: HttpServer): Promise<void> {

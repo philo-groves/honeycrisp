@@ -6,8 +6,8 @@ import { afterEach, test } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  HONEYCRISP_TRANSPORT_PROTOCOL_VERSION,
-} from "../packages/cli/dist/websocket-protocol.js";
+  HONEYCRISP_PROTOCOL_VERSION,
+} from "../packages/cli/dist/protocol.js";
 import { HoneycrispWebSocketTransport } from "../packages/cli/dist/websocket-transport.js";
 
 const requireFromCli = createRequire(new URL("../packages/cli/package.json", import.meta.url));
@@ -40,7 +40,7 @@ test("WebSocket transport authenticates and exchanges versioned session messages
 
   const hello = nextMessage(socket);
   socket.send(JSON.stringify({
-    protocolVersion: HONEYCRISP_TRANSPORT_PROTOCOL_VERSION,
+    protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
     type: "client.hello",
     sessionId: "session-1",
     client: { name: "test", version: "1" },
@@ -84,6 +84,48 @@ test("WebSocket transport authenticates and exchanges versioned session messages
       timestamp: "2026-08-15T00:00:00.000Z",
       payload: { eventType: "started" },
     },
+  });
+});
+
+test("WebSocket protocol errors use the shared error DTO and preserve request correlation", async () => {
+  const transport = await HoneycrispWebSocketTransport.listen({
+    sessionId: "session-errors",
+    token: "test-token",
+    serverVersion: "test",
+  });
+  transports.push(transport);
+  const socket = new WebSocket(transport.bootstrap.url, {
+    headers: { authorization: "Bearer test-token" },
+  });
+  await new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  const hello = nextMessage(socket);
+  socket.send(JSON.stringify({
+    protocolVersion: 1,
+    type: "client.hello",
+    sessionId: "session-errors",
+    client: { name: "test", version: "1" },
+  }));
+  await transport.waitForClient();
+  await hello;
+
+  const protocolError = nextMessage(socket);
+  socket.send(JSON.stringify({
+    protocolVersion: 1,
+    type: "session.control",
+    sessionId: "session-errors",
+    requestId: "outer-request",
+    control: { schemaVersion: 1, type: "pause", requestId: "inner-request" },
+  }));
+  assert.deepEqual(await protocolError, {
+    protocolVersion: 1,
+    type: "protocol.error",
+    sessionId: "session-errors",
+    requestId: "outer-request",
+    error: { code: "invalid_message", message: "Control request IDs must match.", retryable: false },
+    message: "Control request IDs must match.",
   });
 });
 

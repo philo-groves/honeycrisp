@@ -20,7 +20,7 @@ interface CompleteCommandRequest {
   cwd?: string;
 }
 
-export async function runCompleteCommand(argv: readonly string[]): Promise<void> {
+export async function runCompleteCommand(argv: readonly string[], requestId?: string): Promise<void> {
   try {
     if (argv.length > 0 && !(argv.length === 1 && argv[0] === "--json")) {
       throw new Error("Usage: honeycrisp complete [--json] < request.json");
@@ -28,12 +28,14 @@ export async function runCompleteCommand(argv: readonly string[]): Promise<void>
     const raw = await readStandardInput();
     const request = decodeRequest(JSON.parse(raw) as unknown);
     const completion = await completeAuxiliaryText(request);
-    process.stdout.write(`${JSON.stringify(honeycrispProtocolSuccess("provider.complete", completion))}\n`);
+    process.stdout.write(`${JSON.stringify(honeycrispProtocolSuccess("provider.complete", completion, requestId))}\n`);
   } catch (error) {
     process.stdout.write(`${JSON.stringify(honeycrispProtocolFailure(
       "provider.complete",
       "provider_completion_failed",
       error instanceof Error ? error.message : String(error),
+      false,
+      requestId,
     ))}\n`);
     process.exitCode = 1;
   }
