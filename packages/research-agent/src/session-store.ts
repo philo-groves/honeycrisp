@@ -91,6 +91,7 @@ export type HoneycrispSessionSummary = Omit<
   "attempts" | "events" | "finalResponse"
 > & {
   attempts: HoneycrispSessionAttemptSummary[];
+  tokenUsage: { totalTokens: number };
 };
 
 export interface HoneycrispSessionUpdate {
@@ -434,7 +435,9 @@ export class HoneycrispSessionStore {
       ORDER BY updated_at DESC, id DESC
       LIMIT ?
     `).all(requiredString(workspaceId, "Workspace id"), boundedLimit) as StoredSessionRow[];
-    return rows.map((row) => sessionSummary(this.decodeSessionRow(row)));
+    const sessions = rows.map((row) => this.decodeSessionRow(row));
+    const tokenUsage = this.readSummaryTokenUsage(sessions.map((session) => session.id));
+    return sessions.map((session) => sessionSummary(session, tokenUsage.get(session.id) ?? 0));
   }
 
   public listForWorkspaces(workspaceIds: readonly string[], limitPerWorkspace = 100): HoneycrispSessionRecord[] {
@@ -483,7 +486,9 @@ export class HoneycrispSessionStore {
       WHERE workspace_rank <= ?
       ORDER BY updated_at DESC, id DESC
     `).all(...normalizedWorkspaceIds, boundedLimit) as StoredSessionRow[];
-    return rows.map((row) => sessionSummary(this.decodeSessionRow(row)));
+    const sessions = rows.map((row) => this.decodeSessionRow(row));
+    const tokenUsage = this.readSummaryTokenUsage(sessions.map((session) => session.id));
+    return sessions.map((session) => sessionSummary(session, tokenUsage.get(session.id) ?? 0));
   }
 
   public getUpdate(sessionId: string, afterEventId?: string | null): HoneycrispSessionUpdate | null {
@@ -852,6 +857,29 @@ export class HoneycrispSessionStore {
     });
   }
 
+  private readSummaryTokenUsage(sessionIds: readonly string[]): Map<string, number> {
+    const totals = new Map<string, number>();
+    if (!this.normalizedEventStorage || sessionIds.length === 0) return totals;
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    const rows = this.database.prepare(`
+      SELECT session_id, event_json FROM honeycrisp_session_events
+      WHERE session_id IN (${placeholders})
+        AND json_extract(event_json, '$.kind') = 'beale.model_session_update'
+    `).all(...sessionIds) as Array<{ session_id?: unknown; event_json?: unknown }>;
+    for (const row of rows) {
+      if (typeof row.session_id !== "string" || typeof row.event_json !== "string") continue;
+      const event = recordValue(JSON.parse(row.event_json));
+      const payload = recordValue(event?.payload);
+      const record = recordValue(payload?.record);
+      const patch = recordValue(record?.patch);
+      const metadata = recordValue(patch?.metadata);
+      const totalTokens = finiteNonNegativeNumber(metadata?.latestReportedTotalTokens);
+      if (totalTokens === null) continue;
+      totals.set(row.session_id, Math.max(totals.get(row.session_id) ?? 0, totalTokens));
+    }
+    return totals;
+  }
+
   private insertEvents(sessionId: string, events: readonly HoneycrispSessionEvent[]): void {
     if (events.length === 0) return;
     const offsetRow = this.database.prepare(`
@@ -950,7 +978,7 @@ function columnExists(database: DatabaseSync, table: string, column: string): bo
     .some((row) => row.name === column);
 }
 
-function sessionSummary(session: HoneycrispSessionRecord): HoneycrispSessionSummary {
+function sessionSummary(session: HoneycrispSessionRecord, totalTokens = 0): HoneycrispSessionSummary {
   return {
     schemaVersion: session.schemaVersion,
     id: session.id,
@@ -967,12 +995,17 @@ function sessionSummary(session: HoneycrispSessionRecord): HoneycrispSessionSumm
     metadata: session.metadata,
     finalDisposition: session.finalDisposition,
     attempts: session.attempts.map(({ capture: _capture, ...attempt }) => attempt),
+    tokenUsage: { totalTokens },
     createdAt: session.createdAt,
     startedAt: session.startedAt,
     endedAt: session.endedAt,
     updatedAt: session.updatedAt,
     revision: session.revision,
   };
+}
+
+function finiteNonNegativeNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : null;
 }
 
 function sessionMutationReceipt(session: HoneycrispSessionRecord): HoneycrispSessionMutationReceipt {

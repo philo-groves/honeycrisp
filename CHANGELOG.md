@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Session summary DTOs now include bounded aggregate token usage derived from model-session update events without hydrating full event histories.
 - Security 1.7.0 and Mathematics 1.5.0 now expose eight active memory types. Security replaces new Source and Sink records with role-classified Flow Endpoints, retires Historical Bug and Procedure, and includes compatible retired rows when searching their replacement types; retired IDs remain readable but are omitted from model-facing catalogs.
 - Session persistence now transactionally migrates embedded event timelines and capture bodies into individually SHA-256-verified rows. Lifecycle documents remain bounded, live event appends no longer rewrite prior history, and cursor/summary reads avoid hydrating data they do not return.
 - Session list and summary-list protocol commands now accept repeated workspace IDs and query them in one bounded database pass, avoiding one CLI startup per workspace for cross-workspace catalogs.

@@ -166,6 +166,17 @@ test("session summary lists stay bounded when canonical sessions contain large e
       summary: "Large event",
       payload: { output: "x".repeat(2 * 1024 * 1024) },
     });
+    store.appendEvent("session_large_history", {
+      id: "event_token_usage",
+      kind: "beale.model_session_update",
+      timestamp: "2026-08-16T12:01:00.000Z",
+      summary: "Model session usage updated.",
+      payload: {
+        record: {
+          patch: { metadata: { latestReportedTotalTokens: 12_345 } },
+        },
+      },
+    });
     store.create({
       id: "session_other_summary_workspace",
       workspaceId: "workspace_other_summary",
@@ -212,6 +223,7 @@ test("session summary lists stay bounded when canonical sessions contain large e
   assert.equal(Object.hasOwn(listed.result[0], "events"), false);
   assert.equal(Object.hasOwn(listed.result[0], "finalResponse"), false);
   assert.equal(Object.hasOwn(listed.result[0].attempts[0], "capture"), false);
+  assert.deepEqual(listed.result[0].tokenUsage, { totalTokens: 12_345 });
 
   const batched = runCli(
     [
