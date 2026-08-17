@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Session persistence now transactionally migrates embedded event timelines and capture bodies into individually SHA-256-verified rows. Lifecycle documents remain bounded, live event appends no longer rewrite prior history, and cursor/summary reads avoid hydrating data they do not return.
 - Session list and summary-list protocol commands now accept repeated workspace IDs and query them in one bounded database pass, avoiding one CLI startup per workspace for cross-workspace catalogs.
 - Session lifecycle transitions can now atomically update editable prompt, provider, model, reasoning-effort, and workflow configuration alongside canonical session metadata.
 - Added bounded `session.get_update` and `session.append_event_receipt` protocol DTOs so clients can poll event suffixes and persist live events without retransferring prior events or capture bodies.
@@ -72,6 +73,7 @@
 
 ### Fixed
 
+- Session protocol failures now distinguish SQLite structural corruption and application-level hash mismatches from ordinary operation errors, with non-retryable instructions to stop writers, preserve the original database, and restore or repair before retrying.
 - Retried transient provider WebSocket disconnects in the active research turn instead of failing the entire session after an otherwise successful shell-approval pause.
 - Added compact session-list summaries that omit event timelines, capture payloads, and final responses, preventing routine client refreshes from overflowing child-process protocol buffers as session history grows.
 - Added atomic startup recovery for Honeycrisp-owned active sessions, marking their active attempts paused with explicit interruption metadata and a canonical recovery event so restarted clients cannot rediscover stale active state.

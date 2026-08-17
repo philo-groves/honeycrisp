@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +48,7 @@ test("session store owns creation, lifecycle, capture import, and queries as one
     assert.equal(imported.finalResponse, "The parser is safe.");
     assert.equal(imported.events.length, 2);
     assert.equal(imported.attempts[0].capture.schemaVersion, 5);
+    assert.equal(store.get(created.id).attempts[0].capture.schemaVersion, 5);
     assert.equal(store.list("workspace_one")[0].revision, 3);
     assert.throws(
       () => store.transition(created.id, { status: "stopped", summary: "Stale writer", expectedRevision: 2 }),
@@ -177,6 +179,30 @@ test("session summary lists stay bounded when canonical sessions contain large e
     store.close();
   }
 
+  const inspection = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const stored = inspection.prepare(`
+      SELECT document_json, document_hash FROM honeycrisp_sessions WHERE id = ?
+    `).get("session_large_history");
+    const document = JSON.parse(stored.document_json);
+    assert.deepEqual(document.events, []);
+    assert.ok(stored.document_json.length < 10_000);
+    assert.equal(
+      stored.document_hash,
+      createHash("sha256").update(stored.document_json).digest("hex"),
+    );
+    const event = inspection.prepare(`
+      SELECT event_json, content_hash FROM honeycrisp_session_events WHERE session_id = ?
+    `).get("session_large_history");
+    assert.equal(
+      event.content_hash,
+      createHash("sha256").update(event.event_json).digest("hex"),
+    );
+    assert.ok(event.event_json.length > 2 * 1024 * 1024);
+  } finally {
+    inspection.close();
+  }
+
   const listed = runCli(
     ["session", "list-summaries", "--workspace-id", "workspace_summary", "--json"],
     { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
@@ -200,6 +226,171 @@ test("session summary lists stay bounded when canonical sessions contain large e
     new Set(batched.result.map((session) => session.id)),
     new Set(["session_large_history", "session_other_summary_workspace"]),
   );
+});
+
+test("session migration transactionally normalizes legacy embedded event histories", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-migration-"));
+  const databasePath = join(directory, "memory.sqlite");
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    CREATE TABLE honeycrisp_sessions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      document_json TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  const timestamp = "2026-08-16T12:00:00.000Z";
+  const legacyDocument = {
+    schemaVersion: 1,
+    id: "session_legacy",
+    workspaceId: "workspace_legacy",
+    status: "active",
+    title: "Legacy session",
+    prompt: "Migrate safely.",
+    summary: "Legacy session",
+    provider: null,
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+    workflowId: null,
+    profile: null,
+    metadata: {},
+    finalDisposition: null,
+    finalResponse: null,
+    attempts: [{
+      id: "attempt_legacy",
+      parentAttemptId: null,
+      status: "active",
+      summary: "Legacy attempt",
+      startedAt: timestamp,
+      endedAt: null,
+      capture: {
+        attemptId: "attempt_legacy",
+        capturedAt: timestamp,
+        schemaVersion: 5,
+        request: {},
+        agent: {},
+        raw: { retained: true },
+      },
+      metadata: {},
+    }],
+    events: [{
+      id: "event_legacy",
+      kind: "agent.event",
+      timestamp,
+      summary: "Legacy event",
+      payload: { retained: true },
+    }],
+    createdAt: timestamp,
+    startedAt: timestamp,
+    endedAt: null,
+    updatedAt: timestamp,
+    revision: 2,
+  };
+  legacy.prepare(`
+    INSERT INTO honeycrisp_sessions (
+      id, workspace_id, status, title, summary, document_json, revision, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    legacyDocument.id,
+    legacyDocument.workspaceId,
+    legacyDocument.status,
+    legacyDocument.title,
+    legacyDocument.summary,
+    JSON.stringify(legacyDocument),
+    legacyDocument.revision,
+    timestamp,
+    timestamp,
+  );
+  legacy.close();
+
+  const migrated = new HoneycrispSessionStore({ databasePath });
+  try {
+    assert.deepEqual(migrated.get("session_legacy")?.events, legacyDocument.events);
+    assert.deepEqual(migrated.get("session_legacy")?.attempts[0].capture, legacyDocument.attempts[0].capture);
+  } finally {
+    migrated.close();
+  }
+
+  const inspection = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const row = inspection.prepare(`
+      SELECT document_json, document_hash FROM honeycrisp_sessions WHERE id = ?
+    `).get("session_legacy");
+    assert.deepEqual(JSON.parse(row.document_json).events, []);
+    assert.equal(JSON.parse(row.document_json).attempts[0].capture, null);
+    assert.equal(typeof row.document_hash, "string");
+    assert.deepEqual(
+      inspection.prepare(`
+        SELECT event_id, event_offset FROM honeycrisp_session_events WHERE session_id = ?
+      `).all("session_legacy").map((event) => ({ ...event })),
+      [{ event_id: "event_legacy", event_offset: 0 }],
+    );
+    assert.deepEqual(
+      inspection.prepare(`
+        SELECT attempt_id FROM honeycrisp_session_captures WHERE session_id = ?
+      `).all("session_legacy").map((capture) => ({ ...capture })),
+      [{ attempt_id: "attempt_legacy" }],
+    );
+  } finally {
+    inspection.close();
+  }
+});
+
+test("session CLI reports actionable integrity and database corruption failures", async () => {
+  const integrityDirectory = await mkdtemp(join(tmpdir(), "honeycrisp-session-integrity-"));
+  const integrityDatabasePath = join(integrityDirectory, "memory.sqlite");
+  const store = new HoneycrispSessionStore({ databasePath: integrityDatabasePath });
+  store.create({
+    id: "session_integrity",
+    workspaceId: "workspace_integrity",
+    attemptId: "attempt_integrity",
+    title: "Integrity session",
+    prompt: "Detect corruption.",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+  });
+  store.appendEventReceipt("session_integrity", {
+    id: "event_integrity",
+    kind: "agent.event",
+    timestamp: "2026-08-16T12:00:00.000Z",
+    summary: "Integrity event",
+    payload: { retained: true },
+  });
+  store.close();
+  const tamper = new DatabaseSync(integrityDatabasePath);
+  tamper.prepare(`
+    UPDATE honeycrisp_session_events SET event_json = ? WHERE session_id = ?
+  `).run(JSON.stringify({
+    id: "event_integrity",
+    kind: "agent.event",
+    timestamp: "2026-08-16T12:00:00.000Z",
+    summary: "Tampered event",
+    payload: null,
+  }), "session_integrity");
+  tamper.close();
+
+  const integrityFailure = runCliFailure(
+    ["session", "get", "--session-id", "session_integrity", "--json"],
+    { ...process.env, HONEYCRISP_DATABASE_PATH: integrityDatabasePath },
+  );
+  assert.equal(integrityFailure.error.code, "session_integrity_failed");
+  assert.match(integrityFailure.error.message, /preserve the database/iu);
+
+  const corruptDirectory = await mkdtemp(join(tmpdir(), "honeycrisp-database-corrupt-"));
+  const corruptDatabasePath = join(corruptDirectory, "memory.sqlite");
+  await writeFile(corruptDatabasePath, "not a sqlite database");
+  const corruptionFailure = runCliFailure(
+    ["session", "get", "--session-id", "session_corrupt", "--json"],
+    { ...process.env, HONEYCRISP_DATABASE_PATH: corruptDatabasePath },
+  );
+  assert.equal(corruptionFailure.error.code, "database_corrupt");
+  assert.match(corruptionFailure.error.message, /restore a verified backup or run SQLite recovery/iu);
 });
 
 test("session cursor updates omit prior events and capture bodies", async () => {
@@ -374,6 +565,14 @@ function runCli(args, env) {
   const result = spawnSync(process.execPath, [cliPath, ...args], { encoding: "utf8", env });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   return decodeHoneycrispProtocolEnvelope(JSON.parse(result.stdout));
+}
+
+function runCliFailure(args, env) {
+  const result = spawnSync(process.execPath, [cliPath, ...args], { encoding: "utf8", env });
+  assert.notEqual(result.status, 0, result.stderr || result.stdout);
+  const envelope = decodeHoneycrispProtocolEnvelope(JSON.parse(result.stdout));
+  assert.equal(envelope.ok, false);
+  return envelope;
 }
 
 function captureFixture() {

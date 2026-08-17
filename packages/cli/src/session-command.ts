@@ -86,7 +86,8 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
     }
     console.log(JSON.stringify(honeycrispProtocolSuccess(operation, result, requestId)));
   } catch (error) {
-    emitFailure(operation, "session_operation_failed", errorMessage(error), requestId);
+    const failure = sessionFailure(error);
+    emitFailure(operation, failure.code, failure.message, requestId);
   } finally {
     store?.close();
   }
@@ -159,6 +160,23 @@ function requiredOptions(values: readonly string[], name: string): string[] {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function sessionFailure(error: unknown): { code: string; message: string } {
+  const message = errorMessage(error);
+  if (/database disk image is malformed|file is not a database|database corruption|SQLITE_CORRUPT|SQLITE_NOTADB/iu.test(message)) {
+    return {
+      code: "database_corrupt",
+      message: "Honeycrisp database integrity failed. Stop active writers and restore a verified backup or run SQLite recovery against the configured database before retrying. The original database must be preserved until recovery is validated.",
+    };
+  }
+  if (/failed (?:its|the) integrity check/iu.test(message)) {
+    return {
+      code: "session_integrity_failed",
+      message: "Honeycrisp session integrity validation failed. Stop active writers, preserve the database, and restore or repair the affected session data before retrying.",
+    };
+  }
+  return { code: "session_operation_failed", message };
 }
 
 function sessionUsage(): string {
