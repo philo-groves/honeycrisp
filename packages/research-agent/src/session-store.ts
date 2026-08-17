@@ -129,6 +129,13 @@ export interface HoneycrispSessionTransitionInput {
   expectedRevision?: number;
   disposition?: HoneycrispSessionDisposition | null;
   metadata?: Record<string, unknown>;
+  configuration?: {
+    prompt?: string;
+    provider?: string | null;
+    model?: string;
+    reasoningEffort?: string;
+    workflowId?: string | null;
+  };
   at?: string;
 }
 
@@ -446,6 +453,23 @@ export class HoneycrispSessionStore {
       session.status = input.status;
       session.summary = requiredString(input.summary, "Lifecycle summary");
       session.metadata = { ...session.metadata, ...(input.metadata ?? {}) };
+      if (input.configuration) {
+        if (input.configuration.prompt !== undefined) {
+          session.prompt = requiredString(input.configuration.prompt, "Session prompt");
+        }
+        if (input.configuration.provider !== undefined) {
+          session.provider = optionalString(input.configuration.provider);
+        }
+        if (input.configuration.model !== undefined) {
+          session.model = requiredString(input.configuration.model, "Session model");
+        }
+        if (input.configuration.reasoningEffort !== undefined) {
+          session.reasoningEffort = input.configuration.reasoningEffort.trim();
+        }
+        if (input.configuration.workflowId !== undefined) {
+          session.workflowId = optionalString(input.configuration.workflowId);
+        }
+      }
       if (input.disposition !== undefined) session.finalDisposition = input.disposition;
       const attempt = input.attemptId
         ? session.attempts.find((candidate) => candidate.id === input.attemptId)

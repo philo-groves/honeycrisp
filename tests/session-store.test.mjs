@@ -57,6 +57,42 @@ test("session store owns creation, lifecycle, capture import, and queries as one
   }
 });
 
+test("session transitions update editable configuration with the lifecycle aggregate", () => {
+  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  try {
+    const created = store.create({
+      id: "session_configuration",
+      workspaceId: "workspace_one",
+      attemptId: "attempt_configuration",
+      title: "Editable session",
+      prompt: "Inspect the parser.",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      workflowId: "discovery",
+    });
+    const updated = store.transition(created.id, {
+      status: created.status,
+      summary: created.summary,
+      configuration: {
+        prompt: "Review the parser and its callers.",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        reasoningEffort: "medium",
+        workflowId: "chaining",
+      },
+    });
+
+    assert.equal(updated.prompt, "Review the parser and its callers.");
+    assert.equal(updated.provider, "anthropic");
+    assert.equal(updated.model, "claude-opus-4-1");
+    assert.equal(updated.reasoningEffort, "medium");
+    assert.equal(updated.workflowId, "chaining");
+  } finally {
+    store.close();
+  }
+});
+
 test("session recovery atomically pauses interrupted workspace sessions and their active attempts", () => {
   const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
   try {

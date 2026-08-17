@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Session lifecycle transitions can now atomically update editable prompt, provider, model, reasoning-effort, and workflow configuration alongside canonical session metadata.
 - Added bounded `session.get_update` and `session.append_event_receipt` protocol DTOs so clients can poll event suffixes and persist live events without retransferring prior events or capture bodies.
 
 ### Added
