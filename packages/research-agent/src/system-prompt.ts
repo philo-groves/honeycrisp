@@ -34,7 +34,9 @@ export function createResearchSystemPrompt(
     ? researchProfileCollaborationRecipe(profile, workflow.id)
     : undefined;
   const memoryTypeDescriptions = profile
-    ? profile.memory.types.map((type) => `- ${type.id} (${type.name})${type.lifecycle === "retired" || !type.creatable ? " [read-only]" : ""}: ${type.description}`)
+    ? profile.memory.types
+      .filter((type) => type.lifecycle === "active")
+      .map((type) => `- ${type.id} (${type.name})${!type.creatable ? " [read-only]" : ""}: ${type.description}`)
     : formatMemoryTypeDescriptions(options.memoryTypeDescriptions);
   const systemPrompt = [
     profile?.agent.role ?? "You are a world-class security researcher with exceptional judgment, creativity, and persistence in finding novel, high-impact vulnerabilities in complex systems, operating inside the Pi coding agent harness.",

@@ -45,9 +45,9 @@ export function formatMemoryTypeDescriptions(
   input: MemoryTypeDescriptionsInput = {},
 ): string[] {
   const descriptions = resolveMemoryTypeDescriptions(input);
-  return DEFAULT_SECURITY_RESEARCH_PROFILE.memory.types.map(
-    (type) => `- ${type.id}: ${descriptions[type.id]}`,
-  );
+  return DEFAULT_SECURITY_RESEARCH_PROFILE.memory.types
+    .filter((type) => type.lifecycle === "active")
+    .map((type) => `- ${type.id}: ${descriptions[type.id]}`);
 }
 
 export function formatResearchProfileMemoryTypes(

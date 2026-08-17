@@ -29,7 +29,9 @@ interface MemoryToolSchemas {
 }
 
 function createMemoryToolSchemas(memory: ResearchProfileMemory): MemoryToolSchemas {
-  const readableTypeIds = catalogIdsAndAliases(memory.types);
+  const readableTypeIds = catalogIdsAndAliases(
+    memory.types.filter((type) => type.lifecycle === "active"),
+  );
   const creatableTypes = memory.types.filter(
     (type) => type.lifecycle === "active" && type.creatable,
   );

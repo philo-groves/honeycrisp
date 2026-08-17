@@ -25,7 +25,7 @@ test("research profiles normalize to immutable, deterministic snapshots", () => 
   assert.equal(researchProfileHash(profile), researchProfileHash(normalizeResearchProfile(reordered)));
 
   const changed = structuredClone(profile);
-  changed.name = "Security Research Renamed";
+  changed.name = "Security Renamed";
   assert.notEqual(researchProfileHash(profile), researchProfileHash(normalizeResearchProfile(changed)));
 });
 
@@ -33,6 +33,7 @@ test("bundled profiles own their session heat palettes and memory-status default
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
 
+  assert.equal(security.name, "Security");
   assert.equal(security.capabilities.reportsEnabled, true);
   assert.deepEqual(security.capabilities.defaultToolFamilies, ["shell", "repository-search", "file-read"]);
   assert.equal(mathematics.capabilities.reportsEnabled, true);
@@ -51,7 +52,14 @@ test("bundled profiles own their session heat palettes and memory-status default
     critical: "#b14ee8",
   });
   assert.equal(mathematics.memory.types.find((type) => type.id === "theorem")?.sessionHeat.verified, "critical");
-  assert.equal(mathematics.memory.types.find((type) => type.id === "formalization")?.sessionHeat.verified, "medium");
+  assert.deepEqual(
+    security.memory.types.filter((type) => type.lifecycle === "active").map((type) => type.id),
+    ["asset", "invariant", "mitigation", "flow-endpoint", "hypothesis", "primitive", "chain", "trajectory"],
+  );
+  assert.deepEqual(
+    mathematics.memory.types.map((type) => type.id),
+    ["problem", "definition", "conjecture", "theorem", "counterexample", "technique", "reference", "trajectory"],
+  );
 });
 
 test("bundled profiles give reports domain-specific share-readiness guidance", () => {
@@ -73,14 +81,27 @@ test("bundled profiles gate collaboration recipes by domain and workflow", () =>
   assert.ok(mathematics.collaboration.recipes.every((recipe) => recipe.roles.length >= 2));
 });
 
+test("retired bundled memory types stay out of model-facing catalogs", () => {
+  const securityPrompt = createResearchSystemPrompt({
+    hasTools: true,
+    hasMemoryTools: true,
+    researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE,
+  });
+  assert.match(securityPrompt, /- flow-endpoint \(Flow Endpoint\)/);
+  assert.doesNotMatch(securityPrompt, /- source \(Source\)/);
+  assert.doesNotMatch(securityPrompt, /- sink \(Sink\)/);
+  assert.doesNotMatch(securityPrompt, /- bug \(Historical Bug\)/);
+  assert.doesNotMatch(securityPrompt, /- procedure \(Procedure\)/);
+});
+
 test("bundled profiles define domain-specific Longshot workflows", () => {
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
   const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
   const mathematicsLongshot = mathematics.workflows.find((workflow) => workflow.id === "longshot");
 
-  assert.equal(security.version, "1.6.0");
-  assert.equal(mathematics.version, "1.4.0");
+  assert.equal(security.version, "1.7.0");
+  assert.equal(mathematics.version, "1.5.0");
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);
   assert.match(securityLongshot?.description ?? "", /reportable high- or critical-severity vulnerabilities/);

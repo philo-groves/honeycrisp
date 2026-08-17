@@ -535,7 +535,7 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   assert.match(systemPrompt, /specific, testable, currently unproven security proposition/);
   assert.match(systemPrompt, /Evidence is attached to graph nodes as supporting references/);
   assert.match(systemPrompt, /Do not create finding memories/);
-  assert.match(systemPrompt, /attacker-controlled or lower-trust ingress/);
+  assert.match(systemPrompt, /sources introduce attacker-controlled or lower-trust influence/);
   assert.match(systemPrompt, /direct code, artifact, command, or verifier evidence/);
   assert.match(systemPrompt, /proof-of-vulnerability evidence/);
   assert.match(systemPrompt, /independent review approval/);

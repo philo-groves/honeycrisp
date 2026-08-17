@@ -108,7 +108,7 @@ test("memory context prioritizes current memberships and relevant subject knowle
     memoryNode({
       id: "mem_workspace_parser",
       sessionIds: ["run_older"],
-      type: "source",
+      type: "flow-endpoint",
       title: "Parser entrypoints",
       summary: "General shell parser orientation.",
     }),
@@ -216,9 +216,10 @@ test("memory context retrieves an older relevant node beyond the recent context 
     });
     for (let index = 0; index < 100; index += 1) {
       store.save({
-        type: "source",
+        type: "flow-endpoint",
         title: `Recent unrelated source ${index}`,
         summary: "Shell completion orientation.",
+        attributes: { role: "source" },
       });
     }
     const database = new DatabaseSync(store.databasePath);

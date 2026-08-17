@@ -60,8 +60,10 @@ test("profile resolve selects the bundled mathematics research catalog", async (
       envelope.profile.memory.types.map((type) => type.id),
       DEFAULT_MATHEMATICS_RESEARCH_PROFILE.memory.types.map((type) => type.id),
     );
-    assert.ok(envelope.profile.memory.types.some((type) => type.id === "formalization"));
-    assert.ok(envelope.profile.memory.types.some((type) => type.id === "counterexample"));
+    assert.deepEqual(
+      envelope.profile.memory.types.map((type) => type.id),
+      ["problem", "definition", "conjecture", "theorem", "counterexample", "technique", "reference", "trajectory"],
+    );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

@@ -69,17 +69,11 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
     );
     assert.throws(
       () => store.save({ type: "bug", title: "Current parser flaw", status: "confirmed" }),
-      /historicalPrecedent/,
+      /retired/,
     );
     assert.throws(
-      () => store.save({
-        type: "bug",
-        title: "Implicit historical bug",
-        assetIds: ["asset_parser"],
-        attributes: { historicalPrecedent: true },
-        evidence: [{ kind: "url", pathBase: "external", path: "https://example.test/advisory", locator: {}, summary: "Fixed advisory" }],
-      }),
-      /requires an explicit status/,
+      () => store.save({ type: "flow-endpoint", title: "Template renderer", status: "confirmed" }),
+      /requires non-empty attributes: role/,
     );
     assert.throws(
       () => store.save({ type: "hypothesis", title: "Proven parser flaw", status: "confirmed" }),
@@ -101,24 +95,26 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
 
     const candidate = store.save({
       type: "primitive",
-      title: "Historical parser overflow",
+      title: "Parser flow boundary",
       status: "confirmed",
       assetIds: ["asset_parser"],
-      attributes: { historicalPrecedent: true },
       evidence: [{ kind: "url", pathBase: "external", path: "https://example.test/advisory", locator: {}, summary: "Fixed advisory" }],
     });
     store.link(candidate.id, first.id, "precedes");
-    const historicalBug = store.correct(candidate.id, 1, { type: "bug" });
-    assert.match(historicalBug.id, /^bug_/);
-    assert.equal(historicalBug.type, "bug");
+    const flowEndpoint = store.correct(candidate.id, 1, {
+      type: "flow-endpoint",
+      attributes: { role: "sink" },
+    });
+    assert.match(flowEndpoint.id, /^flow-endpoint_/);
+    assert.equal(flowEndpoint.type, "flow-endpoint");
     assert.equal(store.get(candidate.id), null);
-    assert.ok(store.listEdges().some((edge) => edge.fromId === historicalBug.id && edge.toId === first.id));
-    assert.equal(historicalBug.evidence.length, 1);
+    assert.ok(store.listEdges().some((edge) => edge.fromId === flowEndpoint.id && edge.toId === first.id));
+    assert.equal(flowEndpoint.evidence.length, 1);
 
-    const rediscoveredPrimitive = store.correct(historicalBug.id, 2, { type: "primitive", attributes: {} });
+    const rediscoveredPrimitive = store.correct(flowEndpoint.id, 2, { type: "primitive", attributes: {} });
     assert.match(rediscoveredPrimitive.id, /^primitive_/);
     assert.equal(rediscoveredPrimitive.type, "primitive");
-    assert.equal(store.get(historicalBug.id), null);
+    assert.equal(store.get(flowEndpoint.id), null);
     assert.ok(store.listEdges().some((edge) => edge.fromId === rediscoveredPrimitive.id && edge.toId === first.id));
     assert.equal(store.databasePath, getDefaultMemoryDatabasePath(workspaceRoot));
   } finally {
@@ -141,7 +137,10 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     assert.match(saveDescriptor.description, /refined in place/);
     assert.equal("tier" in saveDescriptor.inputSchema.properties, false);
     const saveSchema = saveDescriptor.inputSchema;
-    assert.deepEqual(saveSchema.properties.type.enum, ["asset", "bug", "invariant", "mitigation", "source", "sink", "hypothesis", "primitive", "chain", "procedure", "trajectory"]);
+    assert.deepEqual(saveSchema.properties.type.enum, ["asset", "invariant", "mitigation", "flow-endpoint", "hypothesis", "primitive", "chain", "trajectory"]);
+    assert.deepEqual(searchDescriptor.inputSchema.properties.types.items.enum, saveSchema.properties.type.enum);
+    assert.equal(searchDescriptor.inputSchema.properties.types.items.enum.includes("source"), false);
+    assert.equal(searchDescriptor.inputSchema.properties.types.items.enum.includes("sink"), false);
     assert.equal(saveSchema.properties.type.enum.includes("evidence"), false);
     assert.equal(saveSchema.properties.type.enum.includes("finding"), false);
     assert.deepEqual(saveSchema.properties.status.enum, ["draft", "suspected", "confirmed", "rejected", "stale"]);
@@ -158,26 +157,22 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
       condition.if?.properties?.type?.enum?.includes("chain")
       && condition.if?.properties?.status?.enum?.includes("confirmed")
       && condition.then?.required?.includes("evidence"));
-    const bugRequirement = saveSchema.allOf.find((condition) =>
-      condition.if?.properties?.type?.enum?.includes("bug")
-      && condition.then?.properties?.attributes?.required?.includes("historicalPrecedent"));
-    const bugType = saveSchema.allOf.find((condition) =>
-      condition.if?.properties?.type?.enum?.includes("bug")
-      && condition.then?.required?.includes("status"));
+    const flowEndpointRequirement = saveSchema.allOf.find((condition) =>
+      condition.if?.properties?.type?.enum?.includes("flow-endpoint")
+      && condition.then?.properties?.attributes?.required?.includes("role"));
     const hypothesisType = saveSchema.allOf.find((condition) =>
       condition.if?.properties?.type?.enum?.includes("hypothesis")
       && condition.then?.properties?.status);
     assert.deepEqual(chainRequirement.then.properties.attributes.required, ["impact", "reachability"]);
     assert.deepEqual(primitiveEvidenceRequirement.then.required, ["evidence"]);
     assert.deepEqual(chainEvidenceRequirement.then.required, ["evidence"]);
-    assert.deepEqual(bugRequirement.then.required.sort(), ["assetIds", "attributes", "evidence"].sort());
-    assert.deepEqual(bugRequirement.then.properties.attributes.required, ["historicalPrecedent"]);
-    assert.deepEqual(bugType.then.properties.status.enum, ["confirmed"]);
+    assert.deepEqual(flowEndpointRequirement.then.required, ["attributes"]);
+    assert.deepEqual(flowEndpointRequirement.then.properties.attributes.required, ["role"]);
     assert.deepEqual(hypothesisType.then.properties.status.enum, ["draft", "suspected", "rejected", "stale"]);
     const correctSchema = descriptors.find((tool) => tool.name === "memory.correct").inputSchema;
     assert.deepEqual(correctSchema.properties.type.enum, saveSchema.properties.type.enum);
-    const source = await registry.execute({ id: "save_source", actionClass: "synthesize", toolName: "memory.save", input: { type: "source", title: "Request body" } });
-    const sink = await registry.execute({ id: "save_sink", actionClass: "synthesize", toolName: "memory.save", input: { type: "sink", title: "Template renderer" } });
+    const source = await registry.execute({ id: "save_source", actionClass: "synthesize", toolName: "memory.save", input: { type: "flow-endpoint", title: "Request body", attributes: { role: "source" } } });
+    const sink = await registry.execute({ id: "save_sink", actionClass: "synthesize", toolName: "memory.save", input: { type: "flow-endpoint", title: "Template renderer", attributes: { role: "sink" } } });
     assert.equal(source.result.status, "complete");
     assert.equal(sink.result.status, "complete");
 
@@ -422,12 +417,12 @@ test("memory correction appends context memberships when reclassifying a node", 
   });
   try {
     const corrected = followup.correct(node.id, 1, {
-      type: "procedure",
+      type: "trajectory",
       body: "Compare the bounded-message convention across components.",
       tags: ["ipc", "cross_workspace"],
     });
     assert.notEqual(corrected.id, node.id);
-    assert.equal(corrected.type, "procedure");
+    assert.equal(corrected.type, "trajectory");
     assert.deepEqual(corrected.sessionIds, ["run_mdns", "run_zsh"]);
     assert.deepEqual(corrected.workspaces, [
       { id: "workspace_zsh", name: "Zsh" },
@@ -535,7 +530,7 @@ test("memory graph uses a runtime profile for aliases, validation, and tool sche
     const saveDescriptor = descriptors.find((tool) => tool.name === "memory.save");
     const saveSchema = saveDescriptor.inputSchema;
     assert.deepEqual(saveSchema.properties.type.enum, ["claim", "finding"]);
-    assert.deepEqual(searchSchema.properties.types.items.enum, ["claim", "finding", "legacy_note", "imported"]);
+    assert.deepEqual(searchSchema.properties.types.items.enum, ["claim", "finding", "imported"]);
     assert.deepEqual(saveSchema.properties.status.enum, ["draft", "verified", "obsolete"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.kind.enum, ["citation", "note"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.pathBase.enum, ["workspace", "external"]);
@@ -997,6 +992,30 @@ test("memory graph reads retired and unknown legacy rows and permits unrelated c
       () => current.correct(unknown.id, 2, { status: "draft" }),
       /unknown stored memory node type/,
     );
+  } finally {
+    current.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("searching a replacement type includes compatible retired memory", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-replaced-memory-"));
+  const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
+  const initialMemory = customMemoryProfile({ legacyLifecycle: "active", legacyCreatable: true });
+  const initial = new MemoryGraphStore({ workspaceRoot, databasePath, profileMemory: initialMemory });
+  let legacy;
+  try {
+    legacy = initial.save({ type: "legacy_note", title: "Old claim representation" });
+  } finally {
+    initial.close();
+  }
+
+  const currentMemory = customMemoryProfile();
+  currentMemory.types.find((type) => type.id === "legacy_note").replacedBy = "claim";
+  const current = new MemoryGraphStore({ workspaceRoot, databasePath, profileMemory: currentMemory });
+  try {
+    assert.deepEqual(current.search({ types: ["claim"] }).map((node) => node.id), [legacy.id]);
+    assert.deepEqual(current.search({ types: ["finding"] }).map((node) => node.id), [legacy.id]);
   } finally {
     current.close();
     await rm(workspaceRoot, { recursive: true, force: true });

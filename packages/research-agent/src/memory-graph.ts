@@ -639,10 +639,16 @@ export class MemoryGraphStore {
     const normalizedInput = input.types?.length
       ? {
           ...input,
-          types: input.types.map((type) => {
+          types: unique(input.types.flatMap((type) => {
             const normalizedType = type.trim();
-            return this.catalog.typesByAlias.get(normalizedType)?.id ?? normalizedType;
-          }),
+            const canonicalType = this.catalog.typesByAlias.get(normalizedType)?.id ?? normalizedType;
+            return [
+              canonicalType,
+              ...this.catalog.memory.types
+                .filter((candidate) => candidate.lifecycle === "retired" && candidate.replacedBy === canonicalType)
+                .map((candidate) => candidate.id),
+            ];
+          })),
         }
       : input;
     const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
