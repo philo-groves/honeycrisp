@@ -15,10 +15,19 @@ import type {
   ResearchProfileMemoryRequirement,
   ResearchProfileMemoryType,
 } from "./research-profile.js";
-import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
+import type {
+  ResearchExecutableTool,
+  ResearchToolExecutionContext,
+  ResearchToolExecutionResult,
+} from "./tool-registry.js";
 import type { ResearchToolAction } from "./types.js";
 
 const GET_PARAMETERS = { type: "object", required: ["id"], properties: { id: { type: "string" } } };
+const DEFAULT_MODEL_MEMORY_SEARCH_LIMIT = 8;
+const MAX_MODEL_MEMORY_SEARCH_LIMIT = 25;
+const MAX_SEARCH_CARD_SUMMARY_CHARACTERS = 700;
+const MAX_SEARCH_CARD_TAGS = 6;
+const MAX_SEARCH_CARD_EVIDENCE_REFS = 3;
 
 interface MemoryToolSchemas {
   search: Record<string, unknown>;
@@ -78,7 +87,7 @@ function createMemoryToolSchemas(memory: ResearchProfileMemory): MemoryToolSchem
         statuses: { type: "array", items: { type: "string", enum: statusIds } },
         assetIds: { type: "array", items: { type: "string" } },
         tags: { type: "array", items: { type: "string" } },
-        limit: { type: "number" },
+        limit: { type: "number", minimum: 1, maximum: MAX_MODEL_MEMORY_SEARCH_LIMIT },
       },
     },
     save: {
@@ -305,9 +314,10 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
   const memory = store.getProfileMemory();
   const schemas = createMemoryToolSchemas(memory);
   const typeCatalog = formatResearchProfileMemoryTypes(memory, { creatableOnly: true }).join("\n");
+  const seenMemoryRevisions = new Map<string, Map<string, number>>();
   return [
-    createMemorySearchTool(store, schemas.search),
-    createMemoryGetTool(store),
+    createMemorySearchTool(store, schemas.search, seenMemoryRevisions),
+    createMemoryGetTool(store, seenMemoryRevisions),
     tool("memory.save", "memory_save", `Create or additively refine concise reusable knowledge with links and evidence references. Saving automatically associates the memory with the current session, workspace, and subject; updating it from another session or workspace adds that association. Exact subject-visible type-and-title identities are refined in place. Use the active memory catalog below and do not store transcripts, routine narration, or bulk output.\n${typeCatalog}`, "write", schemas.save, (input) => {
       const id = string(input.id);
       return store.save({
@@ -345,28 +355,117 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
   ];
 }
 
-function createMemorySearchTool(store: MemoryGraphStore, schema: Record<string, unknown>): ResearchExecutableTool {
-  return tool("memory.search", "memory_search", "Search memories associated with the current workspace by default. Use session or subject scope when narrower or broader recall is needed. Use before repeating prior research.", "read", schema, (input) => {
+function createMemorySearchTool(
+  store: MemoryGraphStore,
+  schema: Record<string, unknown>,
+  seenMemoryRevisions: Map<string, Map<string, number>>,
+): ResearchExecutableTool {
+  return tool("memory.search", "memory_search", "Search memories associated with the current workspace by default. Results are compact cards; use memory.get only for a memory whose complete body or evidence is needed. Unchanged memories already seen by this agent are returned as short references. Use session or subject scope when narrower or broader recall is needed. Use before repeating prior research.", "read", schema, (input, context) => {
     const query = string(input.query);
     const scope = string(input.scope) as MemoryScope | null;
     const types = strings(input.types) as MemoryNodeType[];
     const statuses = strings(input.statuses) as MemoryNodeStatus[];
     const assetIds = strings(input.assetIds);
     const tags = strings(input.tags);
-    return store.search({
+    const requestedLimit = typeof input.limit === "number"
+      ? Math.floor(input.limit)
+      : DEFAULT_MODEL_MEMORY_SEARCH_LIMIT;
+    const limit = Math.max(1, Math.min(MAX_MODEL_MEMORY_SEARCH_LIMIT, requestedLimit));
+    const nodes = store.search({
       ...(query ? { query } : {}),
       ...(scope ? { scope } : {}),
       ...(types.length ? { types } : {}),
       ...(statuses.length ? { statuses } : {}),
       ...(assetIds.length ? { assetIds } : {}),
       ...(tags.length ? { tags } : {}),
-      ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
+      limit,
     });
+    const edges = store.listEdgesForNodes(nodes.map((node) => node.id));
+    const relationshipCounts = new Map<string, number>();
+    for (const edge of edges) {
+      relationshipCounts.set(edge.fromId, (relationshipCounts.get(edge.fromId) ?? 0) + 1);
+      relationshipCounts.set(edge.toId, (relationshipCounts.get(edge.toId) ?? 0) + 1);
+    }
+    const seen = agentSeenMemoryRevisions(seenMemoryRevisions, context?.agentId);
+    let unchangedCount = 0;
+    const results = nodes.map((node) => {
+      const unchanged = seen.get(node.id) === node.revision;
+      seen.set(node.id, node.revision);
+      if (unchanged) {
+        unchangedCount += 1;
+        return {
+          detail: "reference",
+          id: node.id,
+          type: node.type,
+          title: node.title,
+          status: node.status,
+          revision: node.revision,
+        };
+      }
+      return {
+        detail: "summary",
+        id: node.id,
+        type: node.type,
+        title: node.title,
+        summary: truncateText(node.summary, MAX_SEARCH_CARD_SUMMARY_CHARACTERS),
+        status: node.status,
+        confidence: node.confidence,
+        ...(node.tags.length > 0 ? { tags: node.tags.slice(0, MAX_SEARCH_CARD_TAGS) } : {}),
+        evidenceCount: node.evidence.length,
+        ...(node.evidence.length > 0
+          ? {
+              evidenceRefs: node.evidence.slice(0, MAX_SEARCH_CARD_EVIDENCE_REFS).map((evidence) => ({
+                id: evidence.id,
+                kind: evidence.kind,
+                ...(evidence.pathBase ? { pathBase: evidence.pathBase } : {}),
+                ...(evidence.path ? { path: evidence.path } : {}),
+              })),
+            }
+          : {}),
+        relationshipCount: relationshipCounts.get(node.id) ?? 0,
+        updatedAt: node.updatedAt,
+        revision: node.revision,
+      };
+    });
+    return {
+      results,
+      resultCount: results.length,
+      unchangedReferenceCount: unchangedCount,
+      detail: "summary",
+      recall: "Use memory.get with a result ID to read its complete body, attributes, evidence, and relationships.",
+    };
   });
 }
 
-function createMemoryGetTool(store: MemoryGraphStore): ResearchExecutableTool {
-  return tool("memory.get", "memory_get", "Read one durable memory node with evidence references.", "read", GET_PARAMETERS, (input) => store.get(requiredString(input.id, "id")));
+function createMemoryGetTool(
+  store: MemoryGraphStore,
+  seenMemoryRevisions: Map<string, Map<string, number>>,
+): ResearchExecutableTool {
+  return tool("memory.get", "memory_get", "Read one durable memory node with its complete body, attributes, evidence references, and relationships.", "read", GET_PARAMETERS, (input, context) => {
+    const node = store.get(requiredString(input.id, "id"));
+    if (!node) return null;
+    agentSeenMemoryRevisions(seenMemoryRevisions, context?.agentId).set(node.id, node.revision);
+    const relationships = store.listEdgesForNodes([node.id]).map((edge) =>
+      edge.fromId === node.id
+        ? {
+            direction: "outgoing",
+            relation: edge.relation,
+            memoryId: edge.toId,
+            ...(edge.note ? { note: edge.note } : {}),
+            createdAt: edge.createdAt,
+            updatedAt: edge.updatedAt,
+          }
+        : {
+            direction: "incoming",
+            relation: edge.relation,
+            memoryId: edge.fromId,
+            ...(edge.note ? { note: edge.note } : {}),
+            createdAt: edge.createdAt,
+            updatedAt: edge.updatedAt,
+          }
+    );
+    return { ...node, relationships };
+  });
 }
 
 function tool(
@@ -375,15 +474,15 @@ function tool(
   description: string,
   sideEffects: "read" | "write",
   parameters: Record<string, unknown>,
-  run: (input: Record<string, unknown>) => unknown,
+  run: (input: Record<string, unknown>, context?: ResearchToolExecutionContext) => unknown,
 ): ResearchExecutableTool {
   return {
     descriptor: { name, transportName, description, actionClasses: [sideEffects === "read" ? "recall" : "synthesize"], sideEffects, requiredPermissions: [sideEffects === "read" ? "memory:read" : "memory:write"], inputSchema: parameters },
     parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
-    async execute(action: ResearchToolAction): Promise<ResearchToolExecutionResult> {
+    async execute(action: ResearchToolAction, context?: ResearchToolExecutionContext): Promise<ResearchToolExecutionResult> {
       const startedAt = nowIso();
       try {
-        const output = run(isRecord(action.input) ? action.input : {});
+        const output = run(isRecord(action.input) ? action.input : {}, context);
         return { action, status: "complete", startedAt, completedAt: nowIso(), summary: `${name} completed.`, output, followUpActions: [] };
       } catch (error) {
         return { action, status: "error", startedAt, completedAt: nowIso(), summary: `${name} failed.`, error: { message: error instanceof Error ? error.message : String(error) }, followUpActions: [] };
@@ -412,6 +511,22 @@ function parseEvidence(value: unknown): Omit<MemoryEvidenceRef, "id" | "createdA
   if (input.pathBase !== undefined) result.pathBase = requiredString(input.pathBase, "evidence pathBase") as NonNullable<MemoryEvidenceRef["pathBase"]>;
   if (input.path !== undefined) result.path = requiredString(input.path, "evidence path");
   return result;
+}
+
+function agentSeenMemoryRevisions(
+  seenMemoryRevisions: Map<string, Map<string, number>>,
+  agentId: string | undefined,
+): Map<string, number> {
+  const key = agentId?.trim() || "default";
+  const existing = seenMemoryRevisions.get(key);
+  if (existing) return existing;
+  const created = new Map<string, number>();
+  seenMemoryRevisions.set(key, created);
+  return created;
+}
+
+function truncateText(value: string, maxCharacters: number): string {
+  return value.length <= maxCharacters ? value : `${value.slice(0, Math.max(0, maxCharacters - 1))}…`;
 }
 
 function parseMemoryLink(value: unknown): MemoryNodeLinkInput {

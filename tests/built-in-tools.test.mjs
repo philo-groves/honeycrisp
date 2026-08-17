@@ -481,6 +481,16 @@ test("model tool results retain readable output separately from bounded metadata
   assert.equal("startedAt" in message.details, false);
   assert.equal("completedAt" in message.details, false);
   assert.match(message.content[0].text, /full-output-remains-in-content/);
+
+  const boundedMemoryProjection = projectModelToolResult({
+    ...result,
+    action: { ...result.action, toolName: "memory.search" },
+    status: "complete",
+    output: { text: "x".repeat(20_000) },
+    error: undefined,
+  });
+  assert.match(boundedMemoryProjection.content[0].text, /Tool result truncated for model context/);
+  assert.ok(boundedMemoryProjection.content[0].text.length < 13_000);
 });
 
 test("tool runtime budget aborts a pending approval before any later spawn", async () => {

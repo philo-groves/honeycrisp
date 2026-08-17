@@ -3507,12 +3507,18 @@ async function createRuntimeConfig(args: {
     toolDescriptors.push(tool.descriptor);
   }
 
+  const modelToolCuration = curateRuntimeToolsForPrompt({
+    prompt: args.prompt,
+    executableTools,
+    toolDescriptors,
+  });
+
   return {
     events,
-    tools: toolDescriptors,
+    tools: modelToolCuration.toolDescriptors,
     toolRegistry:
-      executableTools.length > 0
-        ? createResearchToolRegistry(executableTools)
+      modelToolCuration.executableTools.length > 0
+        ? createResearchToolRegistry(modelToolCuration.executableTools)
         : undefined,
     skills,
     governance,
@@ -3524,11 +3530,12 @@ async function createRuntimeConfig(args: {
     capture: createRuntimeCapture({
       families,
       args: runtimeArgs,
-      tools: toolDescriptors,
+      tools: modelToolCuration.toolDescriptors,
       skills,
       governance,
       workspaceContext,
       toolConfigCapture: resolvedRuntimeTools.capture,
+      deferredToolNames: modelToolCuration.deferredToolNames,
       ...(mcpCapture ? { mcpCapture } : {}),
     }),
     ...(cleanupCallbacks.length > 0
@@ -3539,6 +3546,61 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   };
+}
+
+function curateRuntimeToolsForPrompt(input: {
+  prompt?: string | undefined;
+  executableTools: readonly ResearchExecutableTool[];
+  toolDescriptors: readonly ResearchToolDescriptor[];
+}): {
+  executableTools: ResearchExecutableTool[];
+  toolDescriptors: ResearchToolDescriptor[];
+  deferredToolNames: string[];
+} {
+  if (!input.prompt || explicitlyRequestsBealeManagement(input.prompt)) {
+    return {
+      executableTools: [...input.executableTools],
+      toolDescriptors: [...input.toolDescriptors],
+      deferredToolNames: [],
+    };
+  }
+
+  const deferredToolNames = input.toolDescriptors
+    .map((tool) => tool.name)
+    .filter(isBealeManagementToolName);
+  if (deferredToolNames.length === 0) {
+    return {
+      executableTools: [...input.executableTools],
+      toolDescriptors: [...input.toolDescriptors],
+      deferredToolNames,
+    };
+  }
+
+  const deferredNames = new Set(deferredToolNames);
+  return {
+    executableTools: input.executableTools.filter(
+      (tool) => !deferredNames.has(tool.descriptor.name),
+    ),
+    toolDescriptors: input.toolDescriptors.filter(
+      (tool) => !deferredNames.has(tool.name),
+    ),
+    deferredToolNames,
+  };
+}
+
+function isBealeManagementToolName(name: string): boolean {
+  return name.startsWith("mcp.beale-introspection.beale.")
+    || name.startsWith("mcp.beale.");
+}
+
+function explicitlyRequestsBealeManagement(prompt: string): boolean {
+  const normalized = prompt.replace(/\s+/g, " ");
+  return /\b(?:list|show|manage|open)\b.{0,40}\b(?:workspaces?|resources?|sessions?)\b/i.test(normalized)
+    || /\b(?:add|archive|create|delete|edit|forget|record|remove|save|update)\b.{0,40}\b(?:workspaces?|resources?)\b/i.test(normalized)
+    || /\b(?:launch|start|stop)\b.{0,40}\b(?:research )?sessions?\b/i.test(normalized)
+    || /\b(?:run|start|use)\b.{0,40}\b(?:dejunk|dream(?:ing)?)\b/i.test(normalized)
+    || /\b(?:dejunk|dream now)\b/i.test(normalized)
+    || /\bmcp\.beale(?:-introspection\.beale)?\./i.test(normalized);
 }
 
 async function resolveRuntimeToolConfig(input: {
@@ -3938,6 +4000,7 @@ function createRuntimeCapture(input: {
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
   toolConfigCapture: ResolvedRuntimeToolConfig["capture"];
+  deferredToolNames: readonly string[];
   mcpCapture?: Record<string, unknown>;
 }): Record<string, unknown> {
   const hostAuthorizedMcpServers = input.args.runtimeTools.allowedMcpServers;
@@ -3957,6 +4020,10 @@ function createRuntimeCapture(input: {
       artifactLocations: tool.artifactLocations ?? [],
       metadata: tool.metadata ?? {},
     })),
+    modelToolCuration: {
+      deferredToolNames: input.deferredToolNames,
+      visibleToolCount: input.tools.length,
+    },
     toolFamilies: {
       enabled: [...input.families],
       requested: input.args.runtimeTools.toolFamilies,

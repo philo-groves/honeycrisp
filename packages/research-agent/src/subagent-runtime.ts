@@ -183,6 +183,7 @@ const DEFAULT_MAX_DEPTH = 1;
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const MIN_WAIT_TIMEOUT_MS = 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60_000;
+const MAX_ROOM_PACKET_CONTENT_CHARACTERS = 6_000;
 const TASK_NAME_PATTERN = /^[a-z0-9_]+$/;
 const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const ROOM_PACKET_KINDS = ["independent_memo", "evidence", "challenge", "response", "outcome"] as const;
@@ -496,8 +497,17 @@ export class SubagentManager {
 
   private createRoomStatusTool(agentId: string): AgentTool {
     return this.collaborationTool(agentId, "room_status", "Room status", "Inspect room purpose, roster, protocol phase, and released structured packets.", {
-      type: "object", additionalProperties: false, properties: { room_name: { type: "string" } },
-    }, async (_toolCallId, input) => this.roomStatus(agentId, optionalString(input.room_name)));
+      type: "object", additionalProperties: false, properties: {
+        room_name: { type: "string" },
+        include_packets: { type: "boolean", description: "Defaults to false. Request released packets only when their content is needed." },
+        packet_cursor: { type: "number", minimum: 0, description: "With include_packets, return packets at or after this released-packet offset." },
+      },
+    }, async (_toolCallId, input) => this.roomStatus(
+      agentId,
+      optionalString(input.room_name),
+      input.include_packets === true,
+      optionalNonNegativeInteger(input.packet_cursor),
+    ));
   }
 
   private createRoomPublishTool(agentId: string): AgentTool {
@@ -508,7 +518,7 @@ export class SubagentManager {
       properties: {
         room_name: { type: "string", description: "Required for the lead; inferred for room members." },
         kind: { type: "string", enum: [...ROOM_PACKET_KINDS] },
-        content: { type: "string" },
+        content: { type: "string", maxLength: MAX_ROOM_PACKET_CONTENT_CHARACTERS },
         recipient: { type: "string", description: "Required peer target for a challenge." },
         evidence_refs: { type: "array", maxItems: 24, items: { type: "string" } },
         confidence: { type: "string", enum: [...ROOM_PACKET_CONFIDENCE] },
@@ -778,22 +788,35 @@ export class SubagentManager {
     return { delivered: true, target: target.path, triggered_turn: triggerTurn && wasIdle };
   }
 
-  private roomStatus(agentId: string, requestedRoom?: string): Record<string, unknown> {
+  private roomStatus(
+    agentId: string,
+    requestedRoom?: string,
+    includePackets = false,
+    packetCursor = 0,
+  ): Record<string, unknown> {
     const session = this.ensureSession(agentId);
     if (!requestedRoom && session.id === "root") {
-      return { rooms: [...this.rooms.values()].map((room) => this.roomSnapshot(room, agentId)) };
+      return {
+        rooms: [...this.rooms.values()].map((room) =>
+          this.roomToolView(room, agentId, { includePackets, packetCursor })
+        ),
+      };
     }
     const room = this.resolveRoom(session, requestedRoom);
     const visible = this.visiblePackets(room, session.id);
-    session.roomCursors.set(room.name, visible.length);
-    return this.roomSnapshot(room, agentId);
+    if (includePackets) session.roomCursors.set(room.name, visible.length);
+    return this.roomToolView(room, agentId, { includePackets, packetCursor });
   }
 
   private roomPublish(agentId: string, input: Record<string, unknown>): Record<string, unknown> {
     const session = this.ensureSession(agentId);
     const room = this.resolveRoom(session, optionalString(input.room_name));
     const kind = requiredRoomPacketKind(input.kind);
-    const content = requiredString(input.content, "content");
+    const content = requiredBoundedString(
+      input.content,
+      "content",
+      MAX_ROOM_PACKET_CONTENT_CHARACTERS,
+    );
     if (session.id === "root" && kind !== "outcome") throw new Error("The lead may only publish the room outcome.");
     if (session.id !== "root" && kind === "outcome") throw new Error("Only the lead may publish the room outcome.");
     if (kind === "outcome" && room.phase !== "synthesis") throw new Error(`Room ${room.name} is not ready for synthesis.`);
@@ -841,7 +864,7 @@ export class SubagentManager {
       this.advanceRoomPhase(room);
     }
     this.notifyActivity();
-    return { packet_id: packet.id, released: packet.released, room: this.roomSnapshot(room, session.id) };
+    return { packet_id: packet.id, released: packet.released, room: this.roomToolView(room, session.id) };
   }
 
   private async roomWait(agentId: string, requestedRoom?: string, requestedTimeout?: number): Promise<Record<string, unknown>> {
@@ -851,7 +874,7 @@ export class SubagentManager {
     const cursor = session.roomCursors.get(room.name) ?? 0;
     if (before.length > cursor || room.phase === "synthesis" || room.phase === "completed") {
       session.roomCursors.set(room.name, before.length);
-      return { timed_out: false, room: this.roomSnapshot(room, session.id), new_packets: before.slice(cursor).map(roomPacketView) };
+      return { timed_out: false, room: this.roomToolView(room, session.id), new_packets: before.slice(cursor).map(roomPacketView) };
     }
     const timeoutMs = requestedTimeout ?? DEFAULT_WAIT_TIMEOUT_MS;
     if (!Number.isFinite(timeoutMs) || timeoutMs < MIN_WAIT_TIMEOUT_MS || timeoutMs > MAX_WAIT_TIMEOUT_MS) {
@@ -866,7 +889,7 @@ export class SubagentManager {
     });
     const after = this.visiblePackets(room, session.id);
     session.roomCursors.set(room.name, after.length);
-    return { timed_out: !changed, room: this.roomSnapshot(room, session.id), new_packets: after.slice(cursor).map(roomPacketView) };
+    return { timed_out: !changed, room: this.roomToolView(room, session.id), new_packets: after.slice(cursor).map(roomPacketView) };
   }
 
   private resolveRoom(session: SubagentSession, requestedRoom?: string): CollaborationRoom {
@@ -917,7 +940,11 @@ export class SubagentManager {
         const member = this.ensureSession(memberId);
         if (member.status !== "completed" && member.status !== "interrupted") continue;
         if (!this.hasThreadCapacity()) break;
-        this.launch(member, `Room ${room.name} advanced to ${room.phase} phase. Review the simultaneously released peer packets with room_status, publish your ${requiredKind} packet, and use room_wait for the next phase.`, member.messages);
+        this.launch(
+          member,
+          `Room ${room.name} advanced to ${room.phase} phase. This is a clean phase context. Review released peer packets with room_status using include_packets=true, publish your ${requiredKind} packet, and use room_wait for the next phase.`,
+          [],
+        );
         void this.emitSessionActivity(member, { type: "followup", authorAgentPath: "/root", message: `Room advanced to ${room.phase}.` });
       }
     }
@@ -1073,6 +1100,43 @@ export class SubagentManager {
     });
     session.promise = promise;
     this.notifyActivity();
+  }
+
+  private roomToolView(
+    room: CollaborationRoom,
+    viewerId: string,
+    options: { includePackets?: boolean; packetCursor?: number } = {},
+  ): Record<string, unknown> {
+    const visible = this.visiblePackets(room, viewerId);
+    const packetCursor = Math.min(options.packetCursor ?? 0, visible.length);
+    return {
+      name: room.name,
+      title: room.title,
+      kind: room.kind,
+      purpose: room.purpose,
+      phase: room.phase,
+      challenge_round: room.challengeRound,
+      outcome: room.outcome,
+      members: room.memberIds.map((id) => {
+        const member = this.ensureSession(id);
+        return {
+          id: member.id,
+          path: member.path,
+          provider: member.provider,
+          model: member.model,
+          role: member.role,
+          status: member.status,
+        };
+      }),
+      released_packet_count: visible.length,
+      ...(options.includePackets
+        ? {
+            packet_cursor: packetCursor,
+            next_packet_cursor: visible.length,
+            packets: visible.slice(packetCursor).map(roomPacketView),
+          }
+        : {}),
+    };
   }
 
   private activeThreadCount(): number {
@@ -1464,12 +1528,27 @@ function requiredString(value: unknown, field: string): string {
   return value.trim();
 }
 
+function requiredBoundedString(value: unknown, field: string, maximumCharacters: number): string {
+  const normalized = requiredString(value, field);
+  if (normalized.length > maximumCharacters) {
+    throw new Error(`${field} must contain at most ${maximumCharacters} characters.`);
+  }
+  return normalized;
+}
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
+}
+
+function optionalNonNegativeInteger(value: unknown): number {
+  if (value === undefined) return 0;
+  const normalized = nonNegativeInteger(value);
+  if (normalized === undefined) throw new Error("packet_cursor must be a non-negative integer.");
+  return normalized;
 }
 
 function optionalReasoning(value: unknown): SimpleStreamOptions["reasoning"] | undefined {

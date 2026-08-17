@@ -139,6 +139,24 @@ export async function runResearchAgent(
   const memoryContext = input.memoryContext ?? [];
   const availableTools = createAvailableToolContext(tools);
   const modelSelectedSkills = createModelSkillContext(selectedSkills);
+  const contextMetrics = compiledContextMetrics({
+    prompt: input.prompt,
+    workspace: modelWorkspaceContext,
+    memory: memoryContext,
+    selectedSkills: modelSelectedSkills,
+    researchProfile: {
+      id: resolvedResearchProfile.profile.id,
+      version: resolvedResearchProfile.profile.version,
+      hash: resolvedResearchProfile.hash,
+      name: resolvedResearchProfile.profile.name,
+      workflow: researchWorkflow,
+      workspaceVocabulary: resolvedResearchProfile.profile.workspace,
+    },
+    researchIntent: input.researchIntent,
+    tools,
+    collaborationTools,
+    agentInstructions,
+  });
   const modelInput = {
     prompt: input.prompt,
     contextSections: [
@@ -190,6 +208,7 @@ export async function runResearchAgent(
         source: resolvedResearchProfile.source,
         workflowId: researchWorkflow.id,
       },
+      contextMetrics,
       summary: "Compiled model context for the research session.",
     },
   };
@@ -275,6 +294,52 @@ export async function runResearchAgent(
     response: agentRun.output.text,
     finalDisposition,
   };
+}
+
+function compiledContextMetrics(input: {
+  prompt: string;
+  workspace: unknown;
+  memory: readonly unknown[];
+  selectedSkills: readonly unknown[];
+  researchProfile: unknown;
+  researchIntent: ResearchRunIntent | undefined;
+  tools: readonly ResearchToolDescriptor[];
+  collaborationTools: readonly ResearchCollaborationToolDescriptor[];
+  agentInstructions: ResearchAgentInstructions;
+}): Record<string, unknown> {
+  const sections = {
+    request: serializedCharacters(input.prompt),
+    workspace: serializedCharacters(input.workspace),
+    memory: serializedCharacters(input.memory),
+    selectedSkills: serializedCharacters(input.selectedSkills),
+    researchProfile: serializedCharacters(input.researchProfile),
+    researchIntent: serializedCharacters(input.researchIntent),
+    toolDefinitions: serializedCharacters(input.tools),
+    collaborationToolDefinitions: serializedCharacters(input.collaborationTools),
+    agentInstructions: serializedCharacters(input.agentInstructions.content),
+  };
+  return {
+    characters: Object.values(sections).reduce((total, characters) => total + characters, 0),
+    estimatedTokens: Math.ceil(
+      Object.values(sections).reduce((total, characters) => total + characters, 0) / 4,
+    ),
+    sections,
+    counts: {
+      memoryNodes: input.memory.length,
+      selectedSkills: input.selectedSkills.length,
+      tools: input.tools.length,
+      collaborationTools: input.collaborationTools.length,
+    },
+  };
+}
+
+function serializedCharacters(value: unknown): number {
+  if (value === undefined) return 0;
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return String(value).length;
+  }
 }
 
 function hasResearchIntent(intent: ResearchRunIntent | undefined): intent is ResearchRunIntent {

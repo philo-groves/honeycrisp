@@ -22,6 +22,7 @@ export type ResearchToolExecutionStatus = "complete" | "error" | "blocked";
 
 export interface ResearchToolExecutionContext {
   signal?: AbortSignal;
+  agentId?: string;
 }
 
 export interface ResearchToolValidationHookInput {
@@ -68,7 +69,13 @@ export interface ModelToolResultProjection {
   isError: boolean;
 }
 
-const MODEL_TOOL_RESULT_MAX_CHARS = 48_000;
+const DEFAULT_MODEL_TOOL_RESULT_MAX_CHARS = 32_000;
+const MODEL_TOOL_RESULT_MAX_CHARS_BY_TOOL = new Map<string, number>([
+  ["memory.search", 12_000],
+  ["repository.search", 16_000],
+  ["file.read", 24_000],
+  ["shell.run", 24_000],
+]);
 
 export interface ResearchExecutableTool {
   descriptor: ResearchToolDescriptor;
@@ -365,7 +372,7 @@ export function projectModelToolResult(
     content: [
       {
         type: "text",
-        text: truncateModelToolResult(serialized),
+        text: truncateModelToolResult(serialized, result.action.toolName),
       },
     ],
     details: modelToolResultDetails(projectedResult),
@@ -933,12 +940,14 @@ function projectShellToolOutput(output: unknown): unknown {
   return projected;
 }
 
-function truncateModelToolResult(text: string): string {
-  if (text.length <= MODEL_TOOL_RESULT_MAX_CHARS) return text;
-  const half = Math.floor(MODEL_TOOL_RESULT_MAX_CHARS / 2);
+function truncateModelToolResult(text: string, toolName: string): string {
+  const maxCharacters = MODEL_TOOL_RESULT_MAX_CHARS_BY_TOOL.get(toolName)
+    ?? DEFAULT_MODEL_TOOL_RESULT_MAX_CHARS;
+  if (text.length <= maxCharacters) return text;
+  const half = Math.floor(maxCharacters / 2);
   return [
     text.slice(0, half),
-    `\n\n[Tool result truncated for model context: ${text.length - MODEL_TOOL_RESULT_MAX_CHARS} characters omitted. Re-run a narrower command if the omitted section is needed.]\n\n`,
+    `\n\n[Tool result truncated for model context: ${text.length - maxCharacters} characters omitted. Re-run a narrower command if the omitted section is needed.]\n\n`,
     text.slice(-half),
   ].join("");
 }

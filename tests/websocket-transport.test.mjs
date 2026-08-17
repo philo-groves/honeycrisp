@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -153,7 +154,7 @@ test("runtime CLI completes a mock run entirely over the WebSocket transport", a
   temporaryDirectories.push(directory);
   const capturePath = join(directory, "capture.json");
   const child = spawn(process.execPath, [
-    new URL("../packages/cli/dist/cli.js", import.meta.url).pathname,
+    fileURLToPath(new URL("../packages/cli/dist/cli.js", import.meta.url)),
     "--mock",
     "--websocket-transport",
     "--session-id",
@@ -173,7 +174,13 @@ test("runtime CLI completes a mock run entirely over the WebSocket transport", a
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const bootstrap = await readBootstrap(child.stdout);
+  const childCompletion = waitForChild(child);
+  const bootstrap = await Promise.race([
+    readBootstrap(child.stdout),
+    childCompletion.then(({ code, stderr }) => {
+      throw new Error(`Honeycrisp exited before WebSocket bootstrap (${code}): ${stderr}`);
+    }),
+  ]);
   const socket = new WebSocket(bootstrap.url, {
     headers: { authorization: "Bearer runtime-test-token" },
   });
@@ -190,7 +197,7 @@ test("runtime CLI completes a mock run entirely over the WebSocket transport", a
     client: { name: "runtime-test", version: "1" },
   }));
 
-  const { code, stderr } = await waitForChild(child);
+  const { code, stderr } = await childCompletion;
   assert.equal(code, 0, stderr);
   assert.equal(existsSync(capturePath), true);
   assert.equal(messages.some((message) => message.type === "server.hello"), true);

@@ -134,15 +134,41 @@ test("memory context prioritizes current memberships and relevant subject knowle
     "mem_subject_zftp",
     "mem_workspace_parser",
   ]);
-  assert.equal(context[0].evidence[0].path, "Src/Modules/zftp.c");
-  assert.deepEqual(context[0].relationships[0], {
+  assert.deepEqual(context[0].evidenceRefs, [{
+    id: "evidence_zftp",
+    kind: "code",
+  }]);
+  assert.equal(context[0].evidenceCount, 1);
+  assert.equal(context[0].relationshipCount, 1);
+  assert.deepEqual(context[0].relatedMemoryIds, ["mem_subject_zftp"]);
+  assert.equal(context[0].scope, undefined);
+  assert.equal(context[0].body, undefined);
+  assert.ok(!context.some((node) => node.id === "mem_subject_mdns"));
+
+  const fullContext = selectMemoryModelContext({
+    nodes,
+    edges: [{
+      fromId: "mem_session_zftp",
+      toId: "mem_subject_zftp",
+      relation: "depends_on",
+      note: "The candidate crosses this invariant.",
+      createdAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-20T12:00:00.000Z",
+    }],
+    prompt: "Continue vulnerability research on the ZFTP allocation boundary.",
+    sessionId: "run_zftp",
+    workspaceId: "workspace_zsh",
+    maxNodes: 1,
+    detail: "full",
+  });
+  assert.equal(fullContext[0].evidence[0].path, "Src/Modules/zftp.c");
+  assert.deepEqual(fullContext[0].relationships[0], {
     direction: "outgoing",
     relation: "depends_on",
     memoryId: "mem_subject_zftp",
     note: "The candidate crosses this invariant.",
   });
-  assert.ok(!context.some((node) => node.id === "mem_subject_mdns"));
-  assert.deepEqual(context[0].scope, {
+  assert.deepEqual(fullContext[0].scope, {
     sessions: ["run_zftp"],
     workspaces: [{ id: "workspace_zsh", name: "Zsh" }],
     subject: { id: "subject_apple", name: "Apple" },

@@ -444,9 +444,16 @@ test("main CLI injects relevant graph memory without storage or tool-policy prom
     "research_profile",
   ]);
   assert.equal(memorySection.content[0].id, memory.id);
-  assert.equal(memorySection.content[0].evidence[0].path, "Src/Modules/zftp.c");
+  assert.deepEqual(memorySection.content[0].evidenceRefs, [{
+    id: memory.evidence[0].id,
+    kind: "code",
+  }]);
+  assert.equal(memorySection.content[0].evidenceCount, 1);
+  assert.equal("evidence" in memorySection.content[0], false);
   assert.equal("storage" in contextEvent.payload, false);
   assert.equal("toolPermissions" in contextEvent.payload, false);
+  assert.equal(contextEvent.payload.contextMetrics.counts.memoryNodes, 1);
+  assert.ok(contextEvent.payload.contextMetrics.sections.memory > 0);
   assert.ok(contextEvent.payload.availableTools.some((tool) => tool.name === "memory.search"));
 });
 
@@ -905,6 +912,68 @@ test("tools CLI discovers configured live MCP servers", async () => {
   }
 });
 
+test("research runs defer Beale management tools until the prompt requests them", async () => {
+  const fixture = await createCliMcpFixture("beale-introspection.beale");
+  const authFile = await createEmptyAuthFilePath();
+  const researchCapturePath = join(fixture.root, "research-capture.json");
+  const managementCapturePath = join(fixture.root, "management-capture.json");
+  try {
+    const research = runTopCli([
+      "--mock",
+      "--capture",
+      researchCapturePath,
+      "--workspace-root",
+      fixture.root,
+      "--mcp-config",
+      fixture.configPath,
+      "--allow-mcp-server",
+      "beale-introspection.beale",
+      "-p",
+      "Inspect the parser boundary using the available workspace resources for memory safety issues.",
+    ], { HONEYCRISP_AUTH_FILE: authFile });
+    assert.equal(research.status, 0, research.stderr);
+    const researchCapture = JSON.parse(await readFile(researchCapturePath, "utf8"));
+    assert.equal(
+      researchCapture.runtimeConfig.tools.some((tool) => tool.name === "mcp.beale-introspection.beale.echo_search"),
+      false,
+    );
+    assert.deepEqual(
+      researchCapture.runtimeConfig.modelToolCuration.deferredToolNames,
+      ["mcp.beale-introspection.beale.echo_search"],
+    );
+    assert.ok(
+      researchCapture.runtimeConfig.mcp.discoveredCapabilities.some(
+        (tool) => tool.name === "mcp.beale-introspection.beale.echo_search",
+      ),
+    );
+
+    const management = runTopCli([
+      "--mock",
+      "--capture",
+      managementCapturePath,
+      "--workspace-root",
+      fixture.root,
+      "--mcp-config",
+      fixture.configPath,
+      "--allow-mcp-server",
+      "beale-introspection.beale",
+      "-p",
+      "List the workspace resources for this research session.",
+    ], { HONEYCRISP_AUTH_FILE: authFile });
+    assert.equal(management.status, 0, management.stderr);
+    const managementCapture = JSON.parse(await readFile(managementCapturePath, "utf8"));
+    assert.ok(
+      managementCapture.runtimeConfig.tools.some((tool) => tool.name === "mcp.beale-introspection.beale.echo_search"),
+    );
+    assert.deepEqual(
+      managementCapture.runtimeConfig.modelToolCuration.deferredToolNames,
+      [],
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("main CLI capture includes runtime tool and skill configuration", async () => {
   const authFile = await createEmptyAuthFilePath();
   const repoRoot = await mkdtemp(join(tmpdir(), "honeycrisp-capture-repo-"));
@@ -1089,7 +1158,7 @@ async function createCliSkillFixture() {
   return root;
 }
 
-async function createCliMcpFixture() {
+async function createCliMcpFixture(serverName = "fixture") {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-cli-mcp-"));
   const serverPath = join(root, "fixture-mcp.mjs");
   const configPath = join(root, "mcp.json");
@@ -1097,10 +1166,10 @@ async function createCliMcpFixture() {
   await writeFile(
     configPath,
     JSON.stringify({
-      allowedServers: ["fixture"],
+      allowedServers: [serverName],
       timeoutMs: 1000,
       servers: {
-        fixture: {
+        [serverName]: {
           command: process.execPath,
           args: [serverPath],
         },

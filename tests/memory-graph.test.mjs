@@ -133,7 +133,9 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     const searchDescriptor = descriptors.find((tool) => tool.name === "memory.search");
     const saveDescriptor = descriptors.find((tool) => tool.name === "memory.save");
     assert.match(searchDescriptor.description, /current workspace by default/);
+    assert.match(searchDescriptor.description, /compact cards/);
     assert.match(searchDescriptor.inputSchema.properties.scope.description, /Defaults to workspace/);
+    assert.equal(searchDescriptor.inputSchema.properties.limit.maximum, 25);
     assert.match(saveDescriptor.description, /refined in place/);
     assert.equal("tier" in saveDescriptor.inputSchema.properties, false);
     const saveSchema = saveDescriptor.inputSchema;
@@ -191,6 +193,60 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
       createdAt: linked.result.output.createdAt,
       updatedAt: linked.result.output.updatedAt,
     });
+
+    const firstSearch = await registry.execute({
+      id: "search_flow_first",
+      actionClass: "recall",
+      toolName: "memory.search",
+      input: { query: "request template", limit: 8 },
+    }, { agentId: "root" });
+    assert.equal(firstSearch.result.status, "complete");
+    assert.equal(firstSearch.result.output.detail, "summary");
+    assert.equal(firstSearch.result.output.unchangedReferenceCount, 0);
+    assert.ok(firstSearch.result.output.results.length > 0);
+    assert.ok(firstSearch.result.output.results.every((result) => result.detail === "summary"));
+    assert.ok(firstSearch.result.output.results.every((result) => !("body" in result)));
+    assert.ok(firstSearch.result.output.results.every((result) => !("attributes" in result)));
+
+    const repeatedSearch = await registry.execute({
+      id: "search_flow_repeated",
+      actionClass: "recall",
+      toolName: "memory.search",
+      input: { query: "request template", limit: 8 },
+    }, { agentId: "root" });
+    assert.equal(
+      repeatedSearch.result.output.unchangedReferenceCount,
+      repeatedSearch.result.output.resultCount,
+    );
+    assert.ok(repeatedSearch.result.output.results.every((result) => result.detail === "reference"));
+
+    const peerSearch = await registry.execute({
+      id: "search_flow_peer",
+      actionClass: "recall",
+      toolName: "memory.search",
+      input: { query: "request template", limit: 8 },
+    }, { agentId: "peer" });
+    assert.ok(peerSearch.result.output.results.every((result) => result.detail === "summary"));
+
+    const fullMemory = await registry.execute({
+      id: "get_flow_source",
+      actionClass: "recall",
+      toolName: "memory.get",
+      input: { id: source.result.output.id },
+    }, { agentId: "root" });
+    assert.equal(fullMemory.result.output.id, source.result.output.id);
+    assert.deepEqual(fullMemory.result.output.attributes, { role: "source" });
+    assert.deepEqual(fullMemory.result.output.relationships.map((relationship) => ({
+      direction: relationship.direction,
+      relation: relationship.relation,
+      memoryId: relationship.memoryId,
+      note: relationship.note,
+    })), [{
+      direction: "outgoing",
+      relation: "flows_to",
+      memoryId: sink.result.output.id,
+      note: "Unescaped path",
+    }]);
   } finally {
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });

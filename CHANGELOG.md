@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Model context now starts with at most eight compact memory cards under a 6,000-character budget; `memory.search` returns bounded summary cards, collapses unchanged per-agent results to references, and reserves complete bodies, attributes, evidence, and relationships for `memory.get`.
+- Collaboration rooms now use clean context at protocol-phase boundaries and summary-first status, publish, and wait results with explicit packet cursors. Model-facing room packet content is capped at 6,000 characters.
+- Ordinary research prompts now defer Beale workspace, session, resource, and maintenance MCP tools unless the request explicitly asks for those management capabilities. Tool outputs use smaller model-facing limits, and active context compacts proactively near 96,000 estimated tokens.
 - Session summary DTOs now include bounded aggregate token usage derived from model-session update events without hydrating full event histories.
 - Security 1.7.0 and Mathematics 1.5.0 now expose eight active memory types. Security replaces new Source and Sink records with role-classified Flow Endpoints, retires Historical Bug and Procedure, and includes compatible retired rows when searching their replacement types; retired IDs remain readable but are omitted from model-facing catalogs.
 - Session persistence now transactionally migrates embedded event timelines and capture bodies into individually SHA-256-verified rows. Lifecycle documents remain bounded, live event appends no longer rewrite prior history, and cursor/summary reads avoid hydrating data they do not return.
@@ -13,6 +16,7 @@
 
 ### Added
 
+- Added context-composition telemetry for startup sections and every model request, including bounded character, estimated-token, role, message, and tool-definition counts without recording hidden instruction content.
 - Added protocol-v1 operations and exported harness services for auxiliary model-job resolution, provider semantics and completion, source inspection/materialization, Agent Plugin registry/runtime assembly, and workspace Dejunk maintenance.
 - Added protocol-v1 operations for workspace memory summaries, complete Memory Dreaming preparation and reversible state management, runbook/report document reads, and manifest-backed artifact resolution so non-Beale clients can use the same Honeycrisp-owned boundary.
 - Added Honeycrisp-owned revisioned session aggregates with transactional capture import, lifecycle transitions, live-event persistence, and versioned CLI create/query operations.

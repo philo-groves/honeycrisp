@@ -122,13 +122,37 @@ test("agent context compacts old bulky tool results while preserving the task an
   );
 });
 
+test("agent context compacts proactively before a large model window is exhausted", () => {
+  const messages = [{ role: "user", content: "Long-running research objective", timestamp: Date.now() }];
+  for (let index = 0; index < 16; index += 1) {
+    messages.push(assistant(
+      toolCall("fixture_inspect", { path: `${index}.c` }, `proactive_${index}`),
+      "toolUse",
+    ));
+    messages.push({
+      role: "toolResult",
+      toolCallId: `proactive_${index}`,
+      toolName: "fixture_inspect",
+      content: [{ type: "text", text: `${index === 15 ? "LATEST_PROACTIVE_RESULT\n" : ""}${"x".repeat(30_000)}` }],
+      details: { summary: `Inspected ${index}.c.` },
+      isError: false,
+      timestamp: Date.now(),
+    });
+  }
+
+  const compacted = compactAgentContext(messages, 400_000);
+  assert.notEqual(compacted, messages);
+  assert.match(JSON.stringify(compacted), /LATEST_PROACTIVE_RESULT/);
+  assert.match(JSON.stringify(compacted), /output compacted for context/);
+});
+
 test("OpenAI Responses requests enable native compaction before local context fallback", () => {
   const compacted = applyNativeOpenAiCompaction(
     { model: "gpt-5.4", input: [] },
     { api: "openai-responses", contextWindow: 400_000 },
   );
   assert.deepEqual(compacted.context_management, [
-    { type: "compaction", compact_threshold: 200_000 },
+    { type: "compaction", compact_threshold: 96_000 },
   ]);
 
   const unsupported = { model: "faux-model", input: [] };
@@ -2115,10 +2139,16 @@ test("Pi Agent executor streams live thought and phased message events", async (
     ],
   );
   assert.equal(result.agentRun.output.text, "## Result\nPrepared parser inspection plan.");
-  assert.equal(agentEvents.length, 1);
-  assert.equal(agentEvents[0].payload.type, "turn_completed");
-  assert.equal(agentEvents[0].payload.turn, 1);
-  assert.deepEqual(agentEvents[0].payload.usage, { ...ZERO_USAGE, cacheHitRate: 0 });
+  const contextComposed = agentEvents.find((event) => event.payload.type === "context_composed");
+  assert.equal(contextComposed.payload.phase, "model_request");
+  assert.equal(contextComposed.payload.turn, 1);
+  assert.ok(contextComposed.payload.estimatedTokens > 0);
+  assert.ok(contextComposed.payload.systemPromptCharacters > 0);
+  assert.ok(contextComposed.payload.messageCount > 0);
+  assert.ok(contextComposed.payload.toolCount >= COLLABORATION_TOOL_NAMES.length);
+  const turnCompleted = agentEvents.find((event) => event.payload.type === "turn_completed");
+  assert.equal(turnCompleted.payload.turn, 1);
+  assert.deepEqual(turnCompleted.payload.usage, { ...ZERO_USAGE, cacheHitRate: 0 });
 });
 
 test("Pi Agent rejects a terminal response that contains commentary without a final answer", async () => {

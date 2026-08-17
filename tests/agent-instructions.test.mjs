@@ -159,6 +159,12 @@ test("research bootstrap automatically discovers workspace AGENTS guidance for m
     const contextEvent = result.events.find((event) => event.kind === "context.compiled");
     assert.ok(contextEvent);
     assert.doesNotMatch(JSON.stringify(contextEvent.payload.agentInstructions), /fixture VM/);
+    assert.ok(contextEvent.payload.contextMetrics.estimatedTokens > 0);
+    assert.ok(contextEvent.payload.contextMetrics.sections.agentInstructions > 0);
+    assert.equal(
+      contextEvent.payload.contextMetrics.counts.collaborationTools,
+      result.collaborationTools.length,
+    );
     assert.doesNotMatch(JSON.stringify(createResearchAgentFlowCapture(result)), /fixture VM/);
   } finally {
     rmSync(fixture, { recursive: true, force: true });

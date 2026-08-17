@@ -115,7 +115,8 @@ export interface CreatePiAgentExecutorOptions {
 
 const MODEL_CONTEXT_RESERVE_TOKENS = 32_768;
 const NATIVE_COMPACTION_RESERVE_TOKENS = 64_000;
-const DEFAULT_NATIVE_COMPACTION_THRESHOLD = 200_000;
+const DEFAULT_NATIVE_COMPACTION_THRESHOLD = 96_000;
+const PROACTIVE_ACTIVE_CONTEXT_TOKENS = 96_000;
 const MIN_ACTIVE_CONTEXT_TOKENS = 32_000;
 const RECENT_TOOL_RESULTS_TO_KEEP = 8;
 const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
@@ -472,6 +473,7 @@ export function createPiAgentExecutor(
           return next;
         };
         const researchTools = createAgentTools({
+          agentId: request.id,
           toolRegistry: options.toolRegistry,
           governance: input.governance,
           reserveToolCall,
@@ -520,6 +522,12 @@ export function createPiAgentExecutor(
         };
         const dynamicStreamFn: StreamFn = (_model, context, streamOptions) => {
           const active = activeModelSelection();
+          void emitRuntimeEvent({
+            type: "context_composed",
+            phase: "model_request",
+            turn: currentTurn,
+            ...agentContextCompositionMetrics(context),
+          });
           const routedModel = authenticationRouter.routePiModel(models, active.model.provider, active.model.id);
           if (!routedModel) {
             throw new Error(`Unknown routed model ${active.model.provider}/${active.model.id}`);
@@ -1687,6 +1695,7 @@ function createUserMessage(modelInput: ResearchAgentModelInput): Message {
 }
 
 function createAgentTools(input: {
+  agentId: string;
   toolRegistry: ResearchToolRegistry | undefined;
   governance: ResearchAgentExecutionInput["governance"];
   reserveToolCall(toolCallId: string): number;
@@ -1727,6 +1736,7 @@ function createAgentTools(input: {
           };
           const runtimeControlTool = RUNTIME_CONTROL_TOOL_NAMES.has(toolCall.name);
           const executionOptions = {
+            agentId: input.agentId,
             ...(!runtimeControlTool && input.governance ? { governance: input.governance } : {}),
             toolCallCount: runtimeControlTool ? 0 : input.reserveToolCall(toolCallId),
             ...(signal ? { signal } : {}),
@@ -2036,8 +2046,11 @@ export function compactAgentContext(
 ): AgentMessage[] {
   const highWaterTokens = Math.max(
     MIN_ACTIVE_CONTEXT_TOKENS,
-    (Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : 128_000)
-      - MODEL_CONTEXT_RESERVE_TOKENS,
+    Math.min(
+      PROACTIVE_ACTIVE_CONTEXT_TOKENS,
+      (Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : 128_000)
+        - MODEL_CONTEXT_RESERVE_TOKENS,
+    ),
   );
   const lowWaterTokens = Math.max(
     MIN_ACTIVE_CONTEXT_TOKENS,
@@ -2140,6 +2153,53 @@ function compactToolResultMessage(message: AgentMessage): AgentMessage {
 
 function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateTokens(message), 0);
+}
+
+function agentContextCompositionMetrics(
+  context: Parameters<StreamFn>[1],
+): Record<string, unknown> {
+  const systemPromptCharacters = typeof context.systemPrompt === "string"
+    ? context.systemPrompt.length
+    : 0;
+  const messageCharactersByRole: Record<string, number> = {};
+  const messageCountsByRole: Record<string, number> = {};
+  let messageCharacters = 0;
+  let messageTokens = 0;
+  for (const message of context.messages) {
+    const role = typeof message.role === "string" ? message.role : "unknown";
+    const characters = serializedContextCharacters(message);
+    messageCharacters += characters;
+    messageTokens += estimateTokens(message);
+    messageCharactersByRole[role] = (messageCharactersByRole[role] ?? 0) + characters;
+    messageCountsByRole[role] = (messageCountsByRole[role] ?? 0) + 1;
+  }
+  const toolDefinitionCharacters = serializedContextCharacters(
+    (context.tools ?? []).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    })),
+  );
+  const fixedCharacters = systemPromptCharacters + toolDefinitionCharacters;
+  return {
+    estimatedTokens: messageTokens + Math.ceil(fixedCharacters / 4),
+    characters: messageCharacters + fixedCharacters,
+    messageCharacters,
+    systemPromptCharacters,
+    toolDefinitionCharacters,
+    messageCharactersByRole,
+    messageCountsByRole,
+    messageCount: context.messages.length,
+    toolCount: context.tools?.length ?? 0,
+  };
+}
+
+function serializedContextCharacters(value: unknown): number {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return String(value).length;
+  }
 }
 
 function assistantText(

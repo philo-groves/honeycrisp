@@ -489,8 +489,8 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       { id: "reaches", name: "Reaches", description: "The source can reach the target operation or state." },
       { id: "mitigates", name: "Mitigates", description: "The source constrains or prevents the target." },
     ],
-    defaultNodeLimit: 12,
-    defaultCharacterBudget: 24_000,
+    defaultNodeLimit: 8,
+    defaultCharacterBudget: 6_000,
   },
   workflows: [
     {

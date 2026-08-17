@@ -214,13 +214,28 @@ test("subagent runtime creates heterogeneous rooms atomically", async () => {
   await assert.rejects(explorer.room_publish.execute("invalid_confidence", {
     kind: "independent_memo", content: "Invalid confidence must not be stored.", confidence: "certain",
   }), /Unsupported room packet confidence/);
+  await assert.rejects(explorer.room_publish.execute("oversized_packet", {
+    kind: "independent_memo", content: "x".repeat(6_001), confidence: "medium",
+  }), /at most 6000 characters/);
   await explorer.room_publish.execute("explorer_memo", { kind: "independent_memo", content: "Length reaches the allocation.", evidence_refs: ["code:parser:41"], confidence: "high", uncertainty: "Caller validation is unresolved.", next_experiment: "Exercise the maximum accepted length." });
   const blind = await skeptic.room_status.execute("skeptic_blind", {});
-  assert.equal(blind.details.packets.length, 0);
+  assert.equal(blind.details.released_packet_count, 0);
+  assert.equal("packets" in blind.details, false);
+  const expandedBlind = await skeptic.room_status.execute("skeptic_blind_expanded", { include_packets: true });
+  assert.equal(expandedBlind.details.packets.length, 0);
   await skeptic.room_publish.execute("skeptic_memo", { kind: "independent_memo", content: "The caller may cap the length.", evidence_refs: ["code:caller:18"], confidence: "medium", uncertainty: "Alternate entry points are unreviewed.", next_experiment: "Enumerate all parser callers." });
   const releasedMemos = await explorer.room_status.execute("released_memos", {});
   assert.equal(releasedMemos.details.phase, "challenge");
-  assert.equal(releasedMemos.details.packets.length, 2);
+  assert.equal(releasedMemos.details.released_packet_count, 2);
+  assert.equal("packets" in releasedMemos.details, false);
+  const expandedMemos = await explorer.room_status.execute("released_memos_expanded", { include_packets: true });
+  assert.equal(expandedMemos.details.packets.length, 2);
+  assert.equal(expandedMemos.details.next_packet_cursor, 2);
+  const unchangedMemos = await explorer.room_status.execute("released_memos_unchanged", {
+    include_packets: true,
+    packet_cursor: expandedMemos.details.next_packet_cursor,
+  });
+  assert.deepEqual(unchangedMemos.details.packets, []);
 
   await explorer.room_publish.execute("explorer_challenge", { kind: "challenge", recipient: "/root/skeptic", content: "Does the cap cover the streaming entry point?" });
   await skeptic.room_publish.execute("skeptic_challenge", { kind: "challenge", recipient: "/root/explorer", content: "Show the exact allocation mismatch." });

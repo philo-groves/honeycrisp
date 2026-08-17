@@ -14,9 +14,14 @@ import type {
   ResearchWorkspaceRepositoryContext,
 } from "./types.js";
 
-const DEFAULT_MEMORY_NODE_LIMIT = 12;
-const DEFAULT_MEMORY_CHARACTER_BUDGET = 24_000;
+const DEFAULT_MEMORY_NODE_LIMIT = 8;
+const DEFAULT_MEMORY_CHARACTER_BUDGET = 6_000;
 const MAX_BODY_CHARACTERS = 3_000;
+const MAX_CARD_TITLE_CHARACTERS = 240;
+const MAX_CARD_SUMMARY_CHARACTERS = 700;
+const MAX_CARD_TAGS = 6;
+const MAX_CARD_EVIDENCE_REFS = 3;
+const MAX_CARD_RELATIONSHIPS = 4;
 const MAX_RELATIONSHIPS_PER_NODE = 8;
 const MAX_EVIDENCE_REFS_PER_NODE = 8;
 
@@ -63,7 +68,7 @@ export interface ResearchModelMemoryRelationship {
 
 export interface ResearchModelMemoryContextNode {
   id: string;
-  scope: {
+  scope?: {
     sessions: readonly string[];
     workspaces: readonly { id: string; name: string }[];
     subject: { id: string; name: string };
@@ -74,11 +79,15 @@ export interface ResearchModelMemoryContextNode {
   body?: string;
   status: MemoryNode["status"];
   confidence: number;
-  assetIds: readonly string[];
-  tags: readonly string[];
+  assetIds?: readonly string[];
+  tags?: readonly string[];
   attributes?: Record<string, unknown>;
-  evidence: readonly MemoryEvidenceRef[];
-  relationships: readonly ResearchModelMemoryRelationship[];
+  evidence?: readonly MemoryEvidenceRef[];
+  relationships?: readonly ResearchModelMemoryRelationship[];
+  evidenceRefs?: readonly Pick<MemoryEvidenceRef, "id" | "kind">[];
+  evidenceCount: number;
+  relationshipCount: number;
+  relatedMemoryIds?: readonly string[];
   provenance?: {
     state: MemoryNode["provenance"]["state"];
     catalogHash: string | null;
@@ -162,6 +171,7 @@ export function compileMemoryModelContext(
   options: {
     maxNodes?: number;
     maxCharacters?: number;
+    detail?: "summary" | "full";
   } = {},
 ): ResearchModelMemoryContextNode[] {
   const profileMemory = store.getProfileMemory();
@@ -183,6 +193,7 @@ export function compileMemoryModelContext(
     ...(current.sessionId ? { sessionId: current.sessionId } : {}),
     workspaceId: current.workspaceId,
     profileMemory,
+    ...(options.detail ? { detail: options.detail } : {}),
     ...options,
   });
 }
@@ -196,6 +207,7 @@ export function selectMemoryModelContext(input: {
   sessionId?: string;
   workspaceId?: string;
   profileMemory?: ResearchProfileMemory;
+  detail?: "summary" | "full";
 }): ResearchModelMemoryContextNode[] {
   const profileMemory = input.profileMemory ?? DEFAULT_SECURITY_RESEARCH_PROFILE.memory;
   const maxNodes = clampInteger(
@@ -247,7 +259,7 @@ export function selectMemoryModelContext(input: {
   let usedCharacters = 2;
   for (const node of ranked) {
     if (selected.length >= maxNodes) break;
-    const projected = projectMemoryNode(node, input.edges, false);
+    const projected = projectMemoryNode(node, input.edges, input.detail !== "full");
     const projectedSize = JSON.stringify(projected).length + 1;
     if (usedCharacters + projectedSize <= maxCharacters) {
       selected.push(projected);
@@ -271,6 +283,36 @@ function projectMemoryNode(
   compact: boolean,
 ): ResearchModelMemoryContextNode {
   const attributes = Object.keys(node.attributes).length > 0 ? node.attributes : undefined;
+  const relationships = relationshipsForNode(node.id, edges);
+  if (compact) {
+    return {
+      id: node.id,
+      type: node.type,
+      title: truncate(node.title, MAX_CARD_TITLE_CHARACTERS),
+      summary: truncate(node.summary, MAX_CARD_SUMMARY_CHARACTERS),
+      status: node.status,
+      confidence: node.confidence,
+      ...(node.tags.length > 0 ? { tags: node.tags.slice(0, MAX_CARD_TAGS) } : {}),
+      ...(node.evidence.length > 0
+        ? {
+            evidenceRefs: node.evidence
+              .slice(0, MAX_CARD_EVIDENCE_REFS)
+              .map(({ id, kind }) => ({ id, kind })),
+          }
+        : {}),
+      evidenceCount: node.evidence.length,
+      relationshipCount: relationships.length,
+      ...(relationships.length > 0
+        ? {
+            relatedMemoryIds: [...new Set(
+              relationships.slice(0, MAX_CARD_RELATIONSHIPS).map((relationship) => relationship.memoryId),
+            )],
+          }
+        : {}),
+      updatedAt: node.updatedAt,
+      revision: node.revision,
+    };
+  }
   return {
     id: node.id,
     scope: {
@@ -288,12 +330,11 @@ function projectMemoryNode(
     confidence: node.confidence,
     assetIds: node.assetIds,
     tags: node.tags,
-    ...(!compact && attributes ? { attributes } : {}),
-    evidence: node.evidence.slice(0, compact ? 4 : MAX_EVIDENCE_REFS_PER_NODE),
-    relationships: relationshipsForNode(node.id, edges).slice(
-      0,
-      compact ? 4 : MAX_RELATIONSHIPS_PER_NODE,
-    ),
+    ...(attributes ? { attributes } : {}),
+    evidence: node.evidence.slice(0, MAX_EVIDENCE_REFS_PER_NODE),
+    relationships: relationships.slice(0, MAX_RELATIONSHIPS_PER_NODE),
+    evidenceCount: node.evidence.length,
+    relationshipCount: relationships.length,
     ...(node.provenance
       ? {
           provenance: {
