@@ -164,6 +164,15 @@ test("session summary lists stay bounded when canonical sessions contain large e
       summary: "Large event",
       payload: { output: "x".repeat(2 * 1024 * 1024) },
     });
+    store.create({
+      id: "session_other_summary_workspace",
+      workspaceId: "workspace_other_summary",
+      attemptId: "attempt_other_summary_workspace",
+      title: "Other workspace",
+      prompt: "Batch workspace catalogs.",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
   } finally {
     store.close();
   }
@@ -177,6 +186,20 @@ test("session summary lists stay bounded when canonical sessions contain large e
   assert.equal(Object.hasOwn(listed.result[0], "events"), false);
   assert.equal(Object.hasOwn(listed.result[0], "finalResponse"), false);
   assert.equal(Object.hasOwn(listed.result[0].attempts[0], "capture"), false);
+
+  const batched = runCli(
+    [
+      "session", "list-summaries",
+      "--workspace-id", "workspace_summary",
+      "--workspace-id", "workspace_other_summary",
+      "--json",
+    ],
+    { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+  );
+  assert.deepEqual(
+    new Set(batched.result.map((session) => session.id)),
+    new Set(["session_large_history", "session_other_summary_workspace"]),
+  );
 });
 
 test("session cursor updates omit prior events and capture bodies", async () => {

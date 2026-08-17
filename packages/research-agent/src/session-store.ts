@@ -300,6 +300,34 @@ export class HoneycrispSessionStore {
     return this.list(workspaceId, limit).map(sessionSummary);
   }
 
+  public listForWorkspaces(workspaceIds: readonly string[], limitPerWorkspace = 100): HoneycrispSessionRecord[] {
+    const normalizedWorkspaceIds = [...new Set(workspaceIds.map((workspaceId) => requiredString(workspaceId, "Workspace id")))];
+    if (normalizedWorkspaceIds.length === 0) return [];
+    const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limitPerWorkspace)));
+    const placeholders = normalizedWorkspaceIds.map(() => "?").join(", ");
+    const rows = this.database.prepare(`
+      SELECT document_json FROM (
+        SELECT document_json, updated_at, id,
+          ROW_NUMBER() OVER (
+            PARTITION BY workspace_id
+            ORDER BY updated_at DESC, id DESC
+          ) AS workspace_rank
+        FROM honeycrisp_sessions
+        WHERE workspace_id IN (${placeholders})
+      )
+      WHERE workspace_rank <= ?
+      ORDER BY updated_at DESC, id DESC
+    `).all(...normalizedWorkspaceIds, boundedLimit) as Array<{ document_json?: unknown }>;
+    return rows.map((row) => decodeStoredSession(row.document_json));
+  }
+
+  public listSummariesForWorkspaces(
+    workspaceIds: readonly string[],
+    limitPerWorkspace = 100,
+  ): HoneycrispSessionSummary[] {
+    return this.listForWorkspaces(workspaceIds, limitPerWorkspace).map(sessionSummary);
+  }
+
   public getUpdate(sessionId: string, afterEventId?: string | null): HoneycrispSessionUpdate | null {
     const session = this.get(sessionId);
     if (!session) return null;

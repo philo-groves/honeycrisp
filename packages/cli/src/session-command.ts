@@ -70,14 +70,14 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
         if (!result) throw new Error(`Session not found: ${sessionId}`);
         break;
       case "list":
-        result = store.list(
-          requiredOption(option(argv, "--workspace-id"), "--workspace-id"),
+        result = store.listForWorkspaces(
+          requiredOptions(options(argv, "--workspace-id"), "--workspace-id"),
           positiveIntegerOption(argv, "--limit") ?? 100,
         );
         break;
       case "list-summaries":
-        result = store.listSummaries(
-          requiredOption(option(argv, "--workspace-id"), "--workspace-id"),
+        result = store.listSummariesForWorkspaces(
+          requiredOptions(options(argv, "--workspace-id"), "--workspace-id"),
           positiveIntegerOption(argv, "--limit") ?? 100,
         );
         break;
@@ -128,8 +128,15 @@ async function readJsonFile(path: string): Promise<unknown> {
 }
 
 function option(argv: readonly string[], name: string): string | undefined {
-  const index = argv.indexOf(name);
-  return index >= 0 ? argv[index + 1] : undefined;
+  return options(argv, name)[0];
+}
+
+function options(argv: readonly string[], name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === name && argv[index + 1] !== undefined) values.push(argv[index + 1]!);
+  }
+  return values;
 }
 
 function positiveIntegerOption(argv: readonly string[], name: string): number | undefined {
@@ -143,6 +150,11 @@ function positiveIntegerOption(argv: readonly string[], name: string): number | 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value?.trim()) throw new Error(`Missing required option ${name}.`);
   return value.trim();
+}
+
+function requiredOptions(values: readonly string[], name: string): string[] {
+  if (values.length === 0) throw new Error(`Missing required option ${name}.`);
+  return values.map((value) => requiredOption(value, name));
 }
 
 function errorMessage(error: unknown): string {
@@ -159,7 +171,7 @@ function sessionUsage(): string {
     "  honeycrisp session recover-interrupted --workspace-id <id> [--input <json>] --json",
     "  honeycrisp session import-capture --session-id <id> --attempt-id <id> --capture <json> --json",
     "  honeycrisp session get --session-id <id> --json",
-    "  honeycrisp session list --workspace-id <id> [--limit <n>] --json",
-    "  honeycrisp session list-summaries --workspace-id <id> [--limit <n>] --json",
+    "  honeycrisp session list --workspace-id <id> [--workspace-id <id> ...] [--limit <n>] --json",
+    "  honeycrisp session list-summaries --workspace-id <id> [--workspace-id <id> ...] [--limit <n>] --json",
   ].join("\n");
 }
