@@ -8,5 +8,7 @@ dist/
 
 .honeycrisp/
 .honeycrisp-runs/
+.beale/
 
 tmp/
+artifacts/
