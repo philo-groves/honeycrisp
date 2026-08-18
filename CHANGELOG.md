@@ -84,6 +84,7 @@
 
 ### Fixed
 
+- Stray non-JSON diagnostics from stdio MCP servers are now retained in a bounded diagnostic buffer instead of escaping the stdout handler and terminating the research host.
 - Session protocol failures now distinguish SQLite structural corruption and application-level hash mismatches from ordinary operation errors, with non-retryable instructions to stop writers, preserve the original database, and restore or repair before retrying.
 - Retried transient provider WebSocket disconnects in the active research turn instead of failing the entire session after an otherwise successful shell-approval pause.
 - Added compact session-list summaries that omit event timelines, capture payloads, and final responses, preventing routine client refreshes from overflowing child-process protocol buffers as session history grows.

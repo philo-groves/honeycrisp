@@ -365,7 +365,7 @@ test("MCP discovery denylist defaults to no servers and execution reports timeou
   assert.match(result.result.summary, /exceeded timeout/);
 });
 
-test("configured stdio MCP client discovers and executes a live fixture server", async () => {
+test("configured stdio MCP client tolerates diagnostics and executes a live fixture server", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-live-mcp-"));
   const serverPath = join(root, "fixture-mcp.mjs");
   const configPath = join(root, "mcp.json");
@@ -448,6 +448,7 @@ function handle(message) {
     return;
   }
   if (message.method === "tools/call") {
+    process.stdout.write("2026-08-18T22:32:03.372Z WARN fixture diagnostic\\n");
     send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "echo:" + message.params.arguments.query }] } });
     return;
   }

@@ -10,6 +10,7 @@ import type {
 
 const DEFAULT_MCP_PROTOCOL_VERSION = "2025-11-25";
 const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_MCP_DIAGNOSTIC_CHARACTERS = 64_000;
 
 export interface ResearchMcpServerConfig {
   name: string;
@@ -261,7 +262,7 @@ class StdioMcpServerConnection {
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => this.handleStdout(chunk));
     child.stderr.on("data", (chunk) => {
-      this.stderrBuffer += chunk;
+      this.appendDiagnostic(chunk);
     });
     child.once("exit", (code, signal) => {
       const message = `MCP server ${this.config.name} exited with code ${code ?? "none"} signal ${signal ?? "none"}.`;
@@ -364,8 +365,13 @@ class StdioMcpServerConnection {
     let message: unknown;
     try {
       message = JSON.parse(line) as unknown;
-    } catch (error) {
-      throw new Error(`MCP server ${this.config.name} emitted invalid JSON: ${String(error)}`);
+    } catch {
+      // Stdio MCP servers must reserve stdout for JSON-RPC, but native
+      // dependencies sometimes emit diagnostics there. Retain a bounded copy
+      // and continue reading so one bad line cannot escape this stream handler
+      // and terminate the entire research host.
+      this.appendDiagnostic(`[stdout] ${line}\n`);
+      return;
     }
     if (!isRecord(message)) {
       return;
@@ -397,6 +403,10 @@ class StdioMcpServerConnection {
     }
 
     pending.resolve(response.result);
+  }
+
+  private appendDiagnostic(chunk: string): void {
+    this.stderrBuffer = `${this.stderrBuffer}${chunk}`.slice(-MAX_MCP_DIAGNOSTIC_CHARACTERS);
   }
 
   private sendUnsupportedRequestResponse(id: number, method: string): void {
