@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { nowIso } from "./ids.js";
 import type {
   ResearchExecutableTool,
@@ -9,8 +10,17 @@ import type {
   ResearchToolDescriptor,
   ResearchToolSideEffect,
 } from "./types.js";
+import type { ToolActionAuthorizer } from "./tool-approval.js";
 
 const DEFAULT_MCP_TIMEOUT_MS = 30_000;
+const MAX_MCP_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_MCP_CONTENT_ITEMS = 64;
+const MAX_MCP_MODEL_IMAGES = 4;
+const MAX_MCP_MODEL_TEXT_CHARS = 100_000;
+const MAX_MCP_AUDIT_DEPTH = 12;
+const MAX_MCP_AUDIT_COLLECTION_ITEMS = 256;
+const MAX_MCP_AUDIT_STRING_CHARS = 1_000_000;
+const SUPPORTED_MCP_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 export interface ResearchMcpToolDescription {
   serverName: string;
@@ -63,6 +73,7 @@ export interface CreateMcpResearchToolsOptions {
   client: ResearchMcpClient;
   allowedServers?: readonly string[];
   timeoutMs?: number;
+  authorizeToolAction?: ToolActionAuthorizer;
 }
 
 export interface McpResearchToolDiscovery {
@@ -104,7 +115,12 @@ export async function createMcpResearchTools(
       continue;
     }
 
-    executableTools.push(createMcpExecutableTool(mcpTool, options.client, timeoutMs));
+    executableTools.push(createMcpExecutableTool(
+      applyBealeToolAnnotations(mcpTool),
+      options.client,
+      timeoutMs,
+      options.authorizeToolAction,
+    ));
   }
 
   if (options.client.readResource) {
@@ -153,6 +169,7 @@ function createMcpExecutableTool(
   mcpTool: ResearchMcpToolDescription,
   client: ResearchMcpClient,
   timeoutMs: number,
+  authorizeToolAction: ToolActionAuthorizer | undefined,
 ): ResearchExecutableTool {
   const descriptor: ResearchToolDescriptor = {
     name: createMcpToolName(mcpTool.serverName, mcpTool.name),
@@ -163,9 +180,10 @@ function createMcpExecutableTool(
     actionClasses:
       mcpTool.actionClasses ?? inferMcpActionClasses(mcpTool.name, mcpTool.description),
     sideEffects: mcpTool.sideEffects ?? inferMcpSideEffects(mcpTool),
-    requiredPermissions: mcpTool.requiredPermissions ?? [
+    requiredPermissions: [...new Set([
       `mcp:${mcpTool.serverName}:tool:${mcpTool.name}`,
-    ],
+      ...(mcpTool.requiredPermissions ?? []),
+    ])],
     ...(mcpTool.inputSchema ? { inputSchema: mcpTool.inputSchema } : {}),
     ...(mcpTool.outputSchema
       ? { outputSchema: createWrappedMcpOutputSchema(mcpTool.outputSchema) }
@@ -192,6 +210,25 @@ function createMcpExecutableTool(
     async execute(action, context) {
       const startedAt = nowIso();
       try {
+        if (requiresToolApproval(mcpTool)) {
+          if (!authorizeToolAction) {
+            return createMcpBlockedResult(
+              action,
+              startedAt,
+              "Computer-use action denied because the host approval channel is unavailable.",
+            );
+          }
+          const approval = await authorizeToolAction({
+            actionId: action.id,
+            serverName: mcpTool.serverName,
+            toolName: mcpTool.name,
+            description: descriptor.description,
+            arguments: action.input,
+          }, context?.signal);
+          if (approval.decision !== "approved") {
+            return createMcpBlockedResult(action, startedAt, approval.reason);
+          }
+        }
         const output = await withMcpTimeout(
           client.callTool({
             serverName: mcpTool.serverName,
@@ -215,7 +252,8 @@ function createMcpExecutableTool(
           startedAt,
           completedAt: nowIso(),
           summary: `MCP tool ${mcpTool.serverName}/${mcpTool.name} returned untrusted output.`,
-          output: normalized,
+          output: normalized.output,
+          ...(normalized.modelContent?.length ? { modelContent: normalized.modelContent } : {}),
           followUpActions: [],
         };
       } catch (error) {
@@ -292,7 +330,8 @@ function createMcpResourceReadTool(
           startedAt,
           completedAt: nowIso(),
           summary: `MCP resource ${resource.serverName}/${resource.uri} returned untrusted content.`,
-          output: normalized,
+          output: normalized.output,
+          ...(normalized.modelContent?.length ? { modelContent: normalized.modelContent } : {}),
           followUpActions: [],
         };
       } catch (error) {
@@ -322,21 +361,158 @@ function createMcpErrorResult(
   };
 }
 
+function createMcpBlockedResult(
+  action: ResearchToolAction,
+  startedAt: string,
+  reason: string,
+): ResearchToolExecutionResult {
+  return {
+    action,
+    status: "blocked",
+    startedAt,
+    completedAt: nowIso(),
+    summary: reason,
+    followUpActions: ["Report that the host denied the computer-use action before continuing."],
+    error: { message: reason },
+  };
+}
+
 function normalizeMcpOutput(input: {
   serverName: string;
   capabilityName: string;
   kind: "tool" | "resource";
   output: unknown;
-}) {
+}): { output: Record<string, unknown>; modelContent?: ResearchToolExecutionResult["modelContent"] } {
+  const content = extractMcpModelContent(input.output);
   return {
-    provider: "mcp",
-    serverName: input.serverName,
-    capabilityName: input.capabilityName,
-    kind: input.kind,
-    untrusted: true,
-    summary: `Untrusted MCP ${input.kind} output from ${input.serverName}/${input.capabilityName}.`,
-    output: input.output,
+    output: {
+      provider: "mcp",
+      serverName: input.serverName,
+      capabilityName: input.capabilityName,
+      kind: input.kind,
+      untrusted: true,
+      summary: `Untrusted MCP ${input.kind} output from ${input.serverName}/${input.capabilityName}.`,
+      output: sanitizeMcpAuditOutput(input.output),
+    },
+    ...(content.length ? { modelContent: content } : {}),
   };
+}
+
+function extractMcpModelContent(output: unknown): NonNullable<ResearchToolExecutionResult["modelContent"]> {
+  if (!isRecord(output) || !Array.isArray(output.content)) return [];
+  const content: NonNullable<ResearchToolExecutionResult["modelContent"]> = [];
+  let remainingTextChars = MAX_MCP_MODEL_TEXT_CHARS;
+  let imageCount = 0;
+  for (const item of output.content.slice(0, MAX_MCP_CONTENT_ITEMS)) {
+    if (!isRecord(item)) continue;
+    if (item.type === "text" && typeof item.text === "string" && remainingTextChars > 0) {
+      const text = item.text.slice(0, remainingTextChars);
+      remainingTextChars -= text.length;
+      if (text) content.push({ type: "text", text });
+      continue;
+    }
+    if (
+      item.type === "image"
+      && imageCount < MAX_MCP_MODEL_IMAGES
+      && typeof item.data === "string"
+      && typeof item.mimeType === "string"
+      && SUPPORTED_MCP_IMAGE_TYPES.has(item.mimeType)
+    ) {
+      const bytes = decodeBoundedBase64(item.data);
+      if (bytes) {
+        imageCount += 1;
+        content.push({ type: "image", data: item.data, mimeType: item.mimeType });
+      }
+    }
+  }
+  return content;
+}
+
+function sanitizeMcpAuditOutput(output: unknown, depth = 0): unknown {
+  if (depth > MAX_MCP_AUDIT_DEPTH) return "[depth limit]";
+  if (typeof output === "string") {
+    return output.length <= MAX_MCP_AUDIT_STRING_CHARS
+      ? output
+      : `${output.slice(0, MAX_MCP_AUDIT_STRING_CHARS)}\n[truncated]`;
+  }
+  if (Array.isArray(output)) {
+    return output
+      .slice(0, MAX_MCP_AUDIT_COLLECTION_ITEMS)
+      .map((item) => sanitizeMcpAuditOutput(item, depth + 1));
+  }
+  if (!isRecord(output)) return output;
+  if (output.type === "image" && typeof output.data === "string") {
+    const bytes = decodeBoundedBase64(output.data);
+    return {
+      type: "image",
+      mimeType: typeof output.mimeType === "string" ? output.mimeType : "application/octet-stream",
+      byteLength: bytes?.byteLength ?? null,
+      sha256: bytes ? createHash("sha256").update(bytes).digest("hex") : null,
+      dataOmitted: true,
+    };
+  }
+  return Object.fromEntries(
+    Object.entries(output)
+      .slice(0, MAX_MCP_AUDIT_COLLECTION_ITEMS)
+      .map(([key, value]) => [key, sanitizeMcpAuditOutput(value, depth + 1)]),
+  );
+}
+
+function decodeBoundedBase64(value: string): Buffer | null {
+  if (!value || value.length > Math.ceil(MAX_MCP_IMAGE_BYTES * 4 / 3) + 8) return null;
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)) return null;
+  const bytes = Buffer.from(value, "base64");
+  return bytes.byteLength <= MAX_MCP_IMAGE_BYTES && bytes.toString("base64") === value ? bytes : null;
+}
+
+function applyBealeToolAnnotations(tool: ResearchMcpToolDescription): ResearchMcpToolDescription {
+  const annotation = isRecord(tool.annotations?.["beale.io/tool"])
+    ? tool.annotations["beale.io/tool"]
+    : undefined;
+  if (!annotation) return tool;
+  const actionClasses = Array.isArray(annotation.actionClasses)
+    ? annotation.actionClasses.filter(isResearchActionClass)
+    : [];
+  const requiredPermissions = Array.isArray(annotation.requiredPermissions)
+    ? annotation.requiredPermissions.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    : [];
+  return {
+    ...tool,
+    ...(actionClasses.length ? { actionClasses } : {}),
+    ...(isResearchToolSideEffect(annotation.sideEffects)
+      ? { sideEffects: conservativeAnnotatedSideEffect(tool, annotation.sideEffects) }
+      : {}),
+    ...(requiredPermissions.length ? { requiredPermissions } : {}),
+  };
+}
+
+function conservativeAnnotatedSideEffect(
+  tool: ResearchMcpToolDescription,
+  annotated: ResearchToolSideEffect,
+): ResearchToolSideEffect {
+  const inferred = inferMcpSideEffects(tool);
+  if (inferred === "none") return annotated;
+  if (inferred === "read" && annotated !== "none") return annotated;
+  return inferred;
+}
+
+function requiresToolApproval(tool: ResearchMcpToolDescription): boolean {
+  const annotation = tool.annotations?.["beale.io/tool"];
+  return isRecord(annotation) && annotation.confirmation === "always";
+}
+
+function isResearchActionClass(value: unknown): value is ResearchActionClass {
+  return value === "recall" || value === "search" || value === "inspect" || value === "analyze"
+    || value === "experiment" || value === "synthesize" || value === "ask_user"
+    || value === "respond" || value === "stop";
+}
+
+function isResearchToolSideEffect(value: unknown): value is ResearchToolSideEffect {
+  return value === "none" || value === "read" || value === "write" || value === "network" || value === "process";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function createWrappedMcpOutputSchema(outputSchema: unknown): Record<string, unknown> {
@@ -434,7 +610,7 @@ function inferMcpSideEffects(
   tool: ResearchMcpToolDescription,
 ): ResearchToolSideEffect {
   const text = `${tool.name} ${tool.description ?? ""}`;
-  if (/write|edit|delete|create|mutate/i.test(text)) {
+  if (/write|edit|delete|create|mutate|click|type|press|key|scroll/i.test(text)) {
     return "write";
   }
   if (/network|fetch|http|url|web/i.test(text)) {

@@ -94,6 +94,7 @@ export interface BuiltinAgentPluginDefinition {
   id: string;
   path: string;
   installedAt: string;
+  enabledByDefault?: boolean;
 }
 
 export interface AgentPluginRegistryOptions {
@@ -785,7 +786,7 @@ function mergeBuiltinPlugins(stored: StoredAgentPlugin[], builtins: BuiltinAgent
     next.push({
       id: builtin.id,
       source: { kind: 'builtin', path: builtin.path },
-      enabled: true,
+      enabled: builtin.enabledByDefault ?? true,
       installedAt: builtin.installedAt
     });
   }

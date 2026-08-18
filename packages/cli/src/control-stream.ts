@@ -1,6 +1,7 @@
 import type { Readable } from "node:stream";
 import type {
   ManualShellApprovalResult,
+  ManualToolApprovalResult,
   ShellSafetyMode,
 } from "@honeycrisp/research-agent";
 
@@ -21,6 +22,11 @@ export type HoneycrispControlMessage = HoneycrispControlRequest & (
       approvalRequestId: string;
       decision: "approved" | "denied";
     }
+  | {
+      type: "resolve_tool_approval";
+      approvalRequestId: string;
+      decision: "approved" | "denied";
+    }
 );
 
 export interface HoneycrispModelSelection {
@@ -38,7 +44,8 @@ export type HoneycrispControlEvent =
         | "configure"
         | "steer"
         | "configure_shell_safety"
-        | "resolve_shell_approval";
+        | "resolve_shell_approval"
+        | "resolve_tool_approval";
       accepted: true;
       requestId?: string;
     }
@@ -56,6 +63,12 @@ interface ShellApprovalWaiter {
   abort?: () => void;
 }
 
+interface ToolApprovalWaiter {
+  resolve(result: ManualToolApprovalResult): void;
+  signal?: AbortSignal;
+  abort?: () => void;
+}
+
 export class HoneycrispControlStream {
   private buffer = "";
   private paused = false;
@@ -65,6 +78,7 @@ export class HoneycrispControlStream {
   private readonly resumeWaiters = new Set<() => void>();
   private readonly steeringWaiters = new Set<SteeringWaiter>();
   private readonly shellApprovalWaiters = new Map<string, ShellApprovalWaiter>();
+  private readonly toolApprovalWaiters = new Map<string, ToolApprovalWaiter>();
   private readonly stopController = new AbortController();
   private started = false;
   private inputEnded = false;
@@ -101,6 +115,7 @@ export class HoneycrispControlStream {
     this.resolveResumeWaiters();
     this.resolveSteeringWaiters([]);
     this.denyShellApprovalWaiters("Manual Approval denied because the control stream closed.");
+    this.denyToolApprovalWaiters("Tool approval denied because the control stream closed.");
   }
 
   public async takeSteeringInstructions(): Promise<string[]> {
@@ -168,6 +183,38 @@ export class HoneycrispControlStream {
     });
   }
 
+  public waitForToolApproval(
+    approvalRequestId: string,
+    signal?: AbortSignal,
+  ): Promise<ManualToolApprovalResult> {
+    if (!approvalRequestId.trim() || approvalRequestId.trim().length > 200) {
+      return Promise.reject(new Error("Tool approval request ID must be a non-empty string of at most 200 characters."));
+    }
+    const normalizedId = approvalRequestId.trim();
+    if (this.toolApprovalWaiters.has(normalizedId)) {
+      return Promise.reject(new Error("A tool approval waiter already exists for this request ID."));
+    }
+    if (!this.started || this.inputEnded || signal?.aborted || this.stopController.signal.aborted) {
+      return Promise.resolve({
+        decision: "denied",
+        reason: "Tool approval denied because the control stream is unavailable.",
+      });
+    }
+    return new Promise((resolve) => {
+      const waiter: ToolApprovalWaiter = { resolve, ...(signal ? { signal } : {}) };
+      if (signal) {
+        waiter.abort = () => {
+          this.resolveToolApprovalWaiter(normalizedId, {
+            decision: "denied",
+            reason: "Tool approval denied because execution was aborted.",
+          });
+        };
+        signal.addEventListener("abort", waiter.abort, { once: true });
+      }
+      this.toolApprovalWaiters.set(normalizedId, waiter);
+    });
+  }
+
   private readonly handleData = (chunk: string | Buffer): void => {
     this.buffer += chunk.toString();
     let newlineIndex = this.buffer.indexOf("\n");
@@ -188,6 +235,7 @@ export class HoneycrispControlStream {
     this.resolveResumeWaiters();
     this.resolveSteeringWaiters(this.steeringInstructions.splice(0));
     this.denyShellApprovalWaiters("Manual Approval denied because the control stream ended.");
+    this.denyToolApprovalWaiters("Tool approval denied because the control stream ended.");
   };
 
   private handleLine(line: string): void {
@@ -207,6 +255,7 @@ export class HoneycrispControlStream {
         this.resolveResumeWaiters();
         this.resolveSteeringWaiters([]);
         this.denyShellApprovalWaiters("Manual Approval denied because the run was stopped.");
+        this.denyToolApprovalWaiters("Tool approval denied because the run was stopped.");
         this.stopController.abort(new Error("Honeycrisp run stopped by the host."));
       } else if (message.type === "configure") {
         this.modelSelection = message.modelSelection;
@@ -221,6 +270,16 @@ export class HoneycrispControlStream {
           reason: message.decision === "approved"
             ? "The researcher approved this shell command."
             : "The researcher denied this shell command.",
+        });
+      } else if (message.type === "resolve_tool_approval") {
+        if (!this.toolApprovalWaiters.has(message.approvalRequestId)) {
+          throw new Error("Tool approval response does not match a pending request.");
+        }
+        this.resolveToolApprovalWaiter(message.approvalRequestId, {
+          decision: message.decision,
+          reason: message.decision === "approved"
+            ? "The researcher approved this computer-use action."
+            : "The researcher denied this computer-use action.",
         });
       } else {
         if (message.modelSelection) this.modelSelection = message.modelSelection;
@@ -285,6 +344,23 @@ export class HoneycrispControlStream {
       });
     }
   }
+
+  private resolveToolApprovalWaiter(
+    approvalRequestId: string,
+    result: ManualToolApprovalResult,
+  ): void {
+    const waiter = this.toolApprovalWaiters.get(approvalRequestId);
+    if (!waiter) return;
+    this.toolApprovalWaiters.delete(approvalRequestId);
+    if (waiter.signal && waiter.abort) waiter.signal.removeEventListener("abort", waiter.abort);
+    waiter.resolve(result);
+  }
+
+  private denyToolApprovalWaiters(reason: string): void {
+    for (const approvalRequestId of [...this.toolApprovalWaiters.keys()]) {
+      this.resolveToolApprovalWaiter(approvalRequestId, { decision: "denied", reason });
+    }
+  }
 }
 
 function parseControlMessage(line: string): HoneycrispControlMessage {
@@ -335,6 +411,20 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
     return {
       schemaVersion: 1,
       type: "resolve_shell_approval",
+      approvalRequestId,
+      decision: parsed.decision,
+      ...(requestId ? { requestId } : {}),
+    };
+  }
+  if (parsed.type === "resolve_tool_approval") {
+    const approvalRequestId = parseRequestId(parsed.approvalRequestId);
+    if (!approvalRequestId) throw new Error("Tool approval responses require an approvalRequestId.");
+    if (parsed.decision !== "approved" && parsed.decision !== "denied") {
+      throw new Error("Tool approval decision must be approved or denied.");
+    }
+    return {
+      schemaVersion: 1,
+      type: "resolve_tool_approval",
       approvalRequestId,
       decision: parsed.decision,
       ...(requestId ? { requestId } : {}),

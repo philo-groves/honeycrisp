@@ -54,6 +54,17 @@ test("Honeycrisp owns auxiliary routes, sources, plugins, and retained maintenan
     assert.equal(installed.plugins[0].name, "boundary-plugin");
     assert.deepEqual(registry.getHoneycrispRuntime().selectedSkillIds, ["recon"]);
 
+    const disabledBuiltinRegistry = new AgentPluginRegistry(join(root, "builtin-registry"), {
+      builtinPlugins: [{
+        id: "disabled-builtin",
+        path: pluginRoot,
+        installedAt: "2026-08-17T00:00:00.000Z",
+        enabledByDefault: false,
+      }],
+    });
+    assert.equal(disabledBuiltinRegistry.getState().plugins[0].enabled, false);
+    assert.deepEqual(disabledBuiltinRegistry.getHoneycrispRuntime().selectedSkillIds, []);
+
     const workspace = join(root, "workspace");
     await mkdir(join(workspace, ".beale"), { recursive: true });
     await writeFile(join(workspace, ".beale", "dejunk.json"), JSON.stringify({

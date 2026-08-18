@@ -197,6 +197,8 @@ Review the capture for `runtimeConfig.modelConfig.source`, `runtimeConfig.toolCo
 
 `repository.search` accepts a configured repository path or label as a context hint and also accepts any readable absolute directory path in its `root` input. `file.read` likewise treats workspace and repository roots as context hints rather than access fences. Both tools run with the current user's host filesystem permissions; use an operator-managed VM or container when filesystem isolation is required.
 
+Allowlisted MCP tools may provide Beale-namespaced annotations for typed action classes, side effects, permissions, and an `always` host-confirmation requirement. Confirmed calls wait on a correlated WebSocket control decision before the MCP subprocess is invoked and fail closed when the host channel is absent. MCP text and bounded image blocks are returned to provider adapters as multimodal tool content; image bytes are replaced by size and hash metadata in research audit events.
+
 ### Host WebSocket transport
 
 Clients can launch a run with `--websocket-transport --session-id <id>` and set a random `HONEYCRISP_TRANSPORT_TOKEN` in the child environment. Honeycrisp binds an ephemeral endpoint to `127.0.0.1` and writes one non-secret `HONEYCRISP_TRANSPORT` bootstrap record to stdout. The client authenticates with `Authorization: Bearer <token>`, then sends `client.hello` as its first message. Protocol v1 uses client-neutral envelopes:

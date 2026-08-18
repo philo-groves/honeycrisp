@@ -44,6 +44,7 @@ export interface ResearchToolExecutionResult {
   completedAt: string;
   summary: string;
   output?: unknown;
+  modelContent?: ToolResultMessage["content"];
   rawOutputRef?: string;
   artifactRefs?: readonly ResearchArtifactRef[];
   followUpActions: readonly string[];
@@ -369,12 +370,20 @@ export function projectModelToolResult(
     2,
   );
   return {
-    content: [
-      {
-        type: "text",
-        text: truncateModelToolResult(serialized, result.action.toolName),
-      },
-    ],
+    content: result.modelContent?.length
+      ? [
+          {
+            type: "text",
+            text: truncateModelToolResult(serialized, result.action.toolName),
+          },
+          ...result.modelContent,
+        ]
+      : [
+          {
+            type: "text",
+            text: truncateModelToolResult(serialized, result.action.toolName),
+          },
+        ],
     details: modelToolResultDetails(projectedResult),
     isError: projectedResult.status !== "complete",
   };

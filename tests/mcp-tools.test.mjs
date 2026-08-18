@@ -8,7 +8,9 @@ import {
   createConfiguredResearchMcpClient,
   createMcpResearchTools,
   createResearchToolRegistry,
+  createToolActionAuthorizer,
   loadResearchMcpClientConfig,
+  projectModelToolResult,
 } from "../packages/research-agent/dist/index.js";
 
 test("MCP discovery maps allowlisted tools and resources into executable research tools", async () => {
@@ -171,6 +173,141 @@ test("MCP capability families are discovered concurrently", async () => {
 
   assert.equal(maxActive, 3);
 });
+
+test("Beale MCP annotations require host approval for mutations and preserve bounded image content", async () => {
+  const calls = [];
+  const approvals = [];
+  const imageData = Buffer.from("small-png-fixture").toString("base64");
+  const client = {
+    async listTools() {
+      return [{
+        serverName: "computer-use",
+        name: "click",
+        description: "Click a freshly observed element.",
+        inputSchema: { type: "object", additionalProperties: true },
+        annotations: {
+          "beale.io/tool": {
+            actionClasses: ["experiment"],
+            sideEffects: "write",
+            requiredPermissions: ["computer-use:mutate"],
+            confirmation: "always",
+          },
+        },
+      }];
+    },
+    async callTool(input) {
+      calls.push(input);
+      return {
+        content: [
+          { type: "text", text: "clicked" },
+          { type: "image", mimeType: "image/png", data: imageData },
+        ],
+      };
+    },
+  };
+  const discovery = await createMcpResearchTools({
+    client,
+    allowedServers: ["computer-use"],
+    authorizeToolAction: async (request) => {
+      approvals.push(request);
+      return {
+        ...request,
+        approvalRequestId: "tool_approval_1",
+        argumentsHash: "a".repeat(64),
+        decision: "approved",
+        source: "human",
+        reason: "Approved once.",
+      };
+    },
+  });
+  const descriptor = discovery.descriptors[0];
+  assert.deepEqual(descriptor.actionClasses, ["experiment"]);
+  assert.equal(descriptor.sideEffects, "write");
+  assert.deepEqual(descriptor.requiredPermissions, [
+    "mcp:computer-use:tool:click",
+    "computer-use:mutate",
+  ]);
+
+  const registry = createResearchToolRegistry(discovery.tools);
+  const execution = await registry.execute({
+    id: "computer_click",
+    actionClass: "experiment",
+    toolName: descriptor.name,
+    input: { observationId: "observation_1" },
+  });
+  assert.equal(approvals.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(execution.result.status, "complete");
+  assert.equal(execution.result.output.output.content[1].dataOmitted, true);
+  assert.equal(JSON.stringify(execution.result.output).includes(imageData), false);
+  const projection = projectModelToolResult(execution.result);
+  assert.equal(projection.content.at(-1).type, "image");
+  assert.equal(projection.content.at(-1).data, imageData);
+});
+
+test("Beale MCP mutations fail closed when host approval is unavailable", async () => {
+  let called = false;
+  const client = {
+    async listTools() {
+      return [{
+        serverName: "computer-use",
+        name: "type",
+        annotations: { "beale.io/tool": { confirmation: "always" } },
+      }];
+    },
+    async callTool() {
+      called = true;
+      return {};
+    },
+  };
+  const discovery = await createMcpResearchTools({ client, allowedServers: ["computer-use"] });
+  const registry = createResearchToolRegistry(discovery.tools);
+  const execution = await registry.execute({
+    id: "computer_type",
+    actionClass: "analyze",
+    toolName: discovery.descriptors[0].name,
+    input: {},
+  });
+  assert.equal(execution.result.status, "blocked");
+  assert.equal(called, false);
+});
+
+test("tool approvals preserve exact arguments and deny lossy review projections", async () => {
+  const reviews = [];
+  const resolved = [];
+  const authorize = createToolActionAuthorizer({
+    async requestManualApproval(request) {
+      reviews.push(request);
+      return { decision: "approved", reason: "Reviewed exactly." };
+    },
+    onResolved(event) {
+      resolved.push(event);
+    },
+  });
+
+  const exact = await authorize({
+    actionId: "action_exact",
+    serverName: "computer-use",
+    toolName: "type",
+    description: "Type exact text.",
+    arguments: { text: "  preserve surrounding whitespace  " },
+  });
+  assert.equal(exact.decision, "approved");
+  assert.equal(reviews[0].arguments.text, "  preserve surrounding whitespace  ");
+
+  const lossy = await authorize({
+    actionId: "action_oversized",
+    serverName: "computer-use",
+    toolName: "type",
+    description: "Type oversized text.",
+    arguments: { text: "x".repeat(16_385) },
+  });
+  assert.equal(lossy.decision, "denied");
+  assert.equal(lossy.source, "policy");
+  assert.equal(reviews.length, 1);
+  assert.equal(resolved.length, 2);
+});
+
 test("MCP discovery denylist defaults to no servers and execution reports timeouts", async () => {
   const deniedClient = {
     async listTools() {

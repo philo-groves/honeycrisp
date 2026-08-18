@@ -16,6 +16,7 @@
 
 ### Added
 
+- Added correlated host approval for annotated MCP mutations, multimodal MCP tool-result projection, and disabled-by-default built-in Agent Plugin definitions.
 - Added context-composition telemetry for startup sections and every model request, including bounded character, estimated-token, role, message, and tool-definition counts without recording hidden instruction content.
 - Added protocol-v1 operations and exported harness services for auxiliary model-job resolution, provider semantics and completion, source inspection/materialization, Agent Plugin registry/runtime assembly, and workspace Dejunk maintenance.
 - Added protocol-v1 operations for workspace memory summaries, complete Memory Dreaming preparation and reversible state management, runbook/report document reads, and manifest-backed artifact resolution so non-Beale clients can use the same Honeycrisp-owned boundary.

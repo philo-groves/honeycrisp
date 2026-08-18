@@ -169,6 +169,29 @@ test("control stream denies pending shell approvals on EOF and close", async () 
   closedInput.destroy();
 });
 
+test("control stream correlates host decisions for computer-use approvals", async () => {
+  const input = new PassThrough();
+  const events = [];
+  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  controls.start();
+  const waiting = controls.waitForToolApproval("tool-approval-1");
+  input.write(JSON.stringify({
+    schemaVersion: 1,
+    type: "resolve_tool_approval",
+    requestId: "resolve-tool-1",
+    approvalRequestId: "tool-approval-1",
+    decision: "approved",
+  }) + "\n");
+  assert.equal((await waiting).decision, "approved");
+  assert.deepEqual(events.at(-1), {
+    type: "resolve_tool_approval",
+    accepted: true,
+    requestId: "resolve-tool-1",
+  });
+  controls.close();
+  input.destroy();
+});
+
 test("control stream wakes safeguard steering waits and correlates accepted controls", async () => {
   const input = new PassThrough();
   const events = [];

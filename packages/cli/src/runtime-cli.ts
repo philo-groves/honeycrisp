@@ -35,6 +35,7 @@ import {
   createResearchToolRegistry,
   createShellTool,
   createShellSafetyAuthorizer,
+  createToolActionAuthorizer,
   BUNDLED_RESEARCH_PROFILE_IDS,
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   DEFAULT_SHELL_REVIEW_MODELS,
@@ -117,6 +118,7 @@ import type {
   ResearchToolRegistry,
   ResearchWorkspaceContext,
   ShellCommandAuthorizer,
+  ToolActionAuthorizer,
   ShellReviewerSelection,
   ShellSafetyMode,
   BundledResearchProfileId,
@@ -1913,9 +1915,22 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         onResolved: (event) => emitShellSafetyEvent(liveEventSink, event),
         authenticationPreferences: readProviderAuthenticationPreferences(),
       });
+      const toolActionAuthorizer = createToolActionAuthorizer({
+        requestManualApproval: (request, signal) => {
+          if (!controlStream || !liveEventSink) {
+            return Promise.reject(new Error(
+              "Computer-use approval requires both the control stream and live event stream.",
+            ));
+          }
+          return controlStream.waitForToolApproval(request.approvalRequestId, signal);
+        },
+        onRequested: (event) => emitShellSafetyEvent(liveEventSink, event),
+        onResolved: (event) => emitShellSafetyEvent(liveEventSink, event),
+      });
       runtimeConfig = await createRuntimeConfig({
         ...args,
         shellAuthorizer,
+        toolActionAuthorizer,
         resolvedResearchProfile,
         ...(preparedRuntimeConfig ? { preparedRuntimeConfig } : {}),
       });
@@ -3295,6 +3310,7 @@ async function createRuntimeConfig(args: {
   runtimeTools: RuntimeToolConfig;
   workspaceRoot?: string;
   shellAuthorizer?: ShellCommandAuthorizer;
+  toolActionAuthorizer?: ToolActionAuthorizer;
   resolvedResearchProfile?: ResolvedResearchProfile;
   preparedRuntimeConfig?: PreparedRuntimeConfigInputs;
 }): Promise<{
@@ -3394,6 +3410,7 @@ async function createRuntimeConfig(args: {
     executableTools,
     toolDescriptors,
     cleanupCallbacks,
+    ...(args.toolActionAuthorizer ? { authorizeToolAction: args.toolActionAuthorizer } : {}),
   });
 
   validateSelectedSkillIds(skills, runtimeTools.selectedSkillIds);
@@ -3817,6 +3834,7 @@ async function configureRuntimeMcpTools(input: {
   executableTools: ResearchExecutableTool[];
   toolDescriptors: ResearchToolDescriptor[];
   cleanupCallbacks: (() => Promise<void>)[];
+  authorizeToolAction?: ToolActionAuthorizer;
 }): Promise<Record<string, unknown> | undefined> {
   if (!input.runtimeTools.mcpConfigPath) {
     return undefined;
@@ -3855,6 +3873,7 @@ async function configureRuntimeMcpTools(input: {
     const discovery = await createMcpResearchTools({
       client,
       allowedServers,
+      ...(input.authorizeToolAction ? { authorizeToolAction: input.authorizeToolAction } : {}),
       ...(timeoutMs ? { timeoutMs } : {}),
     });
     input.executableTools.push(...discovery.tools);
