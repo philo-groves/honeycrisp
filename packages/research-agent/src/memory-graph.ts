@@ -1283,6 +1283,27 @@ export class MemoryGraphStore {
           `);
         },
       },
+      {
+        version: 10,
+        name: "report_submission_packets",
+        up(database) {
+          const columns = new Set((database.prepare("PRAGMA table_info(honeycrisp_reports)").all() as Array<{ name?: unknown }>)
+            .flatMap((row) => typeof row.name === "string" ? [row.name] : []));
+          const additions = [
+            ["submission_packet_artifact_id", "TEXT"],
+            ["submission_packet_filename", "TEXT"],
+            ["submission_packet_relative_path", "TEXT"],
+            ["submission_packet_content_hash", "TEXT"],
+            ["submission_packet_size_bytes", "INTEGER"],
+          ] as const;
+          for (const [name, type] of additions) {
+            if (!columns.has(name)) database.exec(`ALTER TABLE honeycrisp_reports ADD COLUMN ${name} ${type};`);
+          }
+          database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS honeycrisp_reports_submission_packet_artifact_idx
+            ON honeycrisp_reports(submission_packet_artifact_id)
+            WHERE submission_packet_artifact_id IS NOT NULL;`);
+        },
+      },
     ]);
   }
 

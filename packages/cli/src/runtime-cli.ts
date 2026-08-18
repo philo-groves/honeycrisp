@@ -3392,10 +3392,11 @@ async function createRuntimeConfig(args: {
       memoryGraph.databasePath,
       storageLayout,
       memoryGraph.getContext(),
+      { packetCandidateRoots: [workspaceRoot] },
     );
     const reportTools = createReportTools(reports, {
       ...(resolvedResearchProfile.profile.id === "security-research"
-        ? { requireConfirmedChain: true, memoryGraph }
+        ? { requireConfirmedChain: true, requireSubmissionPacket: true, memoryGraph }
         : {}),
     });
     executableTools.push(...reportTools);

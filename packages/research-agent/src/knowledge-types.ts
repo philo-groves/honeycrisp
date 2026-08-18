@@ -113,10 +113,18 @@ export interface ReportSummary {
   summary: string;
   status: "complete" | "stale";
   artifactId: string;
+  submissionPacket: ReportSubmissionPacketSummary | null;
   revision: number;
   revisions: ArtifactRevisionSummary[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ReportSubmissionPacketSummary {
+  artifactId: string;
+  filename: string;
+  sizeBytes: number;
+  contentHash: string;
 }
 
 export type MemoryDreamingAction = "prune" | "merge_duplicates" | "revise" | "reclassify";

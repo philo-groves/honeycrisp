@@ -428,7 +428,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.7.0",
+  version: "1.8.0",
   name: "Security",
   description: "Authorized open-ended vulnerability discovery, high-upside longshot hunting, chaining, verification, and reporting.",
   agent: {
@@ -456,7 +456,13 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       "List existing workspace reports before creating one.",
       "Do not create a report from observations, hypotheses, or primitives. First persist an independently proven primitive, then upgrade it to a chain with demonstrated reachability and impact.",
       "Create a report only for a confirmed chain that meets the chain's proof-of-vulnerability and independent-review requirements. Pass that chain as sourceChainId to report.create; the tool rejects premature reports.",
-      "Write in clear, casual, blog-like language where possible. Avoid semantic cramming, unnecessary jargon, and overusing security vocabulary.",
+      "Write for a triager who has never worked on the affected subsystem. Use normal language first, define product-specific terms before relying on them, and avoid semantic cramming, unnecessary jargon, and overusing security vocabulary.",
+      "Order security reports as: Impact summary; How the affected system works; Vulnerability chain; Impact and affected systems; Reproduction using the attached submission packet; Technical root cause; Remediation and regression coverage.",
+      "The impact summary must state who can trigger the issue, the triggering action, the affected deployment or components, the demonstrated security outcome, and the strongest verified limitation before implementation details.",
+      "The system explanation must describe the relevant components, objects, trust or ownership boundary, normal data flow, and violated invariant as if the triager is unfamiliar with the subsystem.",
+      "Present the chain as a readable narrative followed by numbered state transitions. Separate demonstrated consequences from plausible downstream consequences and preserve material limitations.",
+      "Put complete scripts and bulky evidence in submission.zip. In the report, name the packet, state its hash and prerequisites, give one exact entry command, enumerate the proof actions and decisive expected output, include independent rerun and cleanup results, and point to packet files for deeper inspection.",
+      "Create submission.zip inside the active workspace and pass submissionPacketPath to report.create. Honeycrisp imports the candidate packet into durable report storage; a security report is not complete without it.",
       "Reports are Markdown artifacts, not memories. Keep each one coherent and standalone, and mark it stale when superseded or no longer accurate.",
     ],
   },
@@ -528,7 +534,7 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       goalSuggestionCount: 4,
       goalSuggestionInstructions: ["Document evidence-supported exploit chains, their constituent bugs, and their security impact without overstating the evidence."],
       promptInstructions: ["Preserve material limitations and do not invent reachability, impact, or unsupported conclusions."],
-      outputRequirements: ["A triage-ready proof of concept and submission.zip containing the proof and necessary evidence."],
+      outputRequirements: ["A triage-ready report in the required reader-first section order, with submission.zip attached through report.create and containing the proof and necessary evidence."],
     },
     {
       id: "longshot",

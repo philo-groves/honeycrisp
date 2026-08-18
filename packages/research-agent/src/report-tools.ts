@@ -10,21 +10,27 @@ const CREATE_PARAMETERS = { type: "object", required: ["title", "summary", "cont
   title: { type: "string" }, summary: { type: "string", description: "A concise catalog description." },
   content: { type: "string", description: "The complete Markdown report." }, status: { type: "string", enum: [...REPORT_STATUSES] },
   sourceChainId: { type: "string", description: "The confirmed, reportable chain this report documents." },
+  submissionPacketPath: { type: "string", description: "Path to the completed submission.zip inside the active workspace. Honeycrisp imports it into durable report storage." },
 } };
 const REVISE_PARAMETERS = { type: "object", required: ["id", "expectedRevision", "content"], properties: {
   id: { type: "string" }, expectedRevision: { type: "number" }, content: { type: "string", description: "The complete replacement Markdown report." },
   summary: { type: "string" }, status: { type: "string", enum: [...REPORT_STATUSES] },
+  submissionPacketPath: { type: "string", description: "Optional replacement submission.zip inside the active workspace." },
 } };
 
 export interface ReportToolPolicy {
   requireConfirmedChain?: boolean;
+  requireSubmissionPacket?: boolean;
   memoryGraph?: Pick<MemoryGraphStore, "get" | "getContext">;
 }
 
 export function createReportTools(store: ReportStore, policy: ReportToolPolicy = {}): ResearchExecutableTool[] {
-  const createParameters = policy.requireConfirmedChain
-    ? { ...CREATE_PARAMETERS, required: [...CREATE_PARAMETERS.required, "sourceChainId"] }
-    : CREATE_PARAMETERS;
+  const requiredCreateFields = [
+    ...CREATE_PARAMETERS.required,
+    ...(policy.requireConfirmedChain ? ["sourceChainId"] : []),
+    ...(policy.requireSubmissionPacket ? ["submissionPacketPath"] : []),
+  ];
+  const createParameters = { ...CREATE_PARAMETERS, required: requiredCreateFields };
   return [
     tool("report.list", "report_list", "List workspace reports before creating or revising a shareable result.", "read", LIST_PARAMETERS, (input) => ({ output: store.list({
       ...(text(input.query) ? { query: text(input.query)! } : {}),
@@ -33,15 +39,29 @@ export function createReportTools(store: ReportStore, policy: ReportToolPolicy =
     }) })),
     tool("report.get", "report_get", "Read the full Markdown content of one workspace report.", "read", GET_PARAMETERS, (input) => ({ output: store.get(requiredText(input.id, "id")) })),
     tool("report.create", "report_create", policy.requireConfirmedChain
-      ? "Create a complete, revisioned Markdown report for a confirmed, reportable vulnerability chain. Observations, hypotheses, and primitives are not report-ready."
+      ? "Create a complete, revisioned Markdown report with its durable submission packet for a confirmed, reportable vulnerability chain. Observations, hypotheses, and primitives are not report-ready."
       : "Create a complete, revisioned Markdown report when a result is ready to share. Reports are artifacts, not memories.", "write", createParameters, (input) => {
       if (policy.requireConfirmedChain) requireReportableSecurityChain(input.sourceChainId, policy.memoryGraph);
-      const created = store.create({ title: requiredText(input.title, "title"), summary: requiredText(input.summary, "summary"), content: requiredText(input.content, "content"), ...(text(input.status) ? { status: text(input.status)! as ReportStatus } : {}) });
-      return { output: created.report, artifactRefs: [created.artifactRef] };
+      const created = store.create({
+        title: requiredText(input.title, "title"), summary: requiredText(input.summary, "summary"), content: requiredText(input.content, "content"),
+        ...(text(input.status) ? { status: text(input.status)! as ReportStatus } : {}),
+        ...(text(input.submissionPacketPath) ? { submissionPacketPath: text(input.submissionPacketPath)! } : {}),
+      });
+      return { output: created.report, artifactRefs: [created.artifactRef, ...(created.submissionPacketArtifactRef ? [created.submissionPacketArtifactRef] : [])] };
     }),
     tool("report.revise", "report_revise", "Replace a report with a complete revised Markdown document, or mark it stale, using its current revision.", "write", REVISE_PARAMETERS, (input) => {
-      const revised = store.revise({ id: requiredText(input.id, "id"), expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"), content: requiredText(input.content, "content"), ...(text(input.summary) ? { summary: text(input.summary)! } : {}), ...(text(input.status) ? { status: text(input.status)! as ReportStatus } : {}) });
-      return { output: revised.report, artifactRefs: [revised.artifactRef] };
+      const id = requiredText(input.id, "id");
+      const submissionPacketPath = text(input.submissionPacketPath);
+      if (policy.requireSubmissionPacket && !submissionPacketPath && !store.get(id)?.submissionPacket) {
+        throw new Error("Security reports require an attached submission.zip before revision.");
+      }
+      const revised = store.revise({
+        id, expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"), content: requiredText(input.content, "content"),
+        ...(text(input.summary) ? { summary: text(input.summary)! } : {}),
+        ...(text(input.status) ? { status: text(input.status)! as ReportStatus } : {}),
+        ...(submissionPacketPath ? { submissionPacketPath } : {}),
+      });
+      return { output: revised.report, artifactRefs: [revised.artifactRef, ...(revised.submissionPacketArtifactRef ? [revised.submissionPacketArtifactRef] : [])] };
     }),
   ];
 }

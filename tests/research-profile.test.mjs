@@ -67,8 +67,11 @@ test("bundled profiles give reports domain-specific share-readiness guidance", (
   const mathematicsPrompt = createResearchSystemPrompt({ hasTools: true, hasReportTools: true, researchProfile: DEFAULT_MATHEMATICS_RESEARCH_PROFILE });
   assert.match(securityPrompt, /Do not create a report from observations, hypotheses, or primitives/);
   assert.match(securityPrompt, /sourceChainId to report\.create/);
+  assert.match(securityPrompt, /Impact summary; How the affected system works; Vulnerability chain/);
+  assert.match(securityPrompt, /triager who has never worked on the affected subsystem/);
+  assert.match(securityPrompt, /pass submissionPacketPath to report\.create/);
+  assert.match(securityPrompt, /one exact entry command/);
   assert.match(mathematicsPrompt, /mathematical breakthrough is ready to share with the greater community/);
-  assert.match(securityPrompt, /casual, blog-like language/);
   assert.match(mathematicsPrompt, /casual, blog-like language/);
 });
 
@@ -100,7 +103,7 @@ test("bundled profiles define domain-specific Longshot workflows", () => {
   const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
   const mathematicsLongshot = mathematics.workflows.find((workflow) => workflow.id === "longshot");
 
-  assert.equal(security.version, "1.7.0");
+  assert.equal(security.version, "1.8.0");
   assert.equal(mathematics.version, "1.5.0");
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);

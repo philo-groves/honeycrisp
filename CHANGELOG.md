@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Security report guidance now requires a reader-first impact summary, subsystem explanation, ordered vulnerability chain, scoped impact, packet-driven reproduction, root cause, and remediation coverage.
 - Model context now starts with at most eight compact memory cards under a 6,000-character budget; `memory.search` returns bounded summary cards, collapses unchanged per-agent results to references, and reserves complete bodies, attributes, evidence, and relationships for `memory.get`.
 - Collaboration rooms now use clean context at protocol-phase boundaries and summary-first status, publish, and wait results with explicit packet cursors. Model-facing room packet content is capped at 6,000 characters.
 - Ordinary research prompts now defer Beale workspace, session, resource, and maintenance MCP tools unless the request explicitly asks for those management capabilities. Tool outputs use smaller model-facing limits, and active context compacts proactively near 96,000 estimated tokens.
@@ -16,6 +17,7 @@
 
 ### Added
 
+- Security reports now attach a durable `submission.zip` packet imported from the active workspace, with packet metadata retained across report revisions.
 - Added correlated host approval for annotated MCP mutations, multimodal MCP tool-result projection, and disabled-by-default built-in Agent Plugin definitions.
 - Added context-composition telemetry for startup sections and every model request, including bounded character, estimated-token, role, message, and tool-definition counts without recording hidden instruction content.
 - Added protocol-v1 operations and exported harness services for auxiliary model-job resolution, provider semantics and completion, source inspection/materialization, Agent Plugin registry/runtime assembly, and workspace Dejunk maintenance.

@@ -271,11 +271,27 @@ function readReports(
     summary: requiredString(row.summary),
     status: requiredReportStatus(row.status),
     artifactId: requiredString(row.artifact_id),
+    submissionPacket: reportSubmissionPacket(row),
     revision: requiredNumber(row.revision),
     revisions: revisionsForArtifact(artifactRevisions, 'report', row),
     createdAt: requiredString(row.created_at),
     updatedAt: requiredString(row.updated_at)
   }));
+}
+
+function reportSubmissionPacket(row: SqlRow): HoneycrispReportSummary['submissionPacket'] {
+  if (
+    typeof row.submission_packet_artifact_id !== 'string'
+    || typeof row.submission_packet_filename !== 'string'
+    || typeof row.submission_packet_content_hash !== 'string'
+    || typeof row.submission_packet_size_bytes !== 'number'
+  ) return null;
+  return {
+    artifactId: row.submission_packet_artifact_id,
+    filename: row.submission_packet_filename,
+    sizeBytes: row.submission_packet_size_bytes,
+    contentHash: row.submission_packet_content_hash
+  };
 }
 
 function readArtifactRevisions(
