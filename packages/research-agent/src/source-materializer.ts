@@ -43,12 +43,12 @@ export interface MaterializedSourceRepository {
   requestedRefMatchesHead: boolean | null;
 }
 
-const GIT_TIMEOUT_MS = 180_000;
+const SYNCHRONOUS_GIT_TIMEOUT_MS = 180_000;
 const TEMPORARY_CHECKOUT_REMOVE_RETRIES = 8;
 const TEMPORARY_CHECKOUT_REMOVE_RETRY_DELAY_MS = 250;
 const CHECKOUT_PUBLISH_RETRIES = 8;
 const CHECKOUT_PUBLISH_RETRY_DELAY_MS = 250;
-const STALE_TEMPORARY_CHECKOUT_AGE_MS = GIT_TIMEOUT_MS + 60_000;
+const STALE_TEMPORARY_CHECKOUT_AGE_MS = 7 * 24 * 60 * 60_000;
 const SOURCE_REPOSITORY_RE = /\b(?:https?:\/\/)?(?:github\.com|gitlab\.com)\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+(?:\.git)?(?:[/?#][^\s<>)\]]*)?/gi;
 const SSH_SOURCE_REPOSITORY_RE = /\bgit@(?:github\.com|gitlab\.com):[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+(?:\.git)?\b/gi;
 const SOURCE_REPOSITORY_HOSTS = new Set(['github.com', 'gitlab.com']);
@@ -342,7 +342,7 @@ function runGit(args: string[]): { stdout: string; stderr: string } {
   const result = spawnSync(invocation.command, invocation.args, {
     encoding: 'utf8',
     env: gitEnv(),
-    timeout: GIT_TIMEOUT_MS,
+    timeout: SYNCHRONOUS_GIT_TIMEOUT_MS,
     windowsHide: true
   });
   if (result.error) throw result.error;
@@ -367,10 +367,6 @@ function runGitAsync(args: string[], signal?: AbortSignal): Promise<{ stdout: st
     let stdout = '';
     let stderr = '';
     let terminationError: Error | null = null;
-    const timer = setTimeout(() => {
-      terminationError = new Error(`git ${effectiveArgs.join(' ')} timed out after ${GIT_TIMEOUT_MS}ms`);
-      child.kill('SIGTERM');
-    }, GIT_TIMEOUT_MS);
     const abort = (): void => {
       terminationError = new Error('git operation aborted');
       child.kill('SIGTERM');
@@ -385,12 +381,10 @@ function runGitAsync(args: string[], signal?: AbortSignal): Promise<{ stdout: st
       stderr = boundedAppend(stderr, chunk);
     });
     child.on('error', (error) => {
-      clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       reject(error);
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       if (terminationError) {
         reject(terminationError);
