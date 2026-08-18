@@ -118,6 +118,7 @@ import type {
   ResearchToolDescriptor,
   ResearchToolSideEffect,
   ResearchToolRegistry,
+  RunbookExecutionUpdate,
   ResearchWorkspaceContext,
   ShellCommandAuthorizer,
   ToolActionAuthorizer,
@@ -1934,6 +1935,14 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         shellAuthorizer,
         toolActionAuthorizer,
         resolvedResearchProfile,
+        runbookExecutionUpdateSink: async (update) => {
+          await liveEventSink?.({
+            schemaVersion: 1,
+            kind: "agent.event",
+            timestamp: new Date().toISOString(),
+            payload: { eventType: "runbook.execution", ...update },
+          });
+        },
         ...(preparedRuntimeConfig ? { preparedRuntimeConfig } : {}),
       });
       if (controlStream && runtimeConfig.executeRunbook) {
@@ -1953,6 +1962,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
                 runId: null,
                 cellId: request.cellId ?? null,
                 status: "failed",
+                proofTarget: request.proofTarget,
+                ...(request.deviceOs ? { deviceOs: request.deviceOs } : {}),
                 error: error instanceof Error ? error.message : String(error),
               },
             });
@@ -3339,6 +3350,7 @@ async function createRuntimeConfig(args: {
   toolActionAuthorizer?: ToolActionAuthorizer;
   resolvedResearchProfile?: ResolvedResearchProfile;
   preparedRuntimeConfig?: PreparedRuntimeConfigInputs;
+  runbookExecutionUpdateSink?: (update: RunbookExecutionUpdate) => void | Promise<void>;
 }): Promise<{
   events: ResearchEvent[];
   tools: ResearchToolDescriptor[];
@@ -3351,7 +3363,7 @@ async function createRuntimeConfig(args: {
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
   memoryGraph: MemoryGraphStore;
-  executeRunbook?: (request: { runbookId: string; cellId?: string; signal?: AbortSignal }) => Promise<void>;
+  executeRunbook?: (request: { runbookId: string; cellId?: string; signal?: AbortSignal; proofTarget: "localhost" | "device" | "vm" | "web" | "other"; deviceOs?: string }) => Promise<void>;
   cleanup?: () => Promise<void>;
 }> {
   const workspaceRoot = args.workspaceRoot ?? process.cwd();
@@ -3557,7 +3569,11 @@ async function createRuntimeConfig(args: {
   }
 
   const executeRunbook = runbookStore && shellTool
-    ? createRunbookExecutor({ store: runbookStore, shellTool })
+    ? createRunbookExecutor({
+        store: runbookStore,
+        shellTool,
+        ...(args.runbookExecutionUpdateSink ? { onUpdate: args.runbookExecutionUpdateSink } : {}),
+      })
     : undefined;
   if (executeRunbook) {
     const tool = createRunbookExecutionTool(executeRunbook);

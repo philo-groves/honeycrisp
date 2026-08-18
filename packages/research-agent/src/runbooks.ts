@@ -17,6 +17,8 @@ export const RUNBOOK_STATUSES = ["draft", "active", "completed", "archived"] as 
 export type RunbookStatus = (typeof RUNBOOK_STATUSES)[number];
 export type RunbookCellKind = "markdown" | "code";
 export type RunbookExecutionStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "skipped";
+export const RUNBOOK_PROOF_TARGETS = ["localhost", "device", "vm", "web", "other"] as const;
+export type RunbookProofTarget = (typeof RUNBOOK_PROOF_TARGETS)[number];
 
 export interface RunbookExecutionState {
   runId: string;
@@ -26,6 +28,8 @@ export interface RunbookExecutionState {
   durationMs?: number;
   exitCode?: number | null;
   error?: string;
+  proofTarget: RunbookProofTarget;
+  deviceOs?: string;
 }
 
 export interface RunbookExecutionPlanCell {
@@ -292,7 +296,13 @@ export class RunbookStore {
     return cells;
   }
 
-  public beginExecution(id: string, runId: string, cellIds: readonly string[]): void {
+  public beginExecution(
+    id: string,
+    runId: string,
+    cellIds: readonly string[],
+    proofTarget: RunbookProofTarget,
+    deviceOs?: string,
+  ): void {
     const startedAt = new Date().toISOString();
     this.updateNotebook(id, (notebook) => {
       notebook.metadata.honeycrisp.latestRun = {
@@ -300,20 +310,28 @@ export class RunbookStore {
         status: "running",
         startedAt,
         cellCount: cellIds.length,
+        proofTarget,
+        ...(deviceOs ? { deviceOs } : {}),
       };
       notebook.cells.forEach((cell, index) => {
         const cellId = notebookCellId(cell, index);
         if (!cellIds.includes(cellId)) return;
-        setCellExecution(cell, { runId, status: "queued", startedAt });
+        setCellExecution(cell, { runId, status: "queued", startedAt, proofTarget, ...(deviceOs ? { deviceOs } : {}) });
       });
     });
   }
 
-  public beginCellExecution(id: string, runId: string, cellId: string): void {
+  public beginCellExecution(
+    id: string,
+    runId: string,
+    cellId: string,
+    proofTarget: RunbookProofTarget,
+    deviceOs?: string,
+  ): void {
     const startedAt = new Date().toISOString();
     this.updateNotebook(id, (notebook) => {
       const cell = requireNotebookCell(notebook, cellId);
-      setCellExecution(cell, { runId, status: "running", startedAt });
+      setCellExecution(cell, { runId, status: "running", startedAt, proofTarget, ...(deviceOs ? { deviceOs } : {}) });
     });
   }
 
@@ -329,6 +347,8 @@ export class RunbookStore {
     stderr?: string;
     exitCode?: number | null;
     error?: string;
+    proofTarget: RunbookProofTarget;
+    deviceOs?: string;
   }): void {
     this.updateNotebook(input.id, (notebook) => {
       const cell = requireNotebookCell(notebook, input.cellId);
@@ -340,6 +360,8 @@ export class RunbookStore {
         durationMs: Math.max(0, Math.round(input.durationMs)),
         ...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
         ...(input.error ? { error: input.error.slice(0, 2_000) } : {}),
+        proofTarget: input.proofTarget,
+        ...(input.deviceOs ? { deviceOs: input.deviceOs } : {}),
       });
       const honeycrisp = isRecord(cell.metadata.honeycrisp) ? cell.metadata.honeycrisp : {};
       cell.metadata.honeycrisp = {
@@ -356,7 +378,14 @@ export class RunbookStore {
     });
   }
 
-  public skipCellExecutions(id: string, runId: string, cellIds: readonly string[], reason: string): void {
+  public skipCellExecutions(
+    id: string,
+    runId: string,
+    cellIds: readonly string[],
+    reason: string,
+    proofTarget: RunbookProofTarget,
+    deviceOs?: string,
+  ): void {
     if (cellIds.length === 0) return;
     const completedAt = new Date().toISOString();
     this.updateNotebook(id, (notebook) => {
@@ -370,6 +399,8 @@ export class RunbookStore {
           completedAt,
           durationMs: 0,
           error: reason.slice(0, 2_000),
+          proofTarget,
+          ...(deviceOs ? { deviceOs } : {}),
         });
       });
     });
@@ -383,6 +414,8 @@ export class RunbookStore {
     completedAt: string;
     durationMs: number;
     error?: string;
+    proofTarget: RunbookProofTarget;
+    deviceOs?: string;
   }): void {
     this.updateNotebook(input.id, (notebook) => {
       notebook.metadata.honeycrisp.latestRun = {
@@ -392,6 +425,8 @@ export class RunbookStore {
         completedAt: input.completedAt,
         durationMs: Math.max(0, Math.round(input.durationMs)),
         ...(input.error ? { error: input.error.slice(0, 2_000) } : {}),
+        proofTarget: input.proofTarget,
+        ...(input.deviceOs ? { deviceOs: input.deviceOs } : {}),
       };
     });
   }

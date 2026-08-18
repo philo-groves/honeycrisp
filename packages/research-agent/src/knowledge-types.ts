@@ -214,6 +214,8 @@ export interface RunbookExecutionSummary {
   durationMs: number | null;
   exitCode: number | null;
   error: string | null;
+  proofTarget: "localhost" | "device" | "vm" | "web" | "other";
+  deviceOs: string | null;
 }
 
 export interface RunbookCell {

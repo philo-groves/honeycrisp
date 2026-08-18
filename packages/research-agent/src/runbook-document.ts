@@ -73,6 +73,7 @@ function parseExecutionSummary(value: unknown): RunbookCell["latestRun"] {
   const runId = optionalString(execution.runId);
   const startedAt = optionalString(execution.startedAt);
   const status = execution.status;
+  const proofTarget = isRunbookProofTarget(execution.proofTarget) ? execution.proofTarget : "other";
   if (!runId || !startedAt || !isRunbookExecutionStatus(status)) return null;
   return {
     runId,
@@ -82,11 +83,17 @@ function parseExecutionSummary(value: unknown): RunbookCell["latestRun"] {
     durationMs: optionalNonNegativeNumber(execution.durationMs),
     exitCode: optionalInteger(execution.exitCode),
     error: optionalString(execution.error),
+    proofTarget,
+    deviceOs: optionalString(execution.deviceOs),
   };
 }
 
 function isRunbookExecutionStatus(value: unknown): value is RunbookExecutionSummary["status"] {
   return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "blocked" || value === "skipped";
+}
+
+function isRunbookProofTarget(value: unknown): value is RunbookExecutionSummary["proofTarget"] {
+  return value === "localhost" || value === "device" || value === "vm" || value === "web" || value === "other";
 }
 
 function optionalNonNegativeNumber(value: unknown): number | null {

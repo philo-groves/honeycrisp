@@ -167,7 +167,11 @@ test("runbook execution records cell status, output, and duration through the sh
       shellTool,
       onUpdate: (update) => updates.push(update),
     });
-    await execute({ runbookId: created.runbook.id });
+    await assert.rejects(
+      execute({ runbookId: created.runbook.id, proofTarget: "device" }),
+      /deviceOs/,
+    );
+    await execute({ runbookId: created.runbook.id, proofTarget: "device", deviceOs: "iOS 27.0" });
 
     assert.equal(contexts.length, 1);
     assert.equal(contexts[0].runbookId, created.runbook.id);
@@ -181,8 +185,12 @@ test("runbook execution records cell status, output, and duration through the sh
     assert.equal(codeCell.execution_count, 1);
     assert.equal(codeCell.outputs[0].text.join(""), "proof passed\n");
     assert.equal(codeCell.metadata.honeycrisp.latestRun.status, "succeeded");
+    assert.equal(codeCell.metadata.honeycrisp.latestRun.proofTarget, "device");
+    assert.equal(codeCell.metadata.honeycrisp.latestRun.deviceOs, "iOS 27.0");
     assert.equal(typeof codeCell.metadata.honeycrisp.latestRun.durationMs, "number");
     assert.equal(notebook.metadata.honeycrisp.latestRun.status, "succeeded");
+    assert.equal(notebook.metadata.honeycrisp.latestRun.proofTarget, "device");
+    assert.equal(notebook.metadata.honeycrisp.latestRun.deviceOs, "iOS 27.0");
     assert.equal(typeof notebook.metadata.honeycrisp.latestRun.durationMs, "number");
   } finally {
     store.close();

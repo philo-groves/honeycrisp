@@ -1,7 +1,9 @@
 import type { Readable } from "node:stream";
+import { RUNBOOK_PROOF_TARGETS } from "@honeycrisp/research-agent";
 import type {
   ManualShellApprovalResult,
   ManualToolApprovalResult,
+  RunbookProofTarget,
   RunbookExecutionRequest,
   ShellSafetyMode,
 } from "@honeycrisp/research-agent";
@@ -18,7 +20,7 @@ export type HoneycrispControlMessage = HoneycrispControlRequest & (
   | { type: "configure"; modelSelection: HoneycrispModelSelection }
   | { type: "steer"; instruction: string; modelSelection?: HoneycrispModelSelection }
   | { type: "configure_shell_safety"; shellSafetyMode: ShellSafetyMode }
-  | { type: "runbook_execute"; runbookId: string; cellId?: string }
+  | { type: "runbook_execute"; runbookId: string; cellId?: string; proofTarget: RunbookProofTarget; deviceOs?: string }
   | {
       type: "resolve_shell_approval";
       approvalRequestId: string;
@@ -279,6 +281,8 @@ export class HoneycrispControlStream {
         const execution = this.runbookExecutionHandler({
           runbookId: message.runbookId,
           ...(message.cellId ? { cellId: message.cellId } : {}),
+          proofTarget: message.proofTarget,
+          ...(message.deviceOs ? { deviceOs: message.deviceOs } : {}),
         });
         this.runbookExecutions.add(execution);
         void execution.then(
@@ -429,11 +433,17 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
     const cellId = parsed.cellId === undefined
       ? undefined
       : parseRequiredText(parsed.cellId, "Runbook cell ID", 200);
+    const proofTarget = parseProofTarget(parsed.proofTarget);
+    const deviceOs = proofTarget === "device"
+      ? parseRequiredText(parsed.deviceOs, "Runbook target device OS", 120)
+      : undefined;
     return {
       schemaVersion: 1,
       type: "runbook_execute",
       runbookId,
       ...(cellId ? { cellId } : {}),
+      proofTarget,
+      ...(deviceOs ? { deviceOs } : {}),
       ...(requestId ? { requestId } : {}),
     };
   }
@@ -482,6 +492,13 @@ function parseRequiredText(value: unknown, label: string, maxLength: number): st
     throw new Error(`${label} must be a non-empty string of at most ${maxLength} characters.`);
   }
   return value.trim();
+}
+
+function parseProofTarget(value: unknown): RunbookProofTarget {
+  if (typeof value === "string" && RUNBOOK_PROOF_TARGETS.includes(value as RunbookProofTarget)) {
+    return value as RunbookProofTarget;
+  }
+  throw new Error(`Runbook proof target must be one of: ${RUNBOOK_PROOF_TARGETS.join(", ")}.`);
 }
 
 function parseRequestId(value: unknown): string | undefined {

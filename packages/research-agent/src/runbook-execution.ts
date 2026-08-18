@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
 import type { ResearchToolAction } from "./types.js";
-import { RunbookStore, type RunbookExecutionPlanCell } from "./runbooks.js";
+import {
+  RUNBOOK_PROOF_TARGETS,
+  RunbookStore,
+  type RunbookExecutionPlanCell,
+  type RunbookProofTarget,
+} from "./runbooks.js";
 
 export interface RunbookExecutionRequest {
   runbookId: string;
   cellId?: string;
   signal?: AbortSignal;
+  proofTarget: RunbookProofTarget;
+  deviceOs?: string;
 }
 
 export interface RunbookExecutionUpdate {
@@ -17,6 +24,8 @@ export interface RunbookExecutionUpdate {
   status: "running" | "succeeded" | "failed" | "blocked" | "skipped";
   durationMs?: number;
   error?: string;
+  proofTarget: RunbookProofTarget;
+  deviceOs?: string;
 }
 
 export interface RunbookExecutorOptions {
@@ -32,14 +41,16 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
   const activeRunbooks = new Set<string>();
   return async (request) => {
     const runbookId = requiredText(request.runbookId, "runbookId");
+    const proofTarget = parseProofTarget(request.proofTarget);
+    const deviceOs = proofTarget === "device" ? requiredText(request.deviceOs, "deviceOs") : undefined;
     if (activeRunbooks.has(runbookId)) throw new Error(`Runbook is already executing: ${runbookId}`);
     const cells = options.store.executionPlan(runbookId, request.cellId);
     const runId = `runbook_run_${randomUUID()}`;
     const startedAt = new Date().toISOString();
     const startedMs = Date.now();
     activeRunbooks.add(runbookId);
-    options.store.beginExecution(runbookId, runId, cells.map((cell) => cell.id));
-    await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: null, status: "running" });
+    options.store.beginExecution(runbookId, runId, cells.map((cell) => cell.id), proofTarget, deviceOs);
+    await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: null, status: "running", proofTarget, ...(deviceOs ? { deviceOs } : {}) });
     let finalStatus: "succeeded" | "failed" | "blocked" = "succeeded";
     let finalError: string | undefined;
     let completedCount = 0;
@@ -49,8 +60,8 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
         throwIfAborted(signal);
         const cellStartedAt = new Date().toISOString();
         const cellStartedMs = Date.now();
-        options.store.beginCellExecution(runbookId, runId, cell.id);
-        await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: cell.id, status: "running" });
+        options.store.beginCellExecution(runbookId, runId, cell.id, proofTarget, deviceOs);
+        await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: cell.id, status: "running", proofTarget, ...(deviceOs ? { deviceOs } : {}) });
         let result: ResearchToolExecutionResult;
         try {
           result = await executeCell(options.shellTool, runbookId, runId, cell, signal);
@@ -67,6 +78,8 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
             completedAt,
             durationMs,
             error: message,
+            proofTarget,
+            ...(deviceOs ? { deviceOs } : {}),
           });
           completedCount += 1;
           await options.onUpdate?.({
@@ -77,6 +90,8 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
             status: "failed",
             durationMs,
             error: message,
+            proofTarget,
+            ...(deviceOs ? { deviceOs } : {}),
           });
           finalStatus = "failed";
           finalError = message;
@@ -98,6 +113,8 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
           ...(output.stderr ? { stderr: output.stderr } : {}),
           ...(output.exitCode !== undefined ? { exitCode: output.exitCode } : {}),
           ...(result.error?.message ? { error: result.error.message } : {}),
+          proofTarget,
+          ...(deviceOs ? { deviceOs } : {}),
         });
         completedCount += 1;
         await options.onUpdate?.({
@@ -108,6 +125,8 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
           status,
           durationMs,
           ...(result.error?.message ? { error: result.error.message } : {}),
+          proofTarget,
+          ...(deviceOs ? { deviceOs } : {}),
         });
         if (status !== "succeeded") {
           finalStatus = status;
@@ -121,7 +140,7 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
     } finally {
       const skipped = cells.slice(completedCount).map((cell) => cell.id);
       if (skipped.length > 0) {
-        options.store.skipCellExecutions(runbookId, runId, skipped, finalError ?? "Skipped after an earlier cell did not succeed.");
+        options.store.skipCellExecutions(runbookId, runId, skipped, finalError ?? "Skipped after an earlier cell did not succeed.", proofTarget, deviceOs);
         for (const cellId of skipped) {
           await options.onUpdate?.({
             type: "runbook_execution",
@@ -131,6 +150,8 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
             status: "skipped",
             durationMs: 0,
             error: finalError ?? "Skipped after an earlier cell did not succeed.",
+            proofTarget,
+            ...(deviceOs ? { deviceOs } : {}),
           });
         }
       }
@@ -144,6 +165,8 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
         completedAt,
         durationMs,
         ...(finalError ? { error: finalError } : {}),
+        proofTarget,
+        ...(deviceOs ? { deviceOs } : {}),
       });
       activeRunbooks.delete(runbookId);
       await options.onUpdate?.({
@@ -154,6 +177,8 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
         status: finalStatus,
         durationMs,
         ...(finalError ? { error: finalError } : {}),
+        proofTarget,
+        ...(deviceOs ? { deviceOs } : {}),
       });
     }
   };
@@ -164,10 +189,12 @@ export function createRunbookExecutionTool(
 ): ResearchExecutableTool {
   const parameters = {
     type: "object",
-    required: ["id"],
+    required: ["id", "proofTarget"],
     properties: {
       id: { type: "string", description: "Runbook ID to execute." },
       cellId: { type: "string", description: "Optional code cell ID. Omit to run every code cell in order." },
+      proofTarget: { type: "string", enum: [...RUNBOOK_PROOF_TARGETS], description: "Where this proof executes: localhost, device, vm, web, or other." },
+      deviceOs: { type: "string", description: "Required when proofTarget is device, for example iOS 27.0 or Android 17." },
     },
   };
   return {
@@ -191,6 +218,10 @@ export function createRunbookExecutionTool(
             ? { cellId: action.input.cellId.trim() }
             : {}),
           ...(context?.signal ? { signal: context.signal } : {}),
+          proofTarget: parseProofTarget(action.input.proofTarget),
+          ...(typeof action.input.deviceOs === "string" && action.input.deviceOs.trim()
+            ? { deviceOs: action.input.deviceOs.trim() }
+            : {}),
         });
         return {
           action,
@@ -260,6 +291,13 @@ function shellOutput(value: unknown): { stdout?: string; stderr?: string; exitCo
 function requiredText(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${field} must be a non-empty string.`);
   return value.trim();
+}
+
+function parseProofTarget(value: unknown): RunbookProofTarget {
+  if (typeof value === "string" && RUNBOOK_PROOF_TARGETS.includes(value as RunbookProofTarget)) {
+    return value as RunbookProofTarget;
+  }
+  throw new Error(`proofTarget must be one of: ${RUNBOOK_PROOF_TARGETS.join(", ")}.`);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

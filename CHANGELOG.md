@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Runbooks now execute complete ordered code-cell sequences or individual cells through the canonical shell-safety boundary, persist per-cell status, duration, exit code, and bounded output, and expose `runbook.run` to models. Auto-Review classifies proofing and denies proof commands without trusted runbook context.
+- Runbooks now execute complete ordered code-cell sequences or individual cells through the canonical shell-safety boundary, require and persist a Localhost, Device, VM, Web, or Other proof target plus the target OS for Device runs, emit execution lifecycle updates, and retain per-cell status, duration, exit code, and bounded output. `runbook.run` exposes the same contract to models, while Auto-Review classifies proofing and denies proof commands without trusted runbook context.
 - Asynchronous repository materialization no longer imposes a fixed clone timeout, retains bounded Git output, and leaves active temporary checkouts alone for seven days so large blobless shallow clones can finish safely.
 - Security report guidance now requires a reader-first impact summary, subsystem explanation, ordered vulnerability chain, scoped impact, packet-driven reproduction, root cause, and remediation coverage.
 - Model context now starts with at most eight compact memory cards under a 6,000-character budget; `memory.search` returns bounded summary cards, collapses unchanged per-agent results to references, and reserves complete bodies, attributes, evidence, and relationships for `memory.get`.
