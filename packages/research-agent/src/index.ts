@@ -4,6 +4,7 @@ export * from "./database-migrations.js";
 export * from "./memory-graph-tools.js";
 export * from "./runbooks.js";
 export * from "./runbook-tools.js";
+export * from "./runbook-execution.js";
 export * from "./reports.js";
 export * from "./memory-dreaming.js";
 export * from "./memory-summary.js";

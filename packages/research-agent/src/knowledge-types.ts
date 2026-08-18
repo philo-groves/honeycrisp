@@ -206,6 +206,16 @@ export interface RunbookOutput {
   mimeType: string | null;
 }
 
+export interface RunbookExecutionSummary {
+  runId: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "blocked" | "skipped";
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  exitCode: number | null;
+  error: string | null;
+}
+
 export interface RunbookCell {
   id: string;
   type: "markdown" | "code" | "raw";
@@ -213,6 +223,7 @@ export interface RunbookCell {
   language: string | null;
   executionCount: number | null;
   outputs: RunbookOutput[];
+  latestRun: RunbookExecutionSummary | null;
 }
 
 export interface RunbookDocument {
@@ -220,6 +231,8 @@ export interface RunbookDocument {
   nbformat: 4;
   nbformatMinor: number;
   language: string | null;
+  revision: number | null;
+  latestRun: RunbookExecutionSummary | null;
   cells: RunbookCell[];
 }
 

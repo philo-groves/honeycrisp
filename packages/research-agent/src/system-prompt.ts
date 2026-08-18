@@ -107,7 +107,7 @@ export function createResearchSystemPrompt(
       "Use runbooks as durable executable research artifacts:",
       ...(profile?.agent.runbookInstructions.map((instruction) => `- ${instruction}`) ?? [
         "- List existing workspace runbooks before creating one. Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
-        "- Keep runbooks operational and reproducible: record exact commands or code, required context, decisive bounded outputs, and interpretation. Use shell.run for execution; a runbook never executes itself.",
+        "- Keep runbooks healthy and reproducible: record prerequisites, exact bounded commands or code, an explicit supported language per code cell, expected evidence, interpretation, and cleanup. Execute all proofing through runbook.run; Auto-Review denies proof commands outside runbooks.",
         "- Prefer appending to the relevant runbook over scattering reusable procedure across narration or memory. Keep concise research facts in memory and multi-step procedures in runbooks.",
         "- Mark a runbook completed when its procedure is proven and reusable; leave exploratory work active, and archive superseded procedures.",
       ]),

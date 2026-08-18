@@ -14,8 +14,8 @@ const CELL_PARAMETERS = {
   properties: {
     kind: { type: "string", enum: ["markdown", "code"] },
     source: { type: "string", description: "Markdown prose or the exact executable code/command sequence." },
-    language: { type: "string", description: "Language identifier such as sh, python, c, or text." },
-    summary: { type: "string", description: "Concise purpose or interpretation of this cell." },
+    language: { type: "string", description: "Required for executable code cells. Supported runners: sh, bash, zsh, python, python3, javascript, node, ruby, perl, and pwsh." },
+    summary: { type: "string", description: "Concise purpose, expected evidence, or interpretation of this cell." },
     stdout: { type: "string", description: "Bounded observed stdout when preserving a meaningful execution result." },
     stderr: { type: "string", description: "Bounded observed stderr when preserving a meaningful execution result." },
     exitCode: { type: "number", description: "Observed process exit code, if this cell records an execution." },
@@ -95,7 +95,7 @@ export function createRunbookTools(store: RunbookStore): ResearchExecutableTool[
     tool(
       "runbook.create",
       "runbook_create",
-      "Create a revisioned Jupyter-format research runbook for a reusable procedure, proof sequence, or environment-specific workflow. Runbooks are artifacts, not memory nodes, and are not executed automatically.",
+      "Create a revisioned Jupyter-format research runbook for a reusable procedure, proof sequence, or environment-specific workflow. A healthy runbook records prerequisites and expected evidence in markdown, then uses bounded repeatable code cells with an explicit supported language.",
       "write",
       CREATE_PARAMETERS,
       (input) => {
@@ -111,7 +111,7 @@ export function createRunbookTools(store: RunbookStore): ResearchExecutableTool[
     tool(
       "runbook.append",
       "runbook_append",
-      "Append concise markdown or code cells and meaningful observed results to an existing runbook using its current revision. Use shell.run separately for execution; preserve only reusable steps and decisive outputs.",
+      "Append concise markdown or code cells to an existing runbook using its current revision. Put proof commands in explicitly typed code cells and execute them with runbook.run; Auto-Review denies proofing issued directly through shell.run.",
       "write",
       APPEND_PARAMETERS,
       (input) => {

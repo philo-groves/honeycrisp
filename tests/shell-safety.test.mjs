@@ -71,7 +71,7 @@ test("Anthropic Auto-Review always uses the Claude Agent SDK completion route", 
     async completeClaudeText(options) {
       calls.push(options);
       return {
-        text: JSON.stringify({ decision: "approved", reason: "Bounded workspace inspection." }),
+        text: JSON.stringify({ decision: "approved", proofing: false, reason: "Bounded workspace inspection." }),
         usage: { inputTokens: 20 },
       };
     },
@@ -158,7 +158,7 @@ test("network commands continue through the configured shell approval mode witho
     getMode: () => "auto_review",
     getReviewerSelection: () => reviewer,
     requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
-    models: fixtureModels('{"decision":"approved","reason":"Command is acceptable."}', calls),
+    models: fixtureModels('{"decision":"approved","proofing":false,"reason":"Command is acceptable."}', calls),
   });
 
   const approved = await authorize({
@@ -400,7 +400,7 @@ test("Auto-Review uses the active provider small model and emits a redacted audi
     reasoningEffort: "medium",
   };
   const models = fixtureModels(
-    '{"decision":"approved","reason":"Scoped command; token=reviewer-secret is not retained."}',
+    '{"decision":"approved","proofing":false,"reason":"Scoped command; token=reviewer-secret is not retained."}',
     calls,
   );
   const authorize = createShellSafetyAuthorizer({
@@ -472,7 +472,7 @@ test("Auto-Review denial waits for a correlated one-command researcher override"
     onRequested: (event) => requested.push(event),
     onResolved: (event) => resolved.push(event),
     models: fixtureModels(
-      '{"decision":"denied","reason":"Remote target execution needs researcher confirmation."}',
+      '{"decision":"denied","proofing":false,"reason":"Remote target execution needs researcher confirmation."}',
       [],
     ),
   });
@@ -501,6 +501,45 @@ test("Auto-Review denial waits for a correlated one-command researcher override"
   assert.match(decision.reason, /approved this command once/);
   assert.deepEqual(decision.reviewer, reviewer);
   assert.equal(resolved.length, 1);
+});
+
+test("Auto-Review requires proofing commands to originate from a runbook cell", async () => {
+  let manualCalls = 0;
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "openai-codex",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+    }),
+    requestManualApproval: async () => {
+      manualCalls += 1;
+      return { decision: "approved", reason: "unused" };
+    },
+    models: fixtureModels(
+      '{"decision":"approved","proofing":true,"reason":"Bounded vulnerability reproduction."}',
+      [],
+    ),
+  });
+
+  const denied = await authorize({ ...BASE_REQUEST, utility: "python3", args: ["proof.py"] });
+  assert.equal(denied.decision, "denied");
+  assert.equal(denied.source, "policy");
+  assert.match(denied.reason, /recorded runbook cell/);
+  assert.equal(manualCalls, 0);
+
+  const approved = await authorize({
+    ...BASE_REQUEST,
+    utility: "python3",
+    args: ["proof.py"],
+    runbookContext: {
+      runbookId: "runbook-1",
+      runId: "runbook-run-1",
+      cellId: "cell-1",
+    },
+  });
+  assert.equal(approved.decision, "approved");
+  assert.equal(approved.source, "small_model");
 });
 
 test("Auto-Review fails closed for missing, malformed, oversized, and timed-out reviews", async () => {

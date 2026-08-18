@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Runbooks now execute complete ordered code-cell sequences or individual cells through the canonical shell-safety boundary, persist per-cell status, duration, exit code, and bounded output, and expose `runbook.run` to models. Auto-Review classifies proofing and denies proof commands without trusted runbook context.
 - Security report guidance now requires a reader-first impact summary, subsystem explanation, ordered vulnerability chain, scoped impact, packet-driven reproduction, root cause, and remediation coverage.
 - Model context now starts with at most eight compact memory cards under a 6,000-character budget; `memory.search` returns bounded summary cards, collapses unchanged per-agent results to references, and reserves complete bodies, attributes, evidence, and relationships for `memory.get`.
 - Collaboration rooms now use clean context at protocol-phase boundaries and summary-first status, publish, and wait results with explicit packet cursors. Model-facing room packet content is capped at 6,000 characters.

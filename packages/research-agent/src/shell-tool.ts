@@ -144,6 +144,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
             cwd,
             ...(stdin === undefined ? {} : { stdin }),
             timeoutMs,
+            ...(context?.runbookContext ? { runbookContext: context.runbookContext } : {}),
           }, context?.signal));
         } catch {
           return blockedAuthorizationResult(

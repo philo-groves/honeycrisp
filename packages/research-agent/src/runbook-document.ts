@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import type {
   RunbookCell,
   RunbookDocument,
+  RunbookExecutionSummary,
   RunbookOutput
 } from './knowledge-types.js';
 
@@ -22,6 +23,7 @@ export function parseHoneycrispRunbook(source: string, runbookId: string): Runbo
   if (notebook.cells.length > MAX_RUNBOOK_CELLS) throw new Error('Runbook contains too many cells to display');
 
   const metadata = optionalRecord(notebook.metadata);
+  const honeycrispMetadata = optionalRecord(metadata?.honeycrisp);
   const notebookLanguage =
     optionalString(optionalRecord(metadata?.language_info)?.name) ??
     optionalString(optionalRecord(metadata?.kernelspec)?.language);
@@ -31,6 +33,8 @@ export function parseHoneycrispRunbook(source: string, runbookId: string): Runbo
     nbformat: 4,
     nbformatMinor: optionalInteger(notebook.nbformat_minor) ?? 0,
     language: notebookLanguage,
+    revision: optionalInteger(honeycrispMetadata?.revision),
+    latestRun: parseExecutionSummary(honeycrispMetadata?.latestRun),
     cells: notebook.cells.map((cell, index) => parseCell(cell, index, notebookLanguage))
   };
 }
@@ -42,9 +46,11 @@ function parseCell(value: unknown, index: number, notebookLanguage: string | nul
     throw new Error(`Unsupported runbook cell type at cell ${index + 1}`);
   }
   const metadata = optionalRecord(cell.metadata);
+  const honeycrispMetadata = optionalRecord(metadata?.honeycrisp);
   const vscodeMetadata = optionalRecord(metadata?.vscode);
   const language =
     optionalString(metadata?.language) ??
+    optionalString(honeycrispMetadata?.language) ??
     optionalString(vscodeMetadata?.languageId) ??
     (cellType === 'code' ? notebookLanguage : null);
 
@@ -54,10 +60,37 @@ function parseCell(value: unknown, index: number, notebookLanguage: string | nul
     source: sourceText(cell.source),
     language,
     executionCount: optionalInteger(cell.execution_count),
+    latestRun: parseExecutionSummary(honeycrispMetadata?.latestRun),
     outputs: cellType === 'code' && Array.isArray(cell.outputs)
       ? cell.outputs.map((output) => parseOutput(output)).filter((output): output is RunbookOutput => output !== null)
       : []
   };
+}
+
+function parseExecutionSummary(value: unknown): RunbookCell["latestRun"] {
+  const execution = optionalRecord(value);
+  if (!execution) return null;
+  const runId = optionalString(execution.runId);
+  const startedAt = optionalString(execution.startedAt);
+  const status = execution.status;
+  if (!runId || !startedAt || !isRunbookExecutionStatus(status)) return null;
+  return {
+    runId,
+    status,
+    startedAt,
+    completedAt: optionalString(execution.completedAt),
+    durationMs: optionalNonNegativeNumber(execution.durationMs),
+    exitCode: optionalInteger(execution.exitCode),
+    error: optionalString(execution.error),
+  };
+}
+
+function isRunbookExecutionStatus(value: unknown): value is RunbookExecutionSummary["status"] {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "blocked" || value === "skipped";
+}
+
+function optionalNonNegativeNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function parseOutput(value: unknown): RunbookOutput | null {
@@ -138,4 +171,3 @@ function jsonText(value: unknown): string {
     return String(value);
   }
 }
-

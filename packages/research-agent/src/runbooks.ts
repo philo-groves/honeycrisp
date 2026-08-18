@@ -16,6 +16,23 @@ const require = createRequire(import.meta.url);
 export const RUNBOOK_STATUSES = ["draft", "active", "completed", "archived"] as const;
 export type RunbookStatus = (typeof RUNBOOK_STATUSES)[number];
 export type RunbookCellKind = "markdown" | "code";
+export type RunbookExecutionStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "skipped";
+
+export interface RunbookExecutionState {
+  runId: string;
+  status: RunbookExecutionStatus;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  exitCode?: number | null;
+  error?: string;
+}
+
+export interface RunbookExecutionPlanCell {
+  id: string;
+  source: string;
+  language: string | null;
+}
 
 export interface RunbookCellInput {
   kind: RunbookCellKind;
@@ -70,10 +87,11 @@ interface RunbookRow {
 }
 
 interface NotebookCell {
+  id?: string;
   cell_type: "markdown" | "code";
   metadata: Record<string, unknown>;
   source: string[];
-  execution_count?: null;
+  execution_count?: number | null;
   outputs?: Array<Record<string, unknown>>;
 }
 
@@ -247,6 +265,165 @@ export class RunbookStore {
     }
   }
 
+  public executionPlan(id: string, cellId?: string): RunbookExecutionPlanCell[] {
+    const row = this.readRow(requiredText(id, "id", 200));
+    if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
+    if (row.status === "archived") throw new Error("Archived runbooks cannot be executed.");
+    const notebook = this.readNotebook(row);
+    const cells = notebook.cells
+      .map((cell, index) => ({ cell, id: notebookCellId(cell, index) }))
+      .filter(({ cell }) => cell.cell_type === "code")
+      .filter(({ id: candidateId }) => !cellId || candidateId === cellId)
+      .map(({ cell, id: candidateId }) => {
+        const honeycrisp = isRecord(cell.metadata.honeycrisp) ? cell.metadata.honeycrisp : {};
+        const vscode = isRecord(cell.metadata.vscode) ? cell.metadata.vscode : {};
+        return {
+          id: candidateId,
+          source: cell.source.join(""),
+          language: typeof honeycrisp.language === "string"
+            ? honeycrisp.language
+            : typeof vscode.languageId === "string"
+              ? vscode.languageId
+              : null,
+        };
+      });
+    if (cellId && cells.length === 0) throw new Error(`Code cell not found in runbook ${id}: ${cellId}`);
+    if (cells.length === 0) throw new Error("Runbook has no executable code cells.");
+    return cells;
+  }
+
+  public beginExecution(id: string, runId: string, cellIds: readonly string[]): void {
+    const startedAt = new Date().toISOString();
+    this.updateNotebook(id, (notebook) => {
+      notebook.metadata.honeycrisp.latestRun = {
+        runId,
+        status: "running",
+        startedAt,
+        cellCount: cellIds.length,
+      };
+      notebook.cells.forEach((cell, index) => {
+        const cellId = notebookCellId(cell, index);
+        if (!cellIds.includes(cellId)) return;
+        setCellExecution(cell, { runId, status: "queued", startedAt });
+      });
+    });
+  }
+
+  public beginCellExecution(id: string, runId: string, cellId: string): void {
+    const startedAt = new Date().toISOString();
+    this.updateNotebook(id, (notebook) => {
+      const cell = requireNotebookCell(notebook, cellId);
+      setCellExecution(cell, { runId, status: "running", startedAt });
+    });
+  }
+
+  public completeCellExecution(input: {
+    id: string;
+    runId: string;
+    cellId: string;
+    status: "succeeded" | "failed" | "blocked";
+    startedAt: string;
+    completedAt: string;
+    durationMs: number;
+    stdout?: string;
+    stderr?: string;
+    exitCode?: number | null;
+    error?: string;
+  }): void {
+    this.updateNotebook(input.id, (notebook) => {
+      const cell = requireNotebookCell(notebook, input.cellId);
+      setCellExecution(cell, {
+        runId: input.runId,
+        status: input.status,
+        startedAt: input.startedAt,
+        completedAt: input.completedAt,
+        durationMs: Math.max(0, Math.round(input.durationMs)),
+        ...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
+        ...(input.error ? { error: input.error.slice(0, 2_000) } : {}),
+      });
+      const honeycrisp = isRecord(cell.metadata.honeycrisp) ? cell.metadata.honeycrisp : {};
+      cell.metadata.honeycrisp = {
+        ...honeycrisp,
+        ...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
+      };
+      cell.execution_count = (cell.execution_count ?? 0) + 1;
+      cell.outputs = [];
+      if (input.stdout) cell.outputs.push({ output_type: "stream", name: "stdout", text: sourceLines(input.stdout) });
+      if (input.stderr) cell.outputs.push({ output_type: "stream", name: "stderr", text: sourceLines(input.stderr) });
+      if (input.error && !input.stderr) {
+        cell.outputs.push({ output_type: "error", ename: input.status, evalue: input.error, traceback: [input.error] });
+      }
+    });
+  }
+
+  public skipCellExecutions(id: string, runId: string, cellIds: readonly string[], reason: string): void {
+    if (cellIds.length === 0) return;
+    const completedAt = new Date().toISOString();
+    this.updateNotebook(id, (notebook) => {
+      notebook.cells.forEach((cell, index) => {
+        const cellId = notebookCellId(cell, index);
+        if (!cellIds.includes(cellId)) return;
+        setCellExecution(cell, {
+          runId,
+          status: "skipped",
+          startedAt: completedAt,
+          completedAt,
+          durationMs: 0,
+          error: reason.slice(0, 2_000),
+        });
+      });
+    });
+  }
+
+  public completeExecution(input: {
+    id: string;
+    runId: string;
+    status: "succeeded" | "failed" | "blocked";
+    startedAt: string;
+    completedAt: string;
+    durationMs: number;
+    error?: string;
+  }): void {
+    this.updateNotebook(input.id, (notebook) => {
+      notebook.metadata.honeycrisp.latestRun = {
+        runId: input.runId,
+        status: input.status,
+        startedAt: input.startedAt,
+        completedAt: input.completedAt,
+        durationMs: Math.max(0, Math.round(input.durationMs)),
+        ...(input.error ? { error: input.error.slice(0, 2_000) } : {}),
+      };
+    });
+  }
+
+  private updateNotebook(id: string, mutate: (notebook: RunbookNotebook) => void): void {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.readRow(requiredText(id, "id", 200));
+      if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
+      const notebook = this.readNotebook(row);
+      mutate(notebook);
+      const revision = row.revision + 1;
+      const updatedAt = new Date().toISOString();
+      notebook.metadata.honeycrisp = {
+        ...notebook.metadata.honeycrisp,
+        revision,
+        updatedAt,
+      };
+      const entry = this.writeAndRegister(id, row.artifact_id, row.relative_path, row.title, notebook);
+      this.database.prepare(
+        `UPDATE honeycrisp_runbooks
+         SET content_hash = ?, size_bytes = ?, revision = ?, updated_at = ?
+         WHERE id = ? AND workspace_id = ? AND revision = ?`,
+      ).run(entry.contentHash, entry.sizeBytes, revision, updatedAt, id, this.context.workspaceId, row.revision);
+      this.recordRevision(id, revision, updatedAt);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   private readRow(id: string): RunbookRow | null {
     return (this.database
       .prepare("SELECT * FROM honeycrisp_runbooks WHERE id = ? AND workspace_id = ?")
@@ -370,11 +547,27 @@ function inputToNotebookCell(cell: RunbookCellInput): NotebookCell {
     },
     ...(cell.language ? { vscode: { languageId: cell.language } } : {}),
   };
-  if (cell.kind === "markdown") return { cell_type: "markdown", metadata, source: sourceLines(cell.source) };
+  const id = `cell-${randomUUID()}`;
+  if (cell.kind === "markdown") return { id, cell_type: "markdown", metadata, source: sourceLines(cell.source) };
   const outputs: Array<Record<string, unknown>> = [];
   if (cell.stdout) outputs.push({ output_type: "stream", name: "stdout", text: sourceLines(cell.stdout) });
   if (cell.stderr) outputs.push({ output_type: "stream", name: "stderr", text: sourceLines(cell.stderr) });
-  return { cell_type: "code", metadata, source: sourceLines(cell.source), execution_count: null, outputs };
+  return { id, cell_type: "code", metadata, source: sourceLines(cell.source), execution_count: null, outputs };
+}
+
+function notebookCellId(cell: NotebookCell, index: number): string {
+  return typeof cell.id === "string" && cell.id.trim() ? cell.id.trim() : `cell-${index + 1}`;
+}
+
+function requireNotebookCell(notebook: RunbookNotebook, cellId: string): NotebookCell {
+  const cell = notebook.cells.find((candidate, index) => notebookCellId(candidate, index) === cellId);
+  if (!cell || cell.cell_type !== "code") throw new Error(`Runbook code cell not found: ${cellId}`);
+  return cell;
+}
+
+function setCellExecution(cell: NotebookCell, execution: RunbookExecutionState): void {
+  const honeycrisp = isRecord(cell.metadata.honeycrisp) ? cell.metadata.honeycrisp : {};
+  cell.metadata.honeycrisp = { ...honeycrisp, latestRun: execution };
 }
 
 function notebookCellToInput(cell: NotebookCell): RunbookCellInput {

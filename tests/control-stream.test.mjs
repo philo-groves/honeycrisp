@@ -89,6 +89,32 @@ test("control stream exposes a stop signal for the complete agent tree", async (
   input.destroy();
 });
 
+test("control stream validates and dispatches runbook execution requests", async () => {
+  const input = new PassThrough();
+  const events = [];
+  const requests = [];
+  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  controls.setRunbookExecutionHandler(async (request) => {
+    requests.push(request);
+  });
+  controls.start();
+
+  input.write(`${JSON.stringify({
+    schemaVersion: 1,
+    type: "runbook_execute",
+    requestId: "runbook-control-1",
+    runbookId: "runbook-1",
+    cellId: "cell-2",
+  })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  await controls.waitForRunbookExecutions();
+
+  assert.deepEqual(requests, [{ runbookId: "runbook-1", cellId: "cell-2" }]);
+  assert.deepEqual(events, [{ type: "runbook_execute", accepted: true, requestId: "runbook-control-1" }]);
+  controls.close();
+  input.destroy();
+});
+
 test("control stream configures safety and correlates concurrent shell approvals", async () => {
   const input = new PassThrough();
   const events = [];

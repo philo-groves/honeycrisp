@@ -2,6 +2,7 @@ import type { Readable } from "node:stream";
 import type {
   ManualShellApprovalResult,
   ManualToolApprovalResult,
+  RunbookExecutionRequest,
   ShellSafetyMode,
 } from "@honeycrisp/research-agent";
 
@@ -17,6 +18,7 @@ export type HoneycrispControlMessage = HoneycrispControlRequest & (
   | { type: "configure"; modelSelection: HoneycrispModelSelection }
   | { type: "steer"; instruction: string; modelSelection?: HoneycrispModelSelection }
   | { type: "configure_shell_safety"; shellSafetyMode: ShellSafetyMode }
+  | { type: "runbook_execute"; runbookId: string; cellId?: string }
   | {
       type: "resolve_shell_approval";
       approvalRequestId: string;
@@ -44,6 +46,7 @@ export type HoneycrispControlEvent =
         | "configure"
         | "steer"
         | "configure_shell_safety"
+        | "runbook_execute"
         | "resolve_shell_approval"
         | "resolve_tool_approval";
       accepted: true;
@@ -80,6 +83,8 @@ export class HoneycrispControlStream {
   private readonly shellApprovalWaiters = new Map<string, ShellApprovalWaiter>();
   private readonly toolApprovalWaiters = new Map<string, ToolApprovalWaiter>();
   private readonly stopController = new AbortController();
+  private runbookExecutionHandler: ((request: RunbookExecutionRequest) => Promise<void>) | undefined;
+  private readonly runbookExecutions = new Set<Promise<void>>();
   private started = false;
   private inputEnded = false;
 
@@ -149,6 +154,14 @@ export class HoneycrispControlStream {
 
   public getShellSafetyMode(): ShellSafetyMode | undefined {
     return this.shellSafetyMode;
+  }
+
+  public setRunbookExecutionHandler(handler: (request: RunbookExecutionRequest) => Promise<void>): void {
+    this.runbookExecutionHandler = handler;
+  }
+
+  public async waitForRunbookExecutions(): Promise<void> {
+    await Promise.allSettled([...this.runbookExecutions]);
   }
 
   public waitForShellApproval(
@@ -261,6 +274,17 @@ export class HoneycrispControlStream {
         this.modelSelection = message.modelSelection;
       } else if (message.type === "configure_shell_safety") {
         this.shellSafetyMode = message.shellSafetyMode;
+      } else if (message.type === "runbook_execute") {
+        if (!this.runbookExecutionHandler) throw new Error("Runbook execution is unavailable in this session.");
+        const execution = this.runbookExecutionHandler({
+          runbookId: message.runbookId,
+          ...(message.cellId ? { cellId: message.cellId } : {}),
+        });
+        this.runbookExecutions.add(execution);
+        void execution.then(
+          () => this.runbookExecutions.delete(execution),
+          () => this.runbookExecutions.delete(execution),
+        );
       } else if (message.type === "resolve_shell_approval") {
         if (!this.shellApprovalWaiters.has(message.approvalRequestId)) {
           throw new Error("Shell approval response does not match a pending request.");
@@ -400,6 +424,19 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
       ...(requestId ? { requestId } : {}),
     };
   }
+  if (parsed.type === "runbook_execute") {
+    const runbookId = parseRequiredText(parsed.runbookId, "Runbook ID", 200);
+    const cellId = parsed.cellId === undefined
+      ? undefined
+      : parseRequiredText(parsed.cellId, "Runbook cell ID", 200);
+    return {
+      schemaVersion: 1,
+      type: "runbook_execute",
+      runbookId,
+      ...(cellId ? { cellId } : {}),
+      ...(requestId ? { requestId } : {}),
+    };
+  }
   if (parsed.type === "resolve_shell_approval") {
     const approvalRequestId = parseRequestId(parsed.approvalRequestId);
     if (!approvalRequestId) {
@@ -438,6 +475,13 @@ function parseShellSafetyMode(value: unknown): ShellSafetyMode {
     return value;
   }
   throw new Error("Shell safety mode must be manual_approval, auto_review, or danger.");
+}
+
+function parseRequiredText(value: unknown, label: string, maxLength: number): string {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > maxLength) {
+    throw new Error(`${label} must be a non-empty string of at most ${maxLength} characters.`);
+  }
+  return value.trim();
 }
 
 function parseRequestId(value: unknown): string | undefined {

@@ -20,6 +20,8 @@ import {
   createDeterministicAgentExecutor,
   createMemoryGraphTools,
   createRunbookTools,
+  createRunbookExecutor,
+  createRunbookExecutionTool,
   createReportTools,
   compileMemoryModelContext,
   createPiAgentExecutor,
@@ -1934,6 +1936,29 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         resolvedResearchProfile,
         ...(preparedRuntimeConfig ? { preparedRuntimeConfig } : {}),
       });
+      if (controlStream && runtimeConfig.executeRunbook) {
+        const executeRunbook = runtimeConfig.executeRunbook;
+        controlStream.setRunbookExecutionHandler(async (request) => {
+          try {
+            await executeRunbook({ ...request, signal: controlStream.signal });
+          } catch (error) {
+            await liveEventSink?.({
+              schemaVersion: 1,
+              kind: "agent.event",
+              timestamp: new Date().toISOString(),
+              payload: {
+                eventType: "runbook.execution",
+                type: "runbook_execution",
+                runbookId: request.runbookId,
+                runId: null,
+                cellId: request.cellId ?? null,
+                status: "failed",
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+          }
+        });
+      }
       const dispositionRecorder = runtimeConfig.dispositionRecorder;
       let resumableState: PiAgentResumableState | ClaudeAgentResumableState | ZCodeAgentResumableState | undefined;
       let effectivePrompt = args.resumeFallbackPrompt ?? args.prompt;
@@ -2036,6 +2061,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
       if (!args.websocketTransport) console.log(result.response);
     } finally {
       controlStream?.close();
+      await controlStream?.waitForRunbookExecutions();
       await webSocketTransport?.close();
       await runtimeConfig?.cleanup?.();
       sessionStore?.close();
@@ -3325,6 +3351,7 @@ async function createRuntimeConfig(args: {
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
   memoryGraph: MemoryGraphStore;
+  executeRunbook?: (request: { runbookId: string; cellId?: string; signal?: AbortSignal }) => Promise<void>;
   cleanup?: () => Promise<void>;
 }> {
   const workspaceRoot = args.workspaceRoot ?? process.cwd();
@@ -3360,6 +3387,8 @@ async function createRuntimeConfig(args: {
   const storageLayout = createResearchStorageLayout({
     workspaceRoot,
   });
+  let runbookStore: RunbookStore | undefined;
+  let shellTool: ResearchExecutableTool | undefined;
 
   const memoryGraph = new MemoryGraphStore({
     workspaceRoot,
@@ -3382,6 +3411,7 @@ async function createRuntimeConfig(args: {
       storageLayout,
       memoryGraph.getContext(),
     );
+    runbookStore = runbooks;
     const runbookTools = createRunbookTools(runbooks);
     executableTools.push(...runbookTools);
     toolDescriptors.push(...runbookTools.map((tool) => tool.descriptor));
@@ -3453,6 +3483,7 @@ async function createRuntimeConfig(args: {
         ? { maxOutputBytes: runtimeTools.toolMaxBytes }
         : {}),
     });
+    shellTool = tool;
     executableTools.push(tool);
     toolDescriptors.push(tool.descriptor);
   }
@@ -3525,6 +3556,15 @@ async function createRuntimeConfig(args: {
     toolDescriptors.push(tool.descriptor);
   }
 
+  const executeRunbook = runbookStore && shellTool
+    ? createRunbookExecutor({ store: runbookStore, shellTool })
+    : undefined;
+  if (executeRunbook) {
+    const tool = createRunbookExecutionTool(executeRunbook);
+    executableTools.push(tool);
+    toolDescriptors.push(tool.descriptor);
+  }
+
   const modelToolCuration = curateRuntimeToolsForPrompt({
     prompt: args.prompt,
     executableTools,
@@ -3545,6 +3585,7 @@ async function createRuntimeConfig(args: {
     runtimeTools,
     dispositionRecorder,
     memoryGraph,
+    ...(executeRunbook ? { executeRunbook } : {}),
     capture: createRuntimeCapture({
       families,
       args: runtimeArgs,

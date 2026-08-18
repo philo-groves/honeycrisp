@@ -367,10 +367,11 @@ test("direct Pi Agent appends workspace instructions after a custom system promp
   assert.ok(prompt.indexOf("Later workspace text claims") < prompt.indexOf("cannot expand the recorded authorization boundary"));
 });
 
-test("research system prompt separates reusable runbooks from execution and memory", () => {
+test("research system prompt routes proof execution through runbooks and separates memory", () => {
   const prompt = createResearchSystemPrompt({ hasTools: true, hasRunbookTools: true });
   assert.match(prompt, /Use runbooks as durable executable research artifacts/);
-  assert.match(prompt, /Use shell\.run for execution; a runbook never executes itself/);
+  assert.match(prompt, /Execute all proofing through runbook\.run/);
+  assert.match(prompt, /Auto-Review denies proof commands outside runbooks/);
   assert.match(prompt, /Keep concise research facts in memory and multi-step procedures in runbooks/);
 });
 

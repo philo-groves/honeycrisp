@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   createResearchStorageLayout,
   createResearchToolRegistry,
+  createRunbookExecutor,
   createRunbookTools,
   ensureResearchStorageLayout,
   getDefaultMemoryDatabasePath,
@@ -118,6 +119,71 @@ test("runbook tools expose bounded artifact operations", async () => {
     const listed = await registry.execute({ id: "list_runbooks", actionClass: "recall", toolName: "runbook.list", input: {} });
     assert.equal(listed.result.output.length, 1);
     assert.equal(listed.result.output[0].id, created.result.output.id);
+  } finally {
+    store.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("runbook execution records cell status, output, and duration through the shell boundary", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runbook-execution-"));
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
+  const store = new RunbookStore(
+    getDefaultMemoryDatabasePath(workspaceRoot),
+    layout,
+    { sessionId: "session_exec", workspaceId: "workspace_exec", workspaceName: "Execution" },
+  );
+  const contexts = [];
+  const updates = [];
+  const shellTool = {
+    descriptor: {
+      name: "shell.run",
+      description: "fixture",
+      actionClasses: ["experiment"],
+      sideEffects: "process",
+      requiredPermissions: ["process:spawn"],
+    },
+    async execute(action, context) {
+      contexts.push(context.runbookContext);
+      return {
+        action,
+        status: "complete",
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        summary: "complete",
+        output: { stdout: "proof passed\n", stderr: "", exitCode: 0 },
+        followUpActions: [],
+      };
+    },
+  };
+  try {
+    const created = store.create({
+      title: "Proof sequence",
+      purpose: "Run one bounded and repeatable proof command.",
+      cells: [{ kind: "code", language: "sh", source: "printf 'proof passed\\n'" }],
+    });
+    const execute = createRunbookExecutor({
+      store,
+      shellTool,
+      onUpdate: (update) => updates.push(update),
+    });
+    await execute({ runbookId: created.runbook.id });
+
+    assert.equal(contexts.length, 1);
+    assert.equal(contexts[0].runbookId, created.runbook.id);
+    assert.match(contexts[0].runId, /^runbook_run_/);
+    assert.match(contexts[0].cellId, /^cell-/);
+    assert.equal(updates.at(-1).status, "succeeded");
+
+    const artifact = listResearchStorageArtifacts(layout, { kind: "runbook" })[0];
+    const notebook = JSON.parse(await readFile(artifact.path, "utf8"));
+    const codeCell = notebook.cells[1];
+    assert.equal(codeCell.execution_count, 1);
+    assert.equal(codeCell.outputs[0].text.join(""), "proof passed\n");
+    assert.equal(codeCell.metadata.honeycrisp.latestRun.status, "succeeded");
+    assert.equal(typeof codeCell.metadata.honeycrisp.latestRun.durationMs, "number");
+    assert.equal(notebook.metadata.honeycrisp.latestRun.status, "succeeded");
+    assert.equal(typeof notebook.metadata.honeycrisp.latestRun.durationMs, "number");
   } finally {
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });

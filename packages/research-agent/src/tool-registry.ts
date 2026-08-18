@@ -23,6 +23,11 @@ export type ResearchToolExecutionStatus = "complete" | "error" | "blocked";
 export interface ResearchToolExecutionContext {
   signal?: AbortSignal;
   agentId?: string;
+  runbookContext?: {
+    runbookId: string;
+    runId: string;
+    cellId: string;
+  };
 }
 
 export interface ResearchToolValidationHookInput {

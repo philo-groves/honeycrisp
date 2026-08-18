@@ -449,8 +449,8 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     runbookInstructions: [
       "List existing workspace runbooks before creating one.",
       "Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
-      "Keep runbooks operational and reproducible: record exact commands or code, required context, decisive bounded outputs, and interpretation.",
-      "Use shell.run for execution; a runbook never executes itself.",
+      "Keep runbooks healthy and reproducible: record prerequisites, exact bounded commands or code, an explicit supported language for every code cell, expected evidence, interpretation, and cleanup or reset steps.",
+      "All proofing must execute through runbook.run. Use shell.run only for non-proof setup, inspection, build, and debugging; Auto-Review denies proof commands outside a recorded runbook cell.",
     ],
     reportInstructions: [
       "List existing workspace reports before creating one.",
@@ -817,7 +817,7 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
     runbookInstructions: [
       "Create or extend a runbook for reproducible formalization builds, symbolic computations, exhaustive searches, literature queries, or repeated verification pipelines.",
       "Record exact commands, package or theorem-prover versions, parameters, seeds, precision, assumptions, decisive outputs, and interpretation.",
-      "Use shell.run for execution; a runbook never executes itself.",
+      "Give every executable cell an explicit supported language plus bounded inputs and expected evidence. Execute formal proofing through runbook.run; Auto-Review denies proof commands issued directly through shell.run.",
     ],
     reportInstructions: [
       "List existing workspace reports before creating one.",

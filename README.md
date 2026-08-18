@@ -42,7 +42,7 @@ Before its final response, the root agent records one structured `session.dispos
 
 Every durable graph node belongs to exactly one subject and records lists of the sessions and workspaces in which it was saved or corrected. Updating the same subject-visible type-and-title identity from another session or workspace refines it in place and appends that context instead of creating a copy. `memory.search` queries current-workspace associations by default and accepts current-session or whole-subject scope. Subject ownership is enforced even though records share one database.
 
-Runbooks are workspace-scoped, revisioned Jupyter `nbformat 4` artifacts for reusable proof sequences, environment setup, diagnostics, and investigation procedures. `runbook.list`, `runbook.get`, `runbook.create`, and `runbook.append` preserve ordered markdown/code cells and bounded decisive outputs. Honeycrisp does not require Jupyter and never executes a notebook directly; commands remain subject to the normal `shell.run` broker and its utility controls.
+Runbooks are workspace-scoped, revisioned Jupyter `nbformat 4` artifacts for reusable proof sequences, environment setup, diagnostics, and investigation procedures. `runbook.list`, `runbook.get`, `runbook.create`, and `runbook.append` preserve ordered markdown/code cells, while `runbook.run` executes one cell or the ordered code-cell sequence through the normal `shell.run` broker and its utility controls. Each cell records its latest status, duration, exit code, and bounded output. In Auto-Review, commands classified as proofing require trusted runbook execution context and are denied when issued directly through `shell.run`.
 
 ## Client protocol
 
