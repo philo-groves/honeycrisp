@@ -136,7 +136,7 @@ export interface CreateShellSafetyAuthorizerOptions {
 const DEFAULT_REVIEW_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_REVIEW_INPUT_BYTES = 64 * 1024;
 const MAX_REVIEW_OUTPUT_TOKENS = 1_024;
-const MAX_REVIEW_RESPONSE_ATTEMPTS = 2;
+const MAX_REVIEW_ATTEMPTS = 2;
 const MAX_REASON_CHARS = 1_000;
 const SHELL_REVIEW_FAILURE_CATEGORIES = new Set<ShellReviewFailureCategory>([
   "aborted",
@@ -635,8 +635,9 @@ async function reviewShellCommand(input: {
       reviewSignal.addEventListener("abort", abortReview, { once: true });
     });
     try {
-      for (let responseAttempt = 1; responseAttempt <= MAX_REVIEW_RESPONSE_ATTEMPTS; responseAttempt += 1) {
-        const prompt = shellReviewPrompt(serialized, responseAttempt > 1);
+      let repairResponse = false;
+      for (let reviewAttempt = 1; reviewAttempt <= MAX_REVIEW_ATTEMPTS; reviewAttempt += 1) {
+        const prompt = shellReviewPrompt(serialized, repairResponse);
         try {
           if (useOfficialClaude) {
             const response = await Promise.race([
@@ -680,24 +681,31 @@ async function reviewShellCommand(input: {
           };
         } catch (error) {
           if (error instanceof ShellReviewResponseError) {
-            if (responseAttempt < MAX_REVIEW_RESPONSE_ATTEMPTS) continue;
+            if (reviewAttempt < MAX_REVIEW_ATTEMPTS) {
+              repairResponse = true;
+              continue;
+            }
             throw new ShellReviewFailureError({
               category: error.category,
               phase: "response",
-              attempts: responseAttempt,
+              attempts: reviewAttempt,
             });
           }
           const failure = shellReviewFailureAudit(error);
+          if (failure.category === "provider_error" && reviewAttempt < MAX_REVIEW_ATTEMPTS) {
+            repairResponse = false;
+            continue;
+          }
           throw new ShellReviewFailureError({
             ...failure,
-            attempts: Math.max(failure.attempts, responseAttempt),
+            attempts: Math.max(failure.attempts, reviewAttempt),
           });
         }
       }
       throw new ShellReviewFailureError({
         category: "provider_error",
         phase: "request",
-        attempts: MAX_REVIEW_RESPONSE_ATTEMPTS,
+        attempts: MAX_REVIEW_ATTEMPTS,
       });
     } finally {
       reviewSignal.removeEventListener("abort", abortReview);
@@ -1030,7 +1038,7 @@ function sanitizeShellReviewFailureAudit(
     || (failure.phase !== "request" && failure.phase !== "response")
     || !Number.isInteger(failure.attempts)
     || failure.attempts < 0
-    || failure.attempts > MAX_REVIEW_RESPONSE_ATTEMPTS
+    || failure.attempts > MAX_REVIEW_ATTEMPTS
   ) {
     return undefined;
   }
