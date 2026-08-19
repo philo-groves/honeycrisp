@@ -533,6 +533,58 @@ test("Auto-Review repairs one malformed provider response before failing closed"
   assert.match(calls[0].contexts[1].messages[0].content, /prior response did not match/i);
 });
 
+test("Auto-Review retries one transient provider error before failing closed", async () => {
+  const reviewer = {
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    reasoningEffort: "medium",
+  };
+  const calls = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    completeClaudeText: async (options) => {
+      calls.push(options);
+      if (calls.length === 1) throw new Error("temporary Claude Agent SDK execution failure");
+      return {
+        text: "",
+        structuredOutput: {
+          decision: "approved",
+          proofing: false,
+          reason: "Bounded inspection.",
+        },
+        usage: {},
+      };
+    },
+  });
+
+  const approved = await authorize(BASE_REQUEST);
+  assert.equal(approved.decision, "approved");
+  assert.equal(calls.length, 2);
+  assert.doesNotMatch(calls[1].prompt, /prior response did not match/i);
+
+  let failureCalls = 0;
+  const alwaysFailing = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    completeClaudeText: async () => {
+      failureCalls += 1;
+      throw new Error("temporary Claude Agent SDK execution failure: secret-provider-detail");
+    },
+  });
+
+  const denied = await alwaysFailing(BASE_REQUEST);
+  assert.equal(failureCalls, 2);
+  assert.deepEqual(denied.reviewFailure, {
+    category: "provider_error",
+    phase: "request",
+    attempts: 2,
+  });
+  assert.doesNotMatch(JSON.stringify(denied), /secret-provider-detail/);
+});
+
 test("Auto-Review denial waits for a correlated one-command researcher override", async () => {
   const requested = [];
   const resolved = [];

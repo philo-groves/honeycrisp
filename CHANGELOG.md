@@ -89,7 +89,7 @@
 
 ### Fixed
 
-- Auto-Review now requests schema-constrained Anthropic decisions, gives provider reviewers a larger bounded output allowance, retries one malformed response once, and records sanitized timeout, authentication, quota, model, provider, and response-shape failure categories while continuing to fail closed.
+- Auto-Review now requests schema-constrained Anthropic decisions, gives provider reviewers a larger bounded output allowance, retries one malformed response or transient provider failure within the existing timeout, and records sanitized timeout, authentication, quota, model, provider, and response-shape failure categories while continuing to fail closed.
 - Native OpenAI Responses compaction is now gated by provider identity as well as wire protocol, preventing xAI, OpenRouter, and other OpenAI-compatible providers from receiving OpenAI-only request fields. Context telemetry now records the active provider, model, API, and context window.
 - Stray non-JSON diagnostics from stdio MCP servers are now retained in a bounded diagnostic buffer instead of escaping the stdout handler and terminating the research host.
 - Session protocol failures now distinguish SQLite structural corruption and application-level hash mismatches from ordinary operation errors, with non-retryable instructions to stop writers, preserve the original database, and restore or repair before retrying.
