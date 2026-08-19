@@ -89,6 +89,8 @@ export function createResearchAgentFlowCapture(
   options: { capturedAt?: string } = {},
 ): ResearchAgentFlowCapture {
   const capturedAt = options.capturedAt ?? nowIso();
+  const nextPromptSuggestions = result.agentRun.output.nextPromptSuggestions
+    ?? result.finalDisposition.nextPromptSuggestions;
   return {
     schemaVersion: 5,
     capturedAt,
@@ -114,8 +116,8 @@ export function createResearchAgentFlowCapture(
       outputText: result.agentRun.output.text,
       finalDisposition: result.finalDisposition,
       ...(result.agentRun.output.goal ? { goal: result.agentRun.output.goal } : {}),
-      ...(result.agentRun.output.nextPromptSuggestions
-        ? { nextPromptSuggestions: result.agentRun.output.nextPromptSuggestions }
+      ...(nextPromptSuggestions
+        ? { nextPromptSuggestions }
         : {}),
       ...(result.agentRun.output.researchTrace
         ? { researchTrace: result.agentRun.output.researchTrace }

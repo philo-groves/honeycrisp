@@ -24,6 +24,21 @@ test("session disposition records one validated structured terminal state", asyn
         external: true,
       }],
       externalStateRequired: true,
+      nextPromptSuggestions: [
+        {
+          title: "Validate with a second account",
+          promptMarkdown: "Use an authorized second account to validate the cross-account boundary.",
+          rationale: "The missing credential is the only external blocker.",
+        },
+        {
+          title: "Audit the adjacent authorization path",
+          promptMarkdown: "Trace the adjacent authorization path and compare its ownership checks.",
+        },
+        {
+          title: "Build a regression proof",
+          promptMarkdown: "Turn the observed boundary into a bounded, reproducible regression proof.",
+        },
+      ],
     },
   };
 

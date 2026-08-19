@@ -39,6 +39,12 @@ test("flow captures preserve host research-control events in the event timeline"
       turn: 8,
     },
   ]);
+  const nextPromptSuggestions = [
+    { title: "Inspect the next boundary", promptMarkdown: "Inspect the next concrete trust boundary." },
+    { title: "Challenge the result", promptMarkdown: "Challenge the result with a distinct construction." },
+    { title: "Build a regression proof", promptMarkdown: "Build a bounded regression proof from the result." },
+  ];
+  result.finalDisposition.nextPromptSuggestions = nextPromptSuggestions;
 
   const capture = createResearchAgentFlowCapture(result, { capturedAt: timestamp });
   const controlEvents = capture.eventTimeline.filter((event) => event.kind === "agent.control");
@@ -55,6 +61,7 @@ test("flow captures preserve host research-control events in the event timeline"
   ]);
   assert.ok(controlEvents.every((event) => event.timestamp === timestamp));
   assert.ok(controlEvents.every((event) => event.agentId === "root" && event.agentPath === "/root"));
+  assert.deepEqual(capture.agent.nextPromptSuggestions, nextPromptSuggestions);
 });
 
 function captureFixtureResult(timestamp, agentEvents) {

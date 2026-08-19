@@ -46,6 +46,7 @@
 
 ### Changed
 
+- Root agents now record three structured follow-up prompts inside the existing final session disposition. Flow captures expose those prompts as next-prompt metadata, allowing clients to offer end-of-session continuations without launching a separate model job.
 - Consolidated CLI envelopes, WebSocket messages, transport constants, factories, and validators in `honeycrisp/protocol`; CLI operations now echo client request IDs, WebSocket protocol errors use the shared error detail DTO, and the legacy WebSocket export path remains an alias for protocol v1 compatibility.
 - Centralized provider small-model defaults, profile job applicability, plugin validation, repository checkout behavior, and retained maintenance policy in Honeycrisp so clients no longer duplicate those semantics.
 - The authenticated WebSocket session transport is now the sole live event and control boundary for Beale and future clients.

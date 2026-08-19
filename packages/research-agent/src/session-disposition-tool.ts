@@ -1,6 +1,6 @@
 import { nowIso } from "./ids.js";
 import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
-import type { ResearchToolAction } from "./types.js";
+import type { ResearchNextPromptSuggestion, ResearchToolAction } from "./types.js";
 
 export const RESEARCH_DISPOSITION_OUTCOMES = [
   "objective_achieved",
@@ -38,6 +38,7 @@ export interface ResearchFinalDisposition {
   summary: string;
   blockerDependencies: readonly ResearchBlockerDependency[];
   externalStateRequired: boolean;
+  nextPromptSuggestions?: readonly ResearchNextPromptSuggestion[];
   recordedAt: string;
 }
 
@@ -69,6 +70,21 @@ const PARAMETERS = {
       type: "boolean",
       description: "True only when meaningful progress requires user input or a change outside the current session and tools.",
     },
+    nextPromptSuggestions: {
+      type: "array",
+      minItems: 3,
+      maxItems: 3,
+      description: "Three distinct, concrete follow-up prompts derived from this session. These are captured with the final disposition and are not part of the visible final response.",
+      items: {
+        type: "object",
+        required: ["title", "promptMarkdown"],
+        properties: {
+          title: { type: "string", description: "Short action-oriented label for the follow-up." },
+          promptMarkdown: { type: "string", description: "Self-contained prompt that continues from this session without repeating completed work." },
+          rationale: { type: "string", description: "Brief reason this is a useful next step." },
+        },
+      },
+    },
   },
 };
 
@@ -96,7 +112,7 @@ export function createSessionDispositionTool(recorder: ResearchDispositionRecord
     descriptor: {
       name: "session.disposition",
       transportName: "session_disposition",
-      description: "Record the root session's structured final disposition exactly once before the final response. List concrete unresolved dependencies and mark externalStateRequired only when more in-session work cannot resolve them.",
+      description: "Record the root session's structured final disposition and three follow-up prompts exactly once before the final response. List concrete unresolved dependencies and mark externalStateRequired only when more in-session work cannot resolve them.",
       actionClasses: ["synthesize", "respond"],
       sideEffects: "none",
       requiredPermissions: [],
@@ -158,7 +174,34 @@ function parseDisposition(value: unknown): ResearchFinalDisposition {
   if (outcome === "objective_achieved" && blockerDependencies.length > 0) {
     throw new Error("An achieved objective cannot retain blocker dependencies.");
   }
-  return { outcome, summary, blockerDependencies, externalStateRequired, recordedAt: nowIso() };
+  const nextPromptSuggestions = input.nextPromptSuggestions === undefined
+    ? undefined
+    : parseNextPromptSuggestions(input.nextPromptSuggestions);
+  return {
+    outcome,
+    summary,
+    blockerDependencies,
+    externalStateRequired,
+    ...(nextPromptSuggestions ? { nextPromptSuggestions } : {}),
+    recordedAt: nowIso(),
+  };
+}
+
+function parseNextPromptSuggestions(value: unknown): ResearchNextPromptSuggestion[] {
+  if (!Array.isArray(value) || value.length !== 3) {
+    throw new Error("nextPromptSuggestions must contain exactly three suggestions.");
+  }
+  const identities = new Set<string>();
+  return value.map((candidate) => {
+    const input = record(candidate, "next prompt suggestion");
+    const title = requiredString(input.title, "suggestion title");
+    const identity = title.toLocaleLowerCase();
+    if (identities.has(identity)) throw new Error("nextPromptSuggestions titles must be distinct.");
+    identities.add(identity);
+    const promptMarkdown = requiredString(input.promptMarkdown, "suggestion promptMarkdown");
+    const rationale = optionalString(input.rationale, "suggestion rationale");
+    return { title, promptMarkdown, ...(rationale ? { rationale } : {}) };
+  });
 }
 
 function parseDependency(value: unknown): ResearchBlockerDependency {
@@ -187,7 +230,13 @@ function complete(action: ResearchToolAction, startedAt: string, disposition: Re
 }
 
 function cloneDisposition(disposition: ResearchFinalDisposition): ResearchFinalDisposition {
-  return { ...disposition, blockerDependencies: disposition.blockerDependencies.map((dependency) => ({ ...dependency })) };
+  return {
+    ...disposition,
+    blockerDependencies: disposition.blockerDependencies.map((dependency) => ({ ...dependency })),
+    ...(disposition.nextPromptSuggestions
+      ? { nextPromptSuggestions: disposition.nextPromptSuggestions.map((suggestion) => ({ ...suggestion })) }
+      : {}),
+  };
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -203,4 +252,10 @@ function requiredString(value: unknown, label: string): string {
 function requiredBoolean(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") throw new Error(`${label} must be a boolean.`);
   return value;
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string.`);
+  return value.trim();
 }
