@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, open, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { nowIso } from "./ids.js";
 import type {
   ResearchExecutableTool,
@@ -26,13 +26,14 @@ const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_CONCURRENCY = 64;
 const LEASE_RETRY_MS = 50;
 const NEW_LEASE_GRACE_MS = 5_000;
+const WSL_SYSTEM_DISTRIBUTIONS = new Set(["docker-desktop", "docker-desktop-data"]);
 const SHELL_PARAMETERS = {
   type: "object",
   description: "Provide either command, or utility with optional args. Do not provide both forms.",
   properties: {
     command: {
       type: "string",
-      description: "Complete platform shell command. Supports pipelines, chaining, redirects, and other shell syntax. Do not combine with utility or args.",
+      description: "Complete shell command. On Windows this automatically uses WSL when an installed Linux distribution is available; set runtime to host to require cmd.exe. Supports pipelines, chaining, redirects, and other shell syntax. Do not combine with utility or args.",
     },
     utility: {
       type: "string",
@@ -49,8 +50,21 @@ const SHELL_PARAMETERS = {
     },
     stdin: { type: "string" },
     timeoutMs: { type: "number" },
+    runtime: {
+      type: "string",
+      enum: ["host", "wsl"],
+      description: "Execution runtime. Direct utility calls default to host. Command calls on Windows default to WSL when available and otherwise use the host shell.",
+    },
   },
 };
+
+export type ShellRuntime = "host" | "wsl";
+
+export interface WslShellOptions {
+  executable?: string;
+  distribution?: string;
+  listDistributions?: () => readonly string[];
+}
 
 export interface HoneycrispShellOptions {
   schemaVersion: 1;
@@ -65,6 +79,33 @@ export interface ShellToolOptions {
   maxOutputBytes?: number;
   protectedDirectories?: readonly string[];
   authorize?: ShellCommandAuthorizer;
+  platform?: NodeJS.Platform;
+  wsl?: WslShellOptions;
+}
+
+interface RequestedShellInvocation {
+  kind: "command" | "utility";
+  utility: string;
+  args: string[];
+}
+
+interface WslSupport {
+  executable: string;
+  distribution: string;
+}
+
+interface ResolvedShellInvocation {
+  runtime: ShellRuntime;
+  utility: string;
+  args: string[];
+  policyUtility: string;
+  policyArgs: string[];
+  displayUtility: string;
+  cwd: string;
+  wsl?: {
+    distribution: string;
+    cwd: string;
+  };
 }
 
 interface ShellLease {
@@ -86,14 +127,21 @@ interface ProtectedDirectory {
 
 export function createShellTool(options: ShellToolOptions): ResearchExecutableTool {
   const workspaceRoot = resolve(options.workspaceRoot);
+  const platform = options.platform ?? process.platform;
   const maxOutputBytes = positiveInteger(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
   const protectedDirectories = defaultProtectedDirectories(workspaceRoot, options.protectedDirectories);
+  let cachedWslSupport: WslSupport | null | undefined;
+  const wslSupport = (): WslSupport | null => {
+    if (cachedWslSupport !== undefined) return cachedWslSupport;
+    cachedWslSupport = detectWslSupport(platform, options.wsl);
+    return cachedWslSupport;
+  };
   return {
     descriptor: {
       name: "shell.run",
       transportName: "shell_run",
       description:
-        "Run a platform shell command or execute a host utility directly with explicit argv. Use repository.search first for literal discovery; raw search commands should use a narrow cwd or path and a bounded timeout. Exit status 1 from direct rg, grep, findstr, or git grep execution is reported as a successful no-match result. Shell safety authorization, recognized network-intent policy, utility policy for direct execution, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
+        "Run a shell command or execute a utility directly with explicit argv. On Windows, command form automatically uses an installed WSL distribution so POSIX commands and pipelines work; set runtime to host for cmd.exe. Direct utilities stay on the host unless runtime is wsl. Windows workspace paths are translated for WSL. Use repository.search first for literal discovery; raw search commands should use a narrow cwd or path and a bounded timeout. Exit status 1 from direct rg, grep, findstr, or git grep execution is reported as a successful no-match result. Shell safety authorization, recognized network-intent policy, utility policy for direct execution, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.",
       actionClasses: ["search", "inspect", "analyze", "experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],
@@ -102,6 +150,8 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
         provider: "honeycrisp.built_in",
         safetyProfile: "host-utility-policy",
         networkPolicy: "host-recorded-command-intent",
+        shellRuntimes: platform === "win32" ? ["host", "wsl"] : ["host"],
+        defaultCommandRuntime: platform === "win32" ? "wsl_when_available" : "host",
         defaultBudget: { maxToolCalls: 1 },
       },
     },
@@ -109,16 +159,28 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
     async execute(action, context) {
       const startedAt = nowIso();
       try {
-        const { utility, args } = readShellInvocation(action.input);
-        const cwd = readWorkingDirectory(action.input.cwd, workspaceRoot);
+        const requested = readShellInvocation(action.input);
+        const invocation = resolveShellInvocation({
+          requested,
+          requestedRuntime: readShellRuntime(action.input.runtime),
+          requestedCwd: action.input.cwd,
+          workspaceRoot,
+          platform,
+          wslSupport,
+        });
         const stdin = readOptionalString(action.input.stdin, "stdin");
         const timeoutMs = Math.min(
-          positiveInteger(action.input.timeoutMs, defaultUtilityTimeoutMs(utility, args)),
+          positiveInteger(
+            action.input.timeoutMs,
+            defaultUtilityTimeoutMs(invocation.policyUtility, invocation.policyArgs),
+          ),
           MAX_TIMEOUT_MS,
         );
         const policy = await loadShellOptions(options.shellOptionsPath);
-        const policyUtility = utilityPolicyName(utility);
-        const concurrency = policy.utilities[utility] ?? policy.utilities[policyUtility] ?? policy.defaultConcurrency;
+        const policyUtility = utilityPolicyName(invocation.policyUtility);
+        const concurrency = policy.utilities[invocation.policyUtility]
+          ?? policy.utilities[policyUtility]
+          ?? policy.defaultConcurrency;
         if (concurrency === 0) {
           return errorResult(
             action,
@@ -126,7 +188,21 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
             `Shell utility ${policyUtility} is disabled by the harness-wide Shell Options policy.`,
           );
         }
-        await assertFolderDeleteAllowed(utility, args, cwd, protectedDirectories);
+        await assertFolderDeleteAllowed(
+          invocation.policyUtility,
+          invocation.policyArgs,
+          invocation.cwd,
+          protectedDirectories,
+        );
+        if (invocation.wsl) {
+          await assertWslFolderDeleteAllowed(
+            invocation.policyUtility,
+            invocation.policyArgs,
+            invocation.wsl.cwd,
+            invocation.wsl.distribution,
+            protectedDirectories,
+          );
+        }
         if (!options.authorize) {
           return blockedAuthorizationResult(
             action,
@@ -139,9 +215,9 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
           authorization = sanitizeShellAuthorizationDecision(await options.authorize({
             actionId: action.id,
             workspaceRoot,
-            utility,
-            args,
-            cwd,
+            utility: invocation.utility,
+            args: invocation.args,
+            cwd: invocation.cwd,
             ...(stdin === undefined ? {} : { stdin }),
             timeoutMs,
             ...(context?.runbookContext ? { runbookContext: context.runbookContext } : {}),
@@ -166,7 +242,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
         const deadline = Date.now() + timeoutMs;
         const lease = await acquireLease(
           policy.leaseDirectory,
-          utility,
+          policyUtility,
           concurrency,
           action.id,
           context?.signal,
@@ -175,9 +251,14 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
         try {
           return await runUtility({
             action,
-            utility,
-            args,
-            cwd,
+            utility: invocation.utility,
+            args: invocation.args,
+            logicalUtility: invocation.policyUtility,
+            logicalArgs: invocation.policyArgs,
+            displayUtility: invocation.displayUtility,
+            cwd: invocation.cwd,
+            runtime: invocation.runtime,
+            ...(invocation.wsl ? { wsl: invocation.wsl } : {}),
             ...(stdin === undefined ? {} : { stdin }),
             startedAt,
             timeoutMs: Math.max(1, deadline - Date.now()),
@@ -193,6 +274,47 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       }
     },
   };
+}
+
+async function assertWslFolderDeleteAllowed(
+  utility: string,
+  args: readonly string[],
+  cwd: string,
+  distribution: string,
+  protectedDirectories: readonly ProtectedDirectory[],
+): Promise<void> {
+  const targets = destructiveDirectoryTargets(utility, args, cwd, posix.resolve);
+  if (targets.length === 0) return;
+  const protectedWslPaths: ProtectedDirectory[] = [
+    { path: "/", includeDescendants: false },
+    { path: "/home", includeDescendants: false },
+    { path: "/mnt", includeDescendants: false },
+    { path: "/tmp", includeDescendants: false },
+    { path: "/var", includeDescendants: false },
+    ...["/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/opt", "/proc", "/root", "/run", "/sbin", "/sys", "/usr"]
+      .map((path) => ({ path, includeDescendants: true })),
+    ...protectedDirectories.flatMap((entry) => {
+      const translated = windowsPathToWsl(entry.path, distribution);
+      return translated ? [{ path: translated, includeDescendants: entry.includeDescendants }] : [];
+    }),
+  ];
+  for (const rawTarget of targets) {
+    const target = posix.resolve(cwd, rawTarget.replace(/\\/gu, "/"));
+    const protectedPath = protectedWslPaths.find(
+      (candidate) =>
+        posixPathContains(target, candidate.path) ||
+        (candidate.includeDescendants && posixPathContains(candidate.path, target)),
+    );
+    if (!protectedPath) continue;
+    throw new Error(
+      `Folder delete guard blocked ${utility} from targeting protected WSL directory ${target}.`,
+    );
+  }
+}
+
+function posixPathContains(parent: string, child: string): boolean {
+  const childRelativePath = posix.relative(parent, child);
+  return childRelativePath === "" || (!childRelativePath.startsWith("..") && !posix.isAbsolute(childRelativePath));
 }
 
 async function assertFolderDeleteAllowed(
@@ -224,7 +346,12 @@ async function assertFolderDeleteAllowed(
   }
 }
 
-function destructiveDirectoryTargets(utility: string, args: readonly string[], cwd: string): string[] {
+function destructiveDirectoryTargets(
+  utility: string,
+  args: readonly string[],
+  cwd: string,
+  pathResolver: (...paths: string[]) => string = resolve,
+): string[] {
   if (utility === "rm" || utility === "rmdir") {
     return positionalArguments(args);
   }
@@ -232,7 +359,7 @@ function destructiveDirectoryTargets(utility: string, args: readonly string[], c
     return findRoots(args);
   }
   if (utility === "git") {
-    return gitCleanTargets(args, cwd);
+    return gitCleanTargets(args, cwd, pathResolver);
   }
   return [];
 }
@@ -271,7 +398,11 @@ function findRoots(args: readonly string[]): string[] {
   return roots.length > 0 ? roots : ["."];
 }
 
-function gitCleanTargets(args: readonly string[], cwd: string): string[] {
+function gitCleanTargets(
+  args: readonly string[],
+  cwd: string,
+  pathResolver: (...paths: string[]) => string = resolve,
+): string[] {
   let directory = cwd;
   let dryRun = false;
   let clean = false;
@@ -282,7 +413,7 @@ function gitCleanTargets(args: readonly string[], cwd: string): string[] {
     if (!arg) continue;
     const nextArg = args[index + 1];
     if (arg === "-C" && nextArg) {
-      directory = resolve(directory, nextArg);
+      directory = pathResolver(directory, nextArg);
       index += 1;
       continue;
     }
@@ -294,7 +425,7 @@ function gitCleanTargets(args: readonly string[], cwd: string): string[] {
       pathspecs = true;
       continue;
     }
-    if (clean && (pathspecs || !arg.startsWith("-"))) targets.push(resolve(directory, arg));
+    if (clean && (pathspecs || !arg.startsWith("-"))) targets.push(pathResolver(directory, arg));
     if (arg === "-n" || arg === "--dry-run" || /^-[a-zA-Z]*n[a-zA-Z]*$/u.test(arg)) dryRun = true;
   }
   if (!clean || dryRun) return [];
@@ -485,7 +616,15 @@ async function runUtility(input: {
   action: ResearchToolAction;
   utility: string;
   args: string[];
+  logicalUtility: string;
+  logicalArgs: string[];
+  displayUtility: string;
   cwd: string;
+  runtime: ShellRuntime;
+  wsl?: {
+    distribution: string;
+    cwd: string;
+  };
   stdin?: string;
   startedAt: string;
   timeoutMs: number;
@@ -554,12 +693,14 @@ async function runUtility(input: {
       if (forceStop) clearTimeout(forceStop);
       input.signal?.removeEventListener("abort", abort);
       const message = (error as NodeJS.ErrnoException).code === "ENOENT"
-        ? unavailableUtilityMessage(input.utility)
+        ? unavailableUtilityMessage(input.utility, input.runtime)
         : errorMessage(error);
       resolvePromise(errorResult(input.action, input.startedAt, message, {
         utility: input.utility,
         args: redactShellArguments(input.args),
         cwd: input.cwd,
+        runtime: input.runtime,
+        ...(input.wsl ? { wsl: input.wsl } : {}),
         authorization: input.authorization,
       }));
     });
@@ -574,6 +715,8 @@ async function runUtility(input: {
         utility: input.utility,
         args: redactShellArguments(input.args),
         cwd: input.cwd,
+        runtime: input.runtime,
+        ...(input.wsl ? { wsl: input.wsl } : {}),
         exitCode,
         signal,
         timedOut,
@@ -581,7 +724,7 @@ async function runUtility(input: {
         authorization: input.authorization,
         ...captured,
       };
-      const noMatches = exitCode === 1 && isSearchUtility(input.utility, input.args);
+      const noMatches = exitCode === 1 && isSearchUtility(input.logicalUtility, input.logicalArgs);
       if ((exitCode === 0 || noMatches) && !timedOut && !aborted) {
         resolvePromise({
           action: input.action,
@@ -589,18 +732,18 @@ async function runUtility(input: {
           startedAt: input.startedAt,
           completedAt: nowIso(),
           summary: noMatches
-            ? `${input.utility} completed with no matches.`
-            : `${input.utility} completed successfully.`,
+            ? `${input.displayUtility} completed with no matches.`
+            : `${input.displayUtility} completed successfully.`,
           output: resultOutput,
           followUpActions: [],
         });
         return;
       }
       const reason = timedOut
-        ? `${input.utility} timed out after ${input.timeoutMs}ms.`
+        ? `${input.displayUtility} timed out after ${input.timeoutMs}ms.`
         : aborted
-          ? `${input.utility} was aborted.`
-          : `${input.utility} exited with status ${exitCode ?? signal ?? "unknown"}.`;
+          ? `${input.displayUtility} was aborted.`
+          : `${input.displayUtility} exited with status ${exitCode ?? signal ?? "unknown"}.`;
       resolvePromise(errorResult(input.action, input.startedAt, reason, resultOutput));
     });
 
@@ -621,9 +764,12 @@ function isSearchUtility(utility: string, args: readonly string[]): boolean {
     || (normalized === "git" && args.includes("grep"));
 }
 
-function unavailableUtilityMessage(utility: string): string {
+function unavailableUtilityMessage(utility: string, runtime: ShellRuntime): string {
+  if (runtime === "wsl") {
+    return `WSL executable ${utility} is not available. Install or enable WSL, or rerun with runtime host.`;
+  }
   const host = process.platform === "win32" ? "Windows host" : "host";
-  return `Shell utility ${utility} is not available on the ${host} PATH. Do not repeat the same command. Follow the workspace's recorded runtime instructions and use WSL only when the workspace explicitly requires it.`;
+  return `Shell utility ${utility} is not available on the ${host} PATH. Do not repeat the same command. On Windows, use runtime wsl for utilities installed in the workspace's Linux environment.`;
 }
 
 function createOutputCollector(maxBytes: number): {
@@ -681,15 +827,17 @@ function readUtility(value: unknown): string {
   return value.trim();
 }
 
-function readShellInvocation(input: Record<string, unknown>): { utility: string; args: string[] } {
+function readShellInvocation(input: Record<string, unknown>): RequestedShellInvocation {
   const hasCommand = input.command !== undefined;
   const hasUtility = input.utility !== undefined;
   if (hasCommand && (hasUtility || input.args !== undefined)) {
     throw new Error("shell.run accepts command or utility with args, not both.");
   }
-  if (hasCommand) return platformShellInvocation(readCommand(input.command));
+  if (hasCommand) {
+    return { kind: "command", utility: "/bin/sh", args: ["-lc", readCommand(input.command)] };
+  }
   if (!hasUtility) throw new Error("shell.run requires command or utility.");
-  return { utility: readUtility(input.utility), args: readArguments(input.args) };
+  return { kind: "utility", utility: readUtility(input.utility), args: readArguments(input.args) };
 }
 
 function readCommand(value: unknown): string {
@@ -699,10 +847,193 @@ function readCommand(value: unknown): string {
   return value;
 }
 
-function platformShellInvocation(command: string): { utility: string; args: string[] } {
-  return process.platform === "win32"
-    ? { utility: process.env.ComSpec?.trim() || "cmd.exe", args: ["/d", "/s", "/c", command] }
-    : { utility: "/bin/sh", args: ["-lc", command] };
+function readShellRuntime(value: unknown): ShellRuntime | undefined {
+  if (value === undefined) return undefined;
+  if (value === "host" || value === "wsl") return value;
+  throw new Error("shell.run runtime must be host or wsl.");
+}
+
+function resolveShellInvocation(input: {
+  requested: RequestedShellInvocation;
+  requestedRuntime: ShellRuntime | undefined;
+  requestedCwd: unknown;
+  workspaceRoot: string;
+  platform: NodeJS.Platform;
+  wslSupport(): WslSupport | null;
+}): ResolvedShellInvocation {
+  const runtime = resolveShellRuntime(
+    input.requestedRuntime,
+    input.requested.kind,
+    input.platform,
+    input.wslSupport,
+  );
+  if (runtime === "host") {
+    const cwd = readWorkingDirectory(input.requestedCwd, input.workspaceRoot);
+    if (input.requested.kind === "command") {
+      const command = input.requested.args[1] ?? "";
+      const shell = input.platform === "win32"
+        ? process.env.ComSpec?.trim() || "cmd.exe"
+        : "/bin/sh";
+      return {
+        runtime,
+        utility: shell,
+        args: input.platform === "win32" ? ["/d", "/s", "/c", command] : ["-lc", command],
+        policyUtility: shell,
+        policyArgs: input.platform === "win32" ? ["/d", "/s", "/c", command] : ["-lc", command],
+        displayUtility: utilityPolicyName(shell),
+        cwd,
+      };
+    }
+    return {
+      runtime,
+      utility: input.requested.utility,
+      args: input.requested.args,
+      policyUtility: input.requested.utility,
+      policyArgs: input.requested.args,
+      displayUtility: input.requested.utility,
+      cwd,
+    };
+  }
+
+  const support = input.wslSupport();
+  if (!support) {
+    throw new Error(
+      input.platform === "win32"
+        ? "shell.run runtime wsl requires an installed, user-facing WSL distribution. Install a distribution or use runtime host."
+        : "shell.run runtime wsl is available only from a Windows host.",
+    );
+  }
+  const wslCwd = readWslWorkingDirectory(input.requestedCwd, input.workspaceRoot, support.distribution);
+  const args = ["--distribution", support.distribution, "--cd", wslCwd, "--exec"];
+  if (input.requested.kind === "command") {
+    const command = translateWindowsPathsInCommand(input.requested.args[1] ?? "", support.distribution);
+    args.push("/bin/sh", "-lc", command);
+  } else {
+    args.push(
+      input.requested.utility,
+      ...input.requested.args.map((argument) => translateWindowsPathsInArgument(argument, support.distribution)),
+    );
+  }
+  return {
+    runtime,
+    utility: support.executable,
+    args,
+    policyUtility: input.requested.utility,
+    policyArgs: input.requested.args,
+    displayUtility: input.requested.kind === "command"
+      ? `WSL (${support.distribution}) shell`
+      : `WSL (${support.distribution}) ${input.requested.utility}`,
+    cwd: input.workspaceRoot,
+    wsl: { distribution: support.distribution, cwd: wslCwd },
+  };
+}
+
+function resolveShellRuntime(
+  requested: ShellRuntime | undefined,
+  kind: RequestedShellInvocation["kind"],
+  platform: NodeJS.Platform,
+  wslSupport: () => WslSupport | null,
+): ShellRuntime {
+  if (requested === "host") return "host";
+  if (requested === "wsl") {
+    if (!wslSupport()) {
+      throw new Error(
+        platform === "win32"
+          ? "shell.run runtime wsl requires an installed, user-facing WSL distribution. Install a distribution or use runtime host."
+          : "shell.run runtime wsl is available only from a Windows host.",
+      );
+    }
+    return "wsl";
+  }
+  return platform === "win32" && kind === "command" && wslSupport() ? "wsl" : "host";
+}
+
+function detectWslSupport(platform: NodeJS.Platform, options: WslShellOptions | undefined): WslSupport | null {
+  if (platform !== "win32") return null;
+  const executable = options?.executable?.trim() || "wsl.exe";
+  const distributions = (options?.listDistributions?.() ?? listWslDistributions(executable))
+    .map((distribution) => distribution.trim())
+    .filter((distribution) => distribution.length > 0);
+  const requestedDistribution = options?.distribution?.trim();
+  if (requestedDistribution) {
+    const distribution = distributions.find(
+      (candidate) => candidate.toLowerCase() === requestedDistribution.toLowerCase(),
+    );
+    if (!distribution) return null;
+    return { executable, distribution };
+  }
+  const distribution = distributions.find(
+    (candidate) => !WSL_SYSTEM_DISTRIBUTIONS.has(candidate.toLowerCase()),
+  );
+  return distribution ? { executable, distribution } : null;
+}
+
+function listWslDistributions(executable: string): string[] {
+  const result = spawnSync(executable, ["--list", "--quiet"], {
+    windowsHide: true,
+    timeout: 5_000,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.error || result.status !== 0 || !result.stdout) return [];
+  return decodeWslListOutput(result.stdout).split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+}
+
+export function decodeWslListOutput(output: Buffer | string): string {
+  if (typeof output === "string") return output.replace(/^\uFEFF/u, "").replace(/\0/gu, "");
+  const utf16 = output.toString("utf16le").replace(/^\uFEFF/u, "").replace(/\0/gu, "");
+  if (/\r?\n/u.test(utf16) || output.includes(0)) return utf16;
+  return output.toString("utf8").replace(/^\uFEFF/u, "").replace(/\0/gu, "");
+}
+
+export function windowsPathToWsl(path: string, distribution?: string): string | null {
+  if (path.startsWith("/")) return path;
+  const drive = /^([A-Za-z]):[\\/](.*)$/u.exec(path);
+  if (drive) {
+    const suffix = (drive[2] ?? "").replace(/\\/gu, "/");
+    return `/mnt/${drive[1]?.toLowerCase()}${suffix ? `/${suffix}` : ""}`;
+  }
+  const unc = /^\\\\(?:wsl\$|wsl\.localhost)\\([^\\]+)(?:\\(.*))?$/iu.exec(path);
+  if (!unc) return null;
+  const uncDistribution = unc[1] ?? "";
+  if (distribution && uncDistribution.toLowerCase() !== distribution.toLowerCase()) return null;
+  const suffix = (unc[2] ?? "").replace(/\\/gu, "/");
+  return suffix ? `/${suffix}` : "/";
+}
+
+export function translateWindowsPathsInCommand(command: string, distribution?: string): string {
+  const quoted = command.replace(/(["'])([A-Za-z]:[\\/][^"']*)\1/gu, (_match, quote: string, path: string) => {
+    const translated = windowsPathToWsl(path, distribution);
+    return translated ? `${quote}${translated}${quote}` : `${quote}${path}${quote}`;
+  });
+  return quoted.replace(/(^|[\s=])([A-Za-z]:[\\/][^\s"'|&;<>]*)/gu, (_match, prefix: string, path: string) => {
+    const translated = windowsPathToWsl(path, distribution);
+    return `${prefix}${translated ?? path}`;
+  });
+}
+
+function translateWindowsPathsInArgument(argument: string, distribution?: string): string {
+  const direct = windowsPathToWsl(argument, distribution);
+  if (direct) return direct;
+  return argument.replace(/(^|=)([A-Za-z]:[\\/].*)$/u, (_match, prefix: string, path: string) => {
+    const translated = windowsPathToWsl(path, distribution);
+    return `${prefix}${translated ?? path}`;
+  });
+}
+
+function readWslWorkingDirectory(value: unknown, workspaceRoot: string, distribution: string): string {
+  if (value === undefined) {
+    const translated = windowsPathToWsl(workspaceRoot, distribution);
+    if (!translated) throw new Error(`Cannot map workspace root ${workspaceRoot} into WSL.`);
+    return translated;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("shell.run cwd must be a non-empty string.");
+  }
+  if (value.startsWith("/")) return value;
+  const absolute = resolve(workspaceRoot, value);
+  const translated = windowsPathToWsl(absolute, distribution);
+  if (!translated) throw new Error(`Cannot map shell.run cwd ${absolute} into WSL.`);
+  return translated;
 }
 
 function utilityPolicyName(utility: string): string {

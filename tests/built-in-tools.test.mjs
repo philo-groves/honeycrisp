@@ -10,6 +10,7 @@ import {
   createAnalysisTool,
   createCodeIntelligenceTools,
   createDefaultBuiltInToolFamily,
+  decodeWslListOutput,
   createExperimentTool,
   createRepositorySearchTool,
   createResearchStorageLayout,
@@ -23,6 +24,8 @@ import {
   modelToolResultDetails,
   projectModelToolResult,
   registerResearchStorageArtifact,
+  translateWindowsPathsInCommand,
+  windowsPathToWsl,
 } from "../packages/research-agent/dist/index.js";
 
 const allowShell = async (request) => approvedAuthorization(request);
@@ -216,6 +219,144 @@ test("shell tool enforces disabled utilities before spawning and captures argv o
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("shell tool routes Windows command form through WSL and translates workspace paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-wsl-"));
+  const nested = join(root, "folder with space");
+  const target = join(nested, "fixture.go");
+  const requests = [];
+  const authorize = async (request) => {
+    requests.push(request);
+    return {
+      ...approvedAuthorization(request),
+      mode: "manual_approval",
+      decision: "denied",
+      source: "human",
+      reason: "Fixture denial.",
+    };
+  };
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({
+        workspaceRoot: root,
+        platform: "win32",
+        wsl: {
+          executable: "wsl.exe",
+          listDistributions: () => ["Ubuntu", "docker-desktop"],
+        },
+        authorize,
+      }),
+    ]);
+    const result = await registry.execute({
+      id: "shell_wsl_default",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: {
+        command: `grep -n fixture "${target}" | head -20`,
+        cwd: nested,
+      },
+    });
+
+    assert.equal(result.result.status, "blocked");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].utility, "wsl.exe");
+    assert.deepEqual(requests[0].args.slice(0, 7), [
+      "--distribution",
+      "Ubuntu",
+      "--cd",
+      windowsPathToWsl(nested, "Ubuntu"),
+      "--exec",
+      "/bin/sh",
+      "-lc",
+    ]);
+    assert.equal(
+      requests[0].args[7],
+      `grep -n fixture "${windowsPathToWsl(target, "Ubuntu")}" | head -20`,
+    );
+    assert.equal(requests[0].cwd, root);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell tool keeps direct utilities native and honors explicit runtime selection", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-runtime-"));
+  const requests = [];
+  const authorize = async (request) => {
+    requests.push(request);
+    return {
+      ...approvedAuthorization(request),
+      mode: "manual_approval",
+      decision: "denied",
+      source: "human",
+      reason: "Fixture denial.",
+    };
+  };
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({
+        workspaceRoot: root,
+        platform: "win32",
+        wsl: { listDistributions: () => ["Ubuntu"] },
+        authorize,
+      }),
+    ]);
+    await registry.execute({
+      id: "shell_native_utility",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "git", args: ["status"] },
+    });
+    await registry.execute({
+      id: "shell_explicit_host",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { command: "echo host", runtime: "host" },
+    });
+    await registry.execute({
+      id: "shell_explicit_wsl",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "git", args: ["-C", root, "status"], runtime: "wsl" },
+    });
+    const disabledWsl = await registry.execute({
+      id: "shell_explicit_wsl_sudo",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "sudo", args: ["true"], runtime: "wsl" },
+    });
+    const guardedWsl = await registry.execute({
+      id: "shell_explicit_wsl_delete",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: { utility: "rm", args: ["-rf", "/etc"], runtime: "wsl" },
+    });
+
+    assert.equal(requests[0].utility, "git");
+    assert.match(requests[1].utility, /(?:cmd|ComSpec)/i);
+    assert.equal(requests[2].utility, "wsl.exe");
+    assert.equal(requests[2].args.at(-2), windowsPathToWsl(root, "Ubuntu"));
+    assert.equal(requests[2].args.at(-1), "status");
+    assert.equal(disabledWsl.result.status, "error");
+    assert.match(disabledWsl.result.error.message, /sudo is disabled/);
+    assert.equal(guardedWsl.result.status, "error");
+    assert.match(guardedWsl.result.error.message, /protected WSL directory \/etc/);
+    assert.equal(requests.length, 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("WSL path translation preserves shell syntax and supports WSL UNC paths", () => {
+  assert.equal(decodeWslListOutput(Buffer.from("\uFEFFUbuntu\r\ndocker-desktop\r\n", "utf16le")), "Ubuntu\r\ndocker-desktop\r\n");
+  assert.equal(windowsPathToWsl("C:\\Research\\target repo\\file.c"), "/mnt/c/Research/target repo/file.c");
+  assert.equal(windowsPathToWsl("\\\\wsl$\\Ubuntu\\home\\analyst", "Ubuntu"), "/home/analyst");
+  assert.equal(windowsPathToWsl("\\\\wsl$\\Debian\\home\\analyst", "Ubuntu"), null);
+  assert.equal(
+    translateWindowsPathsInCommand('rg TODO "C:\\Research\\target repo" 2>/dev/null | head -20'),
+    'rg TODO "/mnt/c/Research/target repo" 2>/dev/null | head -20',
+  );
 });
 
 test("shell tool serializes the same utility across tool instances", async () => {

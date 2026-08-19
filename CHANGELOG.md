@@ -4,6 +4,7 @@
 
 ### Changed
 
+- On Windows, `shell.run` command form now uses an installed user WSL distribution by default, accepts explicit `host` or `wsl` runtime selection, and translates Windows workspace paths and working directories for Linux execution. Direct utility calls remain native unless WSL is requested.
 - Built-in file reads and repository searches now retain complete audit outputs while sending compact evidence-focused projections to models, omitting repeated workspace-root catalogs. Tool observation telemetry records full and model-visible result sizes plus removed characters per call.
 - Runbooks now execute complete ordered code-cell sequences or individual cells through the canonical shell-safety boundary, require and persist a Localhost, Device, VM, Web, or Other proof target plus the target OS for Device runs, emit execution lifecycle updates, and retain per-cell status, duration, exit code, and bounded output. `runbook.run` exposes the same contract to models, while Auto-Review classifies proofing and denies proof commands without trusted runbook context.
 - Asynchronous repository materialization no longer imposes a fixed clone timeout, retains bounded Git output, and leaves active temporary checkouts alone for seven days so large blobless shallow clones can finish safely.

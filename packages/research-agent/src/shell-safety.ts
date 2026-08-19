@@ -202,14 +202,18 @@ export function evaluateShellNetworkAuthorization(
 export function classifyShellNetworkIntent(
   request: Pick<ShellAuthorizationRequest, "utility" | "args" | "stdin">,
 ): Pick<ShellNetworkAuthorizationAudit, "intent" | "classification" | "destinations"> {
-  const utility = normalizedShellUtility(request.utility);
-  const texts = [...request.args, ...(request.stdin === undefined ? [] : [request.stdin])];
+  const effectiveRequest = unwrapWslShellRequest(request);
+  const utility = normalizedShellUtility(effectiveRequest.utility);
+  const texts = [
+    ...effectiveRequest.args,
+    ...(effectiveRequest.stdin === undefined ? [] : [effectiveRequest.stdin]),
+  ];
   const destinations = extractShellNetworkDestinations(texts, NETWORK_UTILITIES.has(utility));
   if (NETWORK_UTILITIES.has(utility)) {
     return { intent: "network", classification: `network utility ${utility}`, destinations };
   }
   const subcommands = NETWORK_SUBCOMMANDS[utility];
-  const subcommand = shellPrimarySubcommand(utility, request.args);
+  const subcommand = shellPrimarySubcommand(utility, effectiveRequest.args);
   if (subcommands?.has(subcommand)) {
     return { intent: "network", classification: `network subcommand ${utility} ${subcommand}`, destinations };
   }
@@ -220,6 +224,20 @@ export function classifyShellNetworkIntent(
     return { intent: "network", classification: `network API in ${utility} input`, destinations };
   }
   return { intent: "none", classification: "no recognized network intent", destinations: [] };
+}
+
+function unwrapWslShellRequest(
+  request: Pick<ShellAuthorizationRequest, "utility" | "args" | "stdin">,
+): Pick<ShellAuthorizationRequest, "utility" | "args" | "stdin"> {
+  if (normalizedShellUtility(request.utility) !== "wsl") return request;
+  const execIndex = request.args.findIndex((argument) => argument === "--exec" || argument === "-e");
+  const utility = execIndex >= 0 ? request.args[execIndex + 1] : undefined;
+  if (!utility) return request;
+  return {
+    utility,
+    args: request.args.slice(execIndex + 2),
+    ...(request.stdin === undefined ? {} : { stdin: request.stdin }),
+  };
 }
 
 function extractShellNetworkDestinations(

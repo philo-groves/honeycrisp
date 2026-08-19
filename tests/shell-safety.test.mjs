@@ -161,6 +161,23 @@ test("shell network intent classification is deterministic and does not treat Wi
     classification: "no recognized network intent",
     destinations: [],
   });
+
+  assert.deepEqual(classifyShellNetworkIntent({
+    utility: "wsl.exe",
+    args: ["--distribution", "Ubuntu", "--cd", "/mnt/c/repo", "--exec", "git", "fetch", "origin"],
+  }), {
+    intent: "network",
+    classification: "network subcommand git fetch",
+    destinations: [],
+  });
+
+  const wslCommand = classifyShellNetworkIntent({
+    utility: "wsl.exe",
+    args: ["--distribution", "Ubuntu", "--exec", "/bin/sh", "-lc", "curl api.example.test/status"],
+  });
+  assert.equal(wslCommand.intent, "network");
+  assert.match(wslCommand.classification, /network API in sh input/);
+  assert.deepEqual(wslCommand.destinations, []);
 });
 
 test("network commands continue through the configured shell approval mode without scope policy", async () => {
