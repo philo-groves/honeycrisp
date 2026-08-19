@@ -138,11 +138,17 @@ export interface PiAgentResumableState {
   workflowId?: string;
 }
 
+interface NativeOpenAiCompactionModel {
+  api: string;
+  provider: string;
+  contextWindow: number;
+}
+
 export function applyNativeOpenAiCompaction(
   payload: unknown,
-  model: { api: string; contextWindow: number },
+  model: NativeOpenAiCompactionModel,
 ): unknown {
-  if (!isNativeOpenAiResponsesApi(model.api) || !isRecord(payload)) return payload;
+  if (!isNativeOpenAiResponsesModel(model) || !isRecord(payload)) return payload;
   const configured = payload.context_management;
   if (configured !== undefined && !Array.isArray(configured)) return payload;
   const contextManagement = Array.isArray(configured) ? configured : [];
@@ -636,10 +642,15 @@ export function createPiAgentExecutor(
             };
           },
           onContextRetry: async ({ tokensBefore, tokensAfter, errorMessage }) => {
+            const activeRetryModel = activeModelSelection().model;
             const retryEvent = {
               type: "context_compacted",
               reason: "context_window_error",
               retry: true,
+              provider: activeRetryModel.provider,
+              model: activeRetryModel.id,
+              api: activeRetryModel.api,
+              contextWindow: activeRetryModel.contextWindow,
               tokensBefore,
               tokensAfter,
               errorMessage,
@@ -873,6 +884,10 @@ export function createPiAgentExecutor(
                     agentId: request.id,
                     agentPath: request.path,
                     parentAgentId: request.parentId,
+                    provider: activeTurnModel.provider,
+                    model: activeTurnModel.id,
+                    api: activeTurnModel.api,
+                    contextWindow: activeTurnModel.contextWindow,
                     tokensBefore: estimatedMessageTokens(authoritativeMessages),
                     tokensAfter: estimatedMessageTokens(compactedMessages),
                   },
@@ -956,10 +971,15 @@ export function createPiAgentExecutor(
               agentId: request.id,
               agentPath: request.path,
             });
+            const eventModel = activeModelSelection().model;
             await emitAgentEvent(input.eventSink, event, currentTurn, {
               agentId: request.id,
               agentPath: request.path,
               parentAgentId: request.parentId,
+              provider: eventModel.provider,
+              model: eventModel.id,
+              api: eventModel.api,
+              contextWindow: eventModel.contextWindow,
             });
           },
           request.signal,
@@ -2356,11 +2376,21 @@ function attributeResearchEvents(
   return events.map((event) => ({ ...event, ...agent }));
 }
 
+interface AgentEventAttribution {
+  agentId: string;
+  agentPath: string;
+  parentAgentId: string;
+  provider?: string;
+  model?: string;
+  api?: string;
+  contextWindow?: number;
+}
+
 async function emitAgentEvent(
   sink: ResearchLiveEventSink | undefined,
   event: AgentEvent,
   turn: number,
-  agent: { agentId: string; agentPath: string; parentAgentId: string },
+  agent: AgentEventAttribution,
 ): Promise<void> {
   if (!sink) return;
   const liveEvent = agentLiveEvent(event, turn, agent);
@@ -2370,7 +2400,7 @@ async function emitAgentEvent(
 function agentLiveEvent(
   event: AgentEvent,
   turn: number,
-  agent: { agentId: string; agentPath: string; parentAgentId: string },
+  agent: AgentEventAttribution,
 ): Parameters<ResearchLiveEventSink>[0] | undefined {
   if (event.type === "message_update") {
     const update = event.assistantMessageEvent;
@@ -2492,7 +2522,7 @@ function formatContent(value: unknown): string {
 }
 
 function withProviderSession(
-  model: { api: string; contextWindow: number },
+  model: NativeOpenAiCompactionModel,
   options: SimpleStreamOptions | undefined,
   sessionId: string,
 ): SimpleStreamOptions {
@@ -2519,10 +2549,10 @@ function normalizeProviderSessionId(sessionId: string | undefined): string | und
 }
 
 function withNativeOpenAiCompaction(
-  model: { api: string; contextWindow: number },
+  model: NativeOpenAiCompactionModel,
   options: SimpleStreamOptions | undefined,
 ): SimpleStreamOptions | undefined {
-  if (!isNativeOpenAiResponsesApi(model.api)) return options;
+  if (!isNativeOpenAiResponsesModel(model)) return options;
   const previousOnPayload = options?.onPayload;
   return {
     ...options,
@@ -2535,8 +2565,9 @@ function withNativeOpenAiCompaction(
   };
 }
 
-function isNativeOpenAiResponsesApi(api: string): boolean {
-  return api === "openai-responses" || api === "openai-codex-responses";
+function isNativeOpenAiResponsesModel(model: Pick<NativeOpenAiCompactionModel, "api" | "provider">): boolean {
+  return (model.provider === "openai" || model.provider === "openai-codex")
+    && (model.api === "openai-responses" || model.api === "openai-codex-responses");
 }
 
 function createResumableMessages(

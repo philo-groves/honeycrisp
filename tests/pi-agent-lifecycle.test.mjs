@@ -149,17 +149,40 @@ test("agent context compacts proactively before a large model window is exhauste
 test("OpenAI Responses requests enable native compaction before local context fallback", () => {
   const compacted = applyNativeOpenAiCompaction(
     { model: "gpt-5.4", input: [] },
-    { api: "openai-responses", contextWindow: 400_000 },
+    { api: "openai-responses", provider: "openai", contextWindow: 400_000 },
   );
   assert.deepEqual(compacted.context_management, [
     { type: "compaction", compact_threshold: 96_000 },
   ]);
 
+  const codexCompacted = applyNativeOpenAiCompaction(
+    { model: "gpt-5.4", input: [] },
+    { api: "openai-codex-responses", provider: "openai-codex", contextWindow: 400_000 },
+  );
+  assert.deepEqual(codexCompacted.context_management, [
+    { type: "compaction", compact_threshold: 96_000 },
+  ]);
+
   const unsupported = { model: "faux-model", input: [] };
   assert.equal(
-    applyNativeOpenAiCompaction(unsupported, { api: "faux", contextWindow: 400_000 }),
+    applyNativeOpenAiCompaction(unsupported, { api: "faux", provider: "faux", contextWindow: 400_000 }),
     unsupported,
   );
+});
+
+test("OpenAI-compatible providers do not inherit native OpenAI compaction", () => {
+  for (const provider of ["xai", "openrouter"]) {
+    const payload = { model: provider === "xai" ? "grok-4.6" : "openai/gpt-5.4", input: [] };
+    assert.equal(
+      applyNativeOpenAiCompaction(payload, {
+        api: "openai-responses",
+        provider,
+        contextWindow: 500_000,
+      }),
+      payload,
+    );
+    assert.equal("context_management" in payload, false);
+  }
 });
 
 test("patched Responses stream preserves and replays opaque compaction items", async () => {
@@ -1700,11 +1723,15 @@ test("Pi Agent compacts tool history and retries once after a context-window err
   assert.equal(contexts.length, 3);
   assert.match(contexts[2].messageContents.join("\n"), /output compacted for context/);
   assert.ok(contexts[2].messageContents.join("\n").length < contexts[1].messageContents.join("\n").length);
-  assert.ok(liveEvents.some((event) =>
+  const contextCompacted = liveEvents.find((event) =>
     event.kind === "agent.event"
     && event.payload.type === "context_compacted"
     && event.payload.reason === "context_window_error"
-  ));
+  );
+  assert.equal(contextCompacted.payload.provider, "faux");
+  assert.equal(contextCompacted.payload.model, "faux-model");
+  assert.equal(contextCompacted.payload.api, "faux");
+  assert.equal(contextCompacted.payload.contextWindow, 100_000);
   assert.equal(
     (contexts[2].messageContents.join("\n").match(/Research checkpoint after context compaction/g) ?? []).length,
     1,
@@ -2149,6 +2176,10 @@ test("Pi Agent executor streams live thought and phased message events", async (
   assert.ok(contextComposed.payload.toolCount >= COLLABORATION_TOOL_NAMES.length);
   const turnCompleted = agentEvents.find((event) => event.payload.type === "turn_completed");
   assert.equal(turnCompleted.payload.turn, 1);
+  assert.equal(turnCompleted.payload.provider, "faux");
+  assert.equal(turnCompleted.payload.model, "faux-model");
+  assert.equal(turnCompleted.payload.api, "faux");
+  assert.equal(turnCompleted.payload.contextWindow, 100_000);
   assert.deepEqual(turnCompleted.payload.usage, { ...ZERO_USAGE, cacheHitRate: 0 });
 });
 

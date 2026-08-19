@@ -86,6 +86,7 @@
 
 ### Fixed
 
+- Native OpenAI Responses compaction is now gated by provider identity as well as wire protocol, preventing xAI, OpenRouter, and other OpenAI-compatible providers from receiving OpenAI-only request fields. Context telemetry now records the active provider, model, API, and context window.
 - Stray non-JSON diagnostics from stdio MCP servers are now retained in a bounded diagnostic buffer instead of escaping the stdout handler and terminating the research host.
 - Session protocol failures now distinguish SQLite structural corruption and application-level hash mismatches from ordinary operation errors, with non-retryable instructions to stop writers, preserve the original database, and restore or repair before retrying.
 - Retried transient provider WebSocket disconnects in the active research turn instead of failing the entire session after an otherwise successful shell-approval pause.
