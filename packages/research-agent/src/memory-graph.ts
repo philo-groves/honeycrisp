@@ -5,6 +5,12 @@ import { basename, dirname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
 import {
+  modelAuthorsByResource,
+  moveModelAuthorship,
+  recordModelAuthorship,
+  type ModelAuthor,
+} from "./model-authorship.js";
+import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   normalizeResearchProfile,
   researchProfileHash,
@@ -150,6 +156,7 @@ export interface MemoryNode {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  authors: ModelAuthor[];
   provenance: MemoryNodeProvenance;
 }
 
@@ -308,7 +315,7 @@ export class MemoryGraphStore {
     return this.catalog.hash;
   }
 
-  public save(input: SaveMemoryNodeInput): MemoryNode {
+  public save(input: SaveMemoryNodeInput, author?: ModelAuthor): MemoryNode {
     validateNodeShape(input);
     const memoryType = this.requireCreatableType(input.type);
     const canonicalInput: SaveMemoryNodeInput = {
@@ -380,6 +387,7 @@ export class MemoryGraphStore {
           createdAt: now,
           updatedAt: now,
           revision: 1,
+          authors: [],
           provenance: {
             state: "catalog_unvalidated",
             catalogHash: this.catalog.hash,
@@ -409,11 +417,13 @@ export class MemoryGraphStore {
       titleNorm,
       activeCatalogWriteProvenance(this.catalog, validationKind),
       preparedLinks,
+      undefined,
+      author,
     );
     return this.getFromDatabase(target.database, id)!;
   }
 
-  public correct(id: string, expectedRevision: number, patch: Partial<Omit<SaveMemoryNodeInput, "id">>): MemoryNode {
+  public correct(id: string, expectedRevision: number, patch: Partial<Omit<SaveMemoryNodeInput, "id">>, author?: ModelAuthor): MemoryNode {
     const located = this.locate(id);
     const existing = located?.node;
     if (!existing || !located) throw new Error(`Memory node not found: ${id}`);
@@ -507,6 +517,7 @@ export class MemoryGraphStore {
         writeProvenance,
         preparedLinks,
         expectedRevision,
+        author,
       );
     } else {
       this.writeRetypedNode(
@@ -517,6 +528,7 @@ export class MemoryGraphStore {
         writeProvenance,
         preparedLinks,
         expectedRevision,
+        author,
       );
     }
     return this.getFromDatabase(located.binding.database, nextId)!;
@@ -569,6 +581,7 @@ export class MemoryGraphStore {
       (placeholders) =>
         `SELECT * FROM memory_evidence_refs WHERE node_id IN (${placeholders}) ORDER BY created_at, id`,
     ));
+    const authors = modelAuthorsByResource(database, "memory", orderedIds);
     const validations = new Map(
       queryInChunks<Record<string, unknown>>(
         database,
@@ -621,6 +634,7 @@ export class MemoryGraphStore {
         createdAt: text(row.created_at),
         updatedAt: text(row.updated_at),
         revision: number(row.revision),
+        authors: authors.get(id) ?? [],
       };
       const catalogHash = nullableText(row.catalog_hash);
       return [{
@@ -742,7 +756,7 @@ export class MemoryGraphStore {
     return nodes;
   }
 
-  public link(fromId: string, toId: string, relation: string, note = ""): MemoryEdge {
+  public link(fromId: string, toId: string, relation: string, note = "", author?: ModelAuthor): MemoryEdge {
     const from = this.locate(fromId);
     const to = this.locate(toId);
     if (!from || !to) throw new Error("Both memory edge nodes must belong to the current subject.");
@@ -764,6 +778,7 @@ export class MemoryGraphStore {
          ON CONFLICT(from_id, to_id, relation) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at`,
       )
       .run(fromId, toId, cleanRelation, note.trim(), now, now);
+    recordModelAuthorship(database, "memory", fromId, from.node.revision, author, now);
     const row = database.prepare("SELECT * FROM memory_edges WHERE from_id = ? AND to_id = ? AND relation = ?").get(fromId, toId, cleanRelation) as Record<string, unknown>;
     return edgeFromRow(row);
   }
@@ -1304,6 +1319,25 @@ export class MemoryGraphStore {
             WHERE submission_packet_artifact_id IS NOT NULL;`);
         },
       },
+      {
+        version: 11,
+        name: "model_authorship",
+        up(database) {
+          database.exec(`
+            CREATE TABLE IF NOT EXISTS honeycrisp_model_authorship (
+              resource_kind TEXT NOT NULL CHECK (resource_kind IN ('memory', 'runbook', 'report')),
+              resource_id TEXT NOT NULL,
+              revision INTEGER NOT NULL CHECK (revision > 0),
+              provider TEXT NOT NULL,
+              model TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (resource_kind, resource_id, revision, provider, model)
+            );
+            CREATE INDEX IF NOT EXISTS honeycrisp_model_authorship_resource_idx
+              ON honeycrisp_model_authorship(resource_kind, resource_id, created_at);
+          `);
+        },
+      },
     ]);
   }
 
@@ -1314,6 +1348,7 @@ export class MemoryGraphStore {
     provenance: MemoryNodeWriteProvenance,
     links: readonly PreparedMemoryLink[] = [],
     expectedRevision?: number,
+    author?: ModelAuthor,
   ): void {
     database.exec("BEGIN IMMEDIATE");
     try {
@@ -1365,6 +1400,7 @@ export class MemoryGraphStore {
       }
       writePreparedMemoryLinks(database, node.id, links, node.updatedAt);
       writeMemoryNodeValidation(database, node, provenance);
+      recordModelAuthorship(database, "memory", node.id, node.revision, author, node.updatedAt);
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");
@@ -1380,6 +1416,7 @@ export class MemoryGraphStore {
     provenance: MemoryNodeWriteProvenance,
     links: readonly PreparedMemoryLink[],
     expectedRevision: number,
+    author?: ModelAuthor,
   ): void {
     database.exec("BEGIN IMMEDIATE");
     try {
@@ -1433,8 +1470,10 @@ export class MemoryGraphStore {
           .run(evidence.id, node.id, evidence.kind, evidence.pathBase ?? null, evidence.path ?? null, JSON.stringify(evidence.locator), evidence.summary, evidence.createdAt);
       }
       replaceMemoryEdgeNodeId(database, "memory_edges", previousId, node.id);
+      moveModelAuthorship(database, "memory", previousId, node.id);
       writePreparedMemoryLinks(database, node.id, links, node.updatedAt);
       writeMemoryNodeValidation(database, node, provenance);
+      recordModelAuthorship(database, "memory", node.id, node.revision, author, node.updatedAt);
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");

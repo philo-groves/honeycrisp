@@ -116,6 +116,7 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
               arguments: args,
             }, {
               toolCallCount: toolCallCount += 1,
+              modelAuthor: { provider: "zai", model: options.model },
               defaultActionClass: candidate.descriptor.actionClasses[0] ?? "analyze",
               ...(input.governance ? { governance: input.governance } : {}),
               signal,

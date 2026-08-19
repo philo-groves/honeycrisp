@@ -30,7 +30,7 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
       assetIds: ["asset_api"],
       tags: ["Parser State"],
       evidence: [{ kind: "code", pathBase: "repository", path: "src/parser.ts", locator: { line: 42 }, summary: "Shared state write" }],
-    });
+    }, { provider: "openai", model: "gpt-5.6" });
     const expectedLegacyId = `hypothesis_${createHash("sha256")
       .update(`${store.getContext().subjectId}:hypothesis:parser state crosses requests`)
       .digest("hex")
@@ -46,12 +46,16 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
       title: "  Parser state crosses requests  ",
       body: "Check whether cleanup runs on all error paths.",
       tags: ["cleanup"],
-    });
+    }, { provider: "anthropic", model: "claude-opus-4-6" });
 
     assert.equal(first.id, refined.id);
     assert.equal(refined.revision, 2);
     assert.deepEqual(refined.tags, ["cleanup", "parser_state"]);
     assert.equal(refined.evidence.length, 1);
+    assert.deepEqual(refined.authors, [
+      { provider: "openai", model: "gpt-5.6" },
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    ]);
     assert.equal(store.search({ query: "cleanup", assetIds: ["asset_api"] })[0]?.id, first.id);
     assert.equal(store.search({ query: "asset_api" })[0]?.id, first.id);
     assert.equal(store.search({ query: "src/parser.ts" })[0]?.id, first.id);

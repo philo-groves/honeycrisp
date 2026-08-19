@@ -1,5 +1,10 @@
 import type { ResearchProfile } from "./research-profile.js";
 
+export interface ModelAuthorSummary {
+  provider: string;
+  model: string;
+}
+
 export interface ResearchProfileSnapshot {
   id: string;
   workspaceId: string;
@@ -67,6 +72,7 @@ export interface MemoryNodeSummary {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  authors: ModelAuthorSummary[];
   provenance?: MemoryNodeProvenanceSummary;
 }
 
@@ -98,6 +104,7 @@ export interface RunbookSummary {
   artifactId: string;
   revision: number;
   revisions: ArtifactRevisionSummary[];
+  authors: ModelAuthorSummary[];
   createdAt: string;
   updatedAt: string;
 }
@@ -116,6 +123,7 @@ export interface ReportSummary {
   submissionPacket: ReportSubmissionPacketSummary | null;
   revision: number;
   revisions: ArtifactRevisionSummary[];
+  authors: ModelAuthorSummary[];
   createdAt: string;
   updatedAt: string;
 }

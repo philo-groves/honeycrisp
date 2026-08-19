@@ -4,6 +4,7 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { createResearchEventId, nowIso } from "./ids.js";
+import type { ModelAuthor } from "./model-authorship.js";
 import {
   redactShellArguments,
   sanitizeShellActionInput,
@@ -23,6 +24,7 @@ export type ResearchToolExecutionStatus = "complete" | "error" | "blocked";
 export interface ResearchToolExecutionContext {
   signal?: AbortSignal;
   agentId?: string;
+  modelAuthor?: ModelAuthor;
   runbookContext?: {
     runbookId: string;
     runId: string;

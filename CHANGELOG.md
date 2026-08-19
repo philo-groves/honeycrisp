@@ -19,6 +19,7 @@
 
 ### Added
 
+- Added migration 11 revision-level model authorship for memories, runbooks, and reports. Model-written revisions retain provider/model attribution, and aggregate records expose every distinct contributing model.
 - Security reports now attach a durable `submission.zip` packet imported from the active workspace, with packet metadata retained across report revisions.
 - Added correlated host approval for annotated MCP mutations, multimodal MCP tool-result projection, and disabled-by-default built-in Agent Plugin definitions.
 - Added context-composition telemetry for startup sections and every model request, including bounded character, estimated-token, role, message, and tool-definition counts without recording hidden instruction content.

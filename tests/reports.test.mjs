@@ -24,13 +24,23 @@ test("reports persist revisioned Markdown artifacts within one workspace", async
     sessionId: "run_one", workspaceId: "workspace_one", workspaceName: "One",
   });
   try {
-    const created = store.create({ title: "A useful result", summary: "A short explanation.", content: "# A useful result\n\nHere is what changed." });
+    const created = store.create(
+      { title: "A useful result", summary: "A short explanation.", content: "# A useful result\n\nHere is what changed." },
+      { provider: "openai", model: "gpt-5.6" },
+    );
     assert.equal(created.report.status, "complete");
     assert.equal(created.report.revision, 1);
     assert.equal(created.artifactRef.kind, "report");
-    const revised = store.revise({ id: created.report.id, expectedRevision: 1, content: "# A useful result\n\nA clearer explanation.", status: "stale" });
+    const revised = store.revise(
+      { id: created.report.id, expectedRevision: 1, content: "# A useful result\n\nA clearer explanation.", status: "stale" },
+      { provider: "zai", model: "glm-5" },
+    );
     assert.equal(revised.report.revision, 2);
     assert.equal(revised.report.status, "stale");
+    assert.deepEqual(revised.report.authors, [
+      { provider: "openai", model: "gpt-5.6" },
+      { provider: "zai", model: "glm-5" },
+    ]);
     assert.throws(() => store.revise({ id: created.report.id, expectedRevision: 1, content: "stale write" }), /revision conflict/);
     assert.match(store.get(created.report.id).content, /clearer explanation/);
     assert.equal(store.list({ statuses: ["stale"] }).length, 1);
@@ -64,9 +74,13 @@ test("report tools expose list, read, create, and revise operations", async () =
   const registry = createResearchToolRegistry(createReportTools(store));
   try {
     assert.deepEqual(registry.listDescriptors().map((tool) => tool.name), ["report.list", "report.get", "report.create", "report.revise"]);
-    const created = await registry.execute({ id: "create_report", actionClass: "synthesize", toolName: "report.create", input: { title: "Result", summary: "Shareable result.", content: "# Result\n\nReadable prose." } });
+    const created = await registry.execute(
+      { id: "create_report", actionClass: "synthesize", toolName: "report.create", input: { title: "Result", summary: "Shareable result.", content: "# Result\n\nReadable prose." } },
+      { modelAuthor: { provider: "anthropic", model: "claude-sonnet-4-5" } },
+    );
     assert.equal(created.result.status, "complete");
     assert.equal(created.result.artifactRefs[0].kind, "report");
+    assert.deepEqual(created.result.output.authors, [{ provider: "anthropic", model: "claude-sonnet-4-5" }]);
   } finally {
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });

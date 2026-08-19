@@ -5,7 +5,7 @@ import {
   type RunbookCellInput,
   type RunbookStatus,
 } from "./runbooks.js";
-import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
+import type { ResearchExecutableTool, ResearchToolExecutionContext, ResearchToolExecutionResult } from "./tool-registry.js";
 import type { ResearchArtifactRef, ResearchToolAction } from "./types.js";
 
 const CELL_PARAMETERS = {
@@ -98,13 +98,13 @@ export function createRunbookTools(store: RunbookStore): ResearchExecutableTool[
       "Create a revisioned Jupyter-format research runbook for a reusable procedure, proof sequence, or environment-specific workflow. A healthy runbook records prerequisites and expected evidence in markdown, then uses bounded repeatable code cells with an explicit supported language.",
       "write",
       CREATE_PARAMETERS,
-      (input) => {
+      (input, context) => {
         const created = store.create({
           title: requiredText(input.title, "title"),
           purpose: requiredText(input.purpose, "purpose"),
           ...(text(input.status) ? { status: text(input.status)! as RunbookStatus } : {}),
           ...(Array.isArray(input.cells) ? { cells: input.cells.map(parseCell) } : {}),
-        });
+        }, context?.modelAuthor);
         return { output: created.runbook, artifactRefs: [created.artifactRef] };
       },
     ),
@@ -114,13 +114,13 @@ export function createRunbookTools(store: RunbookStore): ResearchExecutableTool[
       "Append concise markdown or code cells to an existing runbook using its current revision. Put proof commands in explicitly typed code cells and execute them with runbook.run; Auto-Review denies proofing issued directly through shell.run.",
       "write",
       APPEND_PARAMETERS,
-      (input) => {
+      (input, context) => {
         const appended = store.append({
           id: requiredText(input.id, "id"),
           expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"),
           cells: requiredArray(input.cells, "cells").map(parseCell),
           ...(text(input.status) ? { status: text(input.status)! as RunbookStatus } : {}),
-        });
+        }, context?.modelAuthor);
         return { output: appended.runbook, artifactRefs: [appended.artifactRef] };
       },
     ),
@@ -133,7 +133,7 @@ function tool(
   description: string,
   sideEffects: "read" | "write",
   parameters: Record<string, unknown>,
-  run: (input: Record<string, unknown>) => { output: unknown; artifactRefs?: ResearchArtifactRef[] },
+  run: (input: Record<string, unknown>, context?: ResearchToolExecutionContext) => { output: unknown; artifactRefs?: ResearchArtifactRef[] },
 ): ResearchExecutableTool {
   return {
     descriptor: {
@@ -147,10 +147,10 @@ function tool(
       metadata: { family: "runbook", format: "jupyter-nbformat-4" },
     },
     parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
-    async execute(action: ResearchToolAction): Promise<ResearchToolExecutionResult> {
+    async execute(action: ResearchToolAction, context?: ResearchToolExecutionContext): Promise<ResearchToolExecutionResult> {
       const startedAt = nowIso();
       try {
-        const result = run(isRecord(action.input) ? action.input : {});
+        const result = run(isRecord(action.input) ? action.input : {}, context);
         return {
           action,
           status: "complete",

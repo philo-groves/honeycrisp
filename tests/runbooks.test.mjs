@@ -33,7 +33,7 @@ test("runbooks persist revisioned nbformat artifacts within one workspace", asyn
       title: "Reproduce hashed-command overflow",
       purpose: "Preserve the exact source build and runtime proof sequence.",
       cells: [{ kind: "code", language: "sh", source: "zsh -f ./proof.zsh", summary: "Run the bounded proof" }],
-    });
+    }, { provider: "openai", model: "gpt-5.6" });
     assert.equal(created.runbook.revision, 1);
     assert.equal(created.runbook.status, "active");
     assert.equal(created.runbook.cellCount, 2);
@@ -44,10 +44,14 @@ test("runbooks persist revisioned nbformat artifacts within one workspace", asyn
       expectedRevision: 1,
       status: "completed",
       cells: [{ kind: "code", language: "text", source: "Observed SIGTRAP", stdout: "status=133\n", exitCode: 0 }],
-    });
+    }, { provider: "anthropic", model: "claude-opus-4-6" });
     assert.equal(appended.runbook.revision, 2);
     assert.equal(appended.runbook.status, "completed");
     assert.equal(appended.runbook.cellCount, 3);
+    assert.deepEqual(appended.runbook.authors, [
+      { provider: "openai", model: "gpt-5.6" },
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    ]);
     assert.throws(
       () => store.append({ id: created.runbook.id, expectedRevision: 1, cells: [{ kind: "markdown", source: "stale write" }] }),
       /revision conflict/,

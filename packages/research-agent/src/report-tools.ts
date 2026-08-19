@@ -1,7 +1,7 @@
 import { nowIso } from "./ids.js";
 import type { MemoryGraphStore, MemoryNode } from "./memory-graph.js";
 import { REPORT_STATUSES, ReportStore, type ReportStatus } from "./reports.js";
-import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
+import type { ResearchExecutableTool, ResearchToolExecutionContext, ResearchToolExecutionResult } from "./tool-registry.js";
 import type { ResearchArtifactRef, ResearchToolAction } from "./types.js";
 
 const LIST_PARAMETERS = { type: "object", properties: { query: { type: "string" }, statuses: { type: "array", items: { type: "string", enum: [...REPORT_STATUSES] } }, limit: { type: "number" } } };
@@ -40,16 +40,16 @@ export function createReportTools(store: ReportStore, policy: ReportToolPolicy =
     tool("report.get", "report_get", "Read the full Markdown content of one workspace report.", "read", GET_PARAMETERS, (input) => ({ output: store.get(requiredText(input.id, "id")) })),
     tool("report.create", "report_create", policy.requireConfirmedChain
       ? "Create a complete, revisioned Markdown report with its durable submission packet for a confirmed, reportable vulnerability chain. Observations, hypotheses, and primitives are not report-ready."
-      : "Create a complete, revisioned Markdown report when a result is ready to share. Reports are artifacts, not memories.", "write", createParameters, (input) => {
+      : "Create a complete, revisioned Markdown report when a result is ready to share. Reports are artifacts, not memories.", "write", createParameters, (input, context) => {
       if (policy.requireConfirmedChain) requireReportableSecurityChain(input.sourceChainId, policy.memoryGraph);
       const created = store.create({
         title: requiredText(input.title, "title"), summary: requiredText(input.summary, "summary"), content: requiredText(input.content, "content"),
         ...(text(input.status) ? { status: text(input.status)! as ReportStatus } : {}),
         ...(text(input.submissionPacketPath) ? { submissionPacketPath: text(input.submissionPacketPath)! } : {}),
-      });
+      }, context?.modelAuthor);
       return { output: created.report, artifactRefs: [created.artifactRef, ...(created.submissionPacketArtifactRef ? [created.submissionPacketArtifactRef] : [])] };
     }),
-    tool("report.revise", "report_revise", "Replace a report with a complete revised Markdown document, or mark it stale, using its current revision.", "write", REVISE_PARAMETERS, (input) => {
+    tool("report.revise", "report_revise", "Replace a report with a complete revised Markdown document, or mark it stale, using its current revision.", "write", REVISE_PARAMETERS, (input, context) => {
       const id = requiredText(input.id, "id");
       const submissionPacketPath = text(input.submissionPacketPath);
       if (policy.requireSubmissionPacket && !submissionPacketPath && !store.get(id)?.submissionPacket) {
@@ -60,7 +60,7 @@ export function createReportTools(store: ReportStore, policy: ReportToolPolicy =
         ...(text(input.summary) ? { summary: text(input.summary)! } : {}),
         ...(text(input.status) ? { status: text(input.status)! as ReportStatus } : {}),
         ...(submissionPacketPath ? { submissionPacketPath } : {}),
-      });
+      }, context?.modelAuthor);
       return { output: revised.report, artifactRefs: [revised.artifactRef, ...(revised.submissionPacketArtifactRef ? [revised.submissionPacketArtifactRef] : [])] };
     }),
   ];
@@ -89,10 +89,10 @@ function requireReportableSecurityChain(
   return chain;
 }
 
-function tool(name: string, transportName: string, description: string, sideEffects: "read" | "write", parameters: Record<string, unknown>, run: (input: Record<string, unknown>) => { output: unknown; artifactRefs?: ResearchArtifactRef[] }): ResearchExecutableTool {
-  return { descriptor: { name, transportName, description, actionClasses: [sideEffects === "read" ? "recall" : "synthesize"], sideEffects, requiredPermissions: [sideEffects === "read" ? "artifact:read" : "artifact:write"], inputSchema: parameters, metadata: { family: "report", format: "markdown" } }, parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>, async execute(action: ResearchToolAction): Promise<ResearchToolExecutionResult> {
+function tool(name: string, transportName: string, description: string, sideEffects: "read" | "write", parameters: Record<string, unknown>, run: (input: Record<string, unknown>, context?: ResearchToolExecutionContext) => { output: unknown; artifactRefs?: ResearchArtifactRef[] }): ResearchExecutableTool {
+  return { descriptor: { name, transportName, description, actionClasses: [sideEffects === "read" ? "recall" : "synthesize"], sideEffects, requiredPermissions: [sideEffects === "read" ? "artifact:read" : "artifact:write"], inputSchema: parameters, metadata: { family: "report", format: "markdown" } }, parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>, async execute(action: ResearchToolAction, context?: ResearchToolExecutionContext): Promise<ResearchToolExecutionResult> {
     const startedAt = nowIso();
-    try { const result = run(isRecord(action.input) ? action.input : {}); return { action, status: "complete", startedAt, completedAt: nowIso(), summary: `${name} completed.`, output: result.output, ...(result.artifactRefs?.length ? { artifactRefs: result.artifactRefs } : {}), followUpActions: [] }; }
+    try { const result = run(isRecord(action.input) ? action.input : {}, context); return { action, status: "complete", startedAt, completedAt: nowIso(), summary: `${name} completed.`, output: result.output, ...(result.artifactRefs?.length ? { artifactRefs: result.artifactRefs } : {}), followUpActions: [] }; }
     catch (error) { return { action, status: "error", startedAt, completedAt: nowIso(), summary: `${name} failed.`, error: { message: error instanceof Error ? error.message : String(error) }, followUpActions: [] }; }
   } };
 }

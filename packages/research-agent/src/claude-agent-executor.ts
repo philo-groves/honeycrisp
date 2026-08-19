@@ -208,6 +208,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               arguments: isRecord(args) ? args : {},
             }, {
               toolCallCount,
+              modelAuthor: { provider: "anthropic", model: options.model },
               defaultActionClass: candidate.descriptor.actionClasses[0] ?? "analyze",
               ...(input.governance ? { governance: input.governance } : {}),
               ...(input.signal ? { signal: input.signal } : {}),

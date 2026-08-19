@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { MemoryGraphStore, type MemoryContext } from "./memory-graph.js";
+import { modelAuthorsForResource, recordModelAuthorship, type ModelAuthor } from "./model-authorship.js";
 import {
   registerResearchStorageArtifact,
   type ResearchStorageArtifactManifestEntry,
@@ -63,6 +64,7 @@ export interface RunbookRecord {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  authors: ModelAuthor[];
 }
 
 export interface RunbookPage extends RunbookRecord {
@@ -160,7 +162,7 @@ export class RunbookStore {
     purpose: string;
     status?: RunbookStatus;
     cells?: RunbookCellInput[];
-  }): { runbook: RunbookRecord; artifactRef: ResearchArtifactRef } {
+  }, author?: ModelAuthor): { runbook: RunbookRecord; artifactRef: ResearchArtifactRef } {
     const title = requiredText(input.title, "title", 240);
     const purpose = requiredText(input.purpose, "purpose", 4_000);
     const status = input.status ?? "active";
@@ -204,6 +206,7 @@ export class RunbookStore {
           now,
         );
       this.recordRevision(id, 1, now);
+      recordModelAuthorship(this.database, "runbook", id, 1, author, now);
       this.database.exec("COMMIT");
       const row = this.readRow(id);
       if (!row) throw new Error(`Runbook was not persisted: ${id}`);
@@ -219,7 +222,7 @@ export class RunbookStore {
     expectedRevision: number;
     cells: RunbookCellInput[];
     status?: RunbookStatus;
-  }): { runbook: RunbookRecord; artifactRef: ResearchArtifactRef } {
+  }, author?: ModelAuthor): { runbook: RunbookRecord; artifactRef: ResearchArtifactRef } {
     const id = requiredText(input.id, "id", 200);
     if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("expectedRevision must be a positive integer.");
     if (!Array.isArray(input.cells) || input.cells.length === 0) throw new Error("cells must contain at least one cell.");
@@ -259,6 +262,7 @@ export class RunbookStore {
         )
         .run(status, entry.contentHash, entry.sizeBytes, revision, updatedAt, id, this.context.workspaceId, input.expectedRevision);
       this.recordRevision(id, revision, updatedAt);
+      recordModelAuthorship(this.database, "runbook", id, revision, author, updatedAt);
       this.database.exec("COMMIT");
       const updated = this.readRow(id);
       if (!updated) throw new Error(`Runbook disappeared after append: ${id}`);
@@ -493,6 +497,7 @@ export class RunbookStore {
       revision: row.revision,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      authors: modelAuthorsForResource(this.database, "runbook", row.id),
     };
   }
 

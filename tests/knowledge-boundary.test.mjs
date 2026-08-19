@@ -111,6 +111,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
     assert.match(instructions, /strict JSON/i);
     const plan = parseMemoryDreamingPlanOutput("```json\n{\"prune\":[],\"merge\":[],\"revise\":[],\"reclassify\":[]}\n```", profileInput);
     const dreamed = runMemoryDreaming(databasePath, context.workspaceId, plan, {
+      provider: "openai",
       model: "test-model",
       reasoningEffort: "high",
       inputNodeCount: 1,

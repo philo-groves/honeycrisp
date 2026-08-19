@@ -472,8 +472,10 @@ export function createPiAgentExecutor(
           toolCallCount += 1;
           return next;
         };
+        let getModelAuthor = () => ({ provider: sessionModel.provider, model: sessionModel.id });
         const researchTools = createAgentTools({
           agentId: request.id,
+          getModelAuthor: () => getModelAuthor(),
           toolRegistry: options.toolRegistry,
           governance: input.governance,
           reserveToolCall,
@@ -519,6 +521,10 @@ export function createPiAgentExecutor(
             throw new Error(`${selectedModel.name} does not support ${selection.reasoningEffort} reasoning.`);
           }
           return { model: selectedModel, reasoningEffort: selection.reasoningEffort };
+        };
+        getModelAuthor = () => {
+          const active = activeModelSelection().model;
+          return { provider: active.provider, model: active.id };
         };
         const dynamicStreamFn: StreamFn = (_model, context, streamOptions) => {
           const active = activeModelSelection();
@@ -1696,6 +1702,7 @@ function createUserMessage(modelInput: ResearchAgentModelInput): Message {
 
 function createAgentTools(input: {
   agentId: string;
+  getModelAuthor(): { provider: string; model: string };
   toolRegistry: ResearchToolRegistry | undefined;
   governance: ResearchAgentExecutionInput["governance"];
   reserveToolCall(toolCallId: string): number;
@@ -1737,6 +1744,7 @@ function createAgentTools(input: {
           const runtimeControlTool = RUNTIME_CONTROL_TOOL_NAMES.has(toolCall.name);
           const executionOptions = {
             agentId: input.agentId,
+            modelAuthor: input.getModelAuthor(),
             ...(!runtimeControlTool && input.governance ? { governance: input.governance } : {}),
             toolCallCount: runtimeControlTool ? 0 : input.reserveToolCall(toolCallId),
             ...(signal ? { signal } : {}),

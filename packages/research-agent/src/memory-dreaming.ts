@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { modelAuthorshipTableExists, moveModelAuthorship, recordModelAuthorship } from './model-authorship.js';
 import type {
   MemoryEdgeSummary,
   MemoryNodeSummary,
@@ -9,7 +10,7 @@ import type {
   MemoryDreamingSummary,
   ResearchProfileSnapshot,
 } from './knowledge-types.js';
-import { MEMORY_NODE_TYPES } from './memory-graph.js';
+import { MEMORY_NODE_TYPES, MemoryGraphStore } from './memory-graph.js';
 import {
   type ResearchProfile,
   type ResearchProfileMemory,
@@ -211,6 +212,7 @@ function redactJsonForModel(value: unknown): unknown {
 
 interface MemoryRecordsSnapshot {
   nodes: SqlRow[];
+  authorship: SqlRow[];
   catalogValidations: SqlRow[];
   sessions: SqlRow[];
   workspaces: SqlRow[];
@@ -321,6 +323,7 @@ export interface MemoryDreamingPlan {
 }
 
 export interface MemoryDreamingRunContext {
+  provider: string;
   model: string;
   reasoningEffort: string;
   inputNodeCount: number;
@@ -1134,6 +1137,7 @@ export function runMemoryDreaming(
         const changeId = `dream_change_${randomUUID()}`;
         const before = snapshotMemoryRecords(database, [decision.node.id]);
         hideMemoryNode(database, decision.node, workspaceId, runId, now, catalog);
+        recordDreamingAuthorship(database, [decision.node.id], context, now);
         const after = snapshotMemoryRecords(database, [decision.node.id]);
         insertDreamingChange(database, {
           id: changeId,
@@ -1185,6 +1189,15 @@ export function runMemoryDreaming(
           catalog,
           mergedSurvivorId
         );
+        if (mergedSurvivorId !== decision.survivor.id) {
+          moveModelAuthorship(database, 'memory', decision.survivor.id, mergedSurvivorId);
+        }
+        recordDreamingAuthorship(
+          database,
+          [mergedSurvivorId, ...decision.duplicates.map((candidate) => candidate.id)],
+          context,
+          now
+        );
         const after = snapshotMemoryRecords(database, affectedNodeIds);
         insertDreamingChange(database, {
           id: changeId,
@@ -1233,6 +1246,10 @@ export function runMemoryDreaming(
           catalog,
           revisedNodeId
         );
+        if (revisedNodeId !== decision.node.id) {
+          moveModelAuthorship(database, 'memory', decision.node.id, revisedNodeId);
+        }
+        recordDreamingAuthorship(database, [revisedNodeId], context, now);
         const after = snapshotMemoryRecords(database, affectedNodeIds);
         insertDreamingChange(database, {
           id: changeId,
@@ -1273,6 +1290,10 @@ export function runMemoryDreaming(
           now,
           catalog
         );
+        if (reclassifiedNodeId !== decision.node.id) {
+          moveModelAuthorship(database, 'memory', decision.node.id, reclassifiedNodeId);
+        }
+        recordDreamingAuthorship(database, [reclassifiedNodeId], context, now);
         const after = snapshotMemoryRecords(database, affectedNodeIds);
         insertDreamingChange(database, {
           id: changeId,
@@ -1445,6 +1466,7 @@ function openDreamingDatabase(databasePath: string): DatabaseSync {
   const database = new DatabaseSync(databasePath);
   database.exec('PRAGMA foreign_keys = ON;');
   database.exec('PRAGMA busy_timeout = 5000;');
+  MemoryGraphStore.initializeSchema(database);
   database.exec(MEMORY_DREAMING_SCHEMA_SQL);
   return database;
 }
@@ -2630,11 +2652,28 @@ function insertDreamingChange(
     );
 }
 
+function recordDreamingAuthorship(
+  database: DatabaseSync,
+  nodeIds: readonly string[],
+  context: MemoryDreamingRunContext,
+  createdAt: string,
+): void {
+  if (!modelAuthorshipTableExists(database) || !context.provider?.trim() || !context.model?.trim()) return;
+  const author = { provider: context.provider, model: context.model };
+  for (const nodeId of new Set(nodeIds)) {
+    const row = database.prepare('SELECT revision FROM memory_nodes WHERE id = ?').get(nodeId) as { revision?: unknown } | undefined;
+    if (typeof row?.revision === 'number') {
+      recordModelAuthorship(database, 'memory', nodeId, row.revision, author, createdAt);
+    }
+  }
+}
+
 function snapshotMemoryRecords(database: DatabaseSync, nodeIds: string[]): MemoryRecordsSnapshot {
   const uniqueIds = [...new Set(nodeIds)].sort();
   if (uniqueIds.length === 0) {
     return {
       nodes: [],
+      authorship: [],
       catalogValidations: [],
       sessions: [],
       workspaces: [],
@@ -2654,6 +2693,14 @@ function snapshotMemoryRecords(database: DatabaseSync, nodeIds: string[]): Memor
         .prepare(`SELECT ${nodeColumns.join(', ')} FROM memory_nodes WHERE id IN (${placeholders}) ORDER BY id`)
         .all(...uniqueIds)
     ),
+    authorship: modelAuthorshipTableExists(database)
+      ? asRows(database.prepare(`
+          SELECT resource_kind, resource_id, revision, provider, model, created_at
+          FROM honeycrisp_model_authorship
+          WHERE resource_kind = 'memory' AND resource_id IN (${placeholders})
+          ORDER BY resource_id, revision, provider, model
+        `).all(...uniqueIds))
+      : [],
     catalogValidations: tableExists(database, 'memory_node_catalog_validations')
       ? asRows(
           database
@@ -2725,6 +2772,10 @@ function applyMemorySnapshot(database: DatabaseSync, snapshot: MemoryRecordsSnap
   if (tableExists(database, 'memory_node_catalog_validations')) {
     database.prepare(`DELETE FROM memory_node_catalog_validations WHERE node_id IN (${placeholders})`).run(...uniqueIds);
   }
+  if (modelAuthorshipTableExists(database)) {
+    database.prepare(`DELETE FROM honeycrisp_model_authorship
+      WHERE resource_kind = 'memory' AND resource_id IN (${placeholders})`).run(...uniqueIds);
+  }
   database.prepare(`DELETE FROM memory_node_sessions WHERE node_id IN (${placeholders})`).run(...uniqueIds);
   database.prepare(`DELETE FROM memory_node_workspaces WHERE node_id IN (${placeholders})`).run(...uniqueIds);
   database.prepare(`DELETE FROM memory_node_assets WHERE node_id IN (${placeholders})`).run(...uniqueIds);
@@ -2743,6 +2794,14 @@ function applyMemorySnapshot(database: DatabaseSync, snapshot: MemoryRecordsSnap
        ${nodeColumns.filter((column) => column !== 'id').map((column) => `${column} = excluded.${column}`).join(', ')}`
   );
   for (const row of snapshot.nodes) nodeInsert.run(...nodeColumns.map((column) => row[column] ?? null));
+  if (modelAuthorshipTableExists(database)) {
+    insertSnapshotRows(
+      database,
+      'honeycrisp_model_authorship',
+      ['resource_kind', 'resource_id', 'revision', 'provider', 'model', 'created_at'],
+      snapshot.authorship
+    );
+  }
   insertSnapshotRows(database, 'memory_node_sessions', ['node_id', 'session_id'], snapshot.sessions);
   insertSnapshotRows(database, 'memory_node_workspaces', ['node_id', 'workspace_id', 'workspace_name'], snapshot.workspaces);
   insertSnapshotRows(database, 'memory_node_assets', ['node_id', 'asset_id'], snapshot.assets);
@@ -2862,6 +2921,7 @@ function parseSnapshot(value: string): MemoryRecordsSnapshot {
   const parsed = JSON.parse(value) as Partial<MemoryRecordsSnapshot>;
   return {
     nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
+    authorship: Array.isArray(parsed.authorship) ? parsed.authorship : [],
     catalogValidations: Array.isArray(parsed.catalogValidations) ? parsed.catalogValidations : [],
     sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
     workspaces: Array.isArray(parsed.workspaces) ? parsed.workspaces : [],

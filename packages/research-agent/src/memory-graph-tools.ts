@@ -318,7 +318,7 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
   return [
     createMemorySearchTool(store, schemas.search, seenMemoryRevisions),
     createMemoryGetTool(store, seenMemoryRevisions),
-    tool("memory.save", "memory_save", `Create or additively refine concise reusable knowledge with links and evidence references. Saving automatically associates the memory with the current session, workspace, and subject; updating it from another session or workspace adds that association. Exact subject-visible type-and-title identities are refined in place. Use the active memory catalog below and do not store transcripts, routine narration, or bulk output.\n${typeCatalog}`, "write", schemas.save, (input) => {
+    tool("memory.save", "memory_save", `Create or additively refine concise reusable knowledge with links and evidence references. Saving automatically associates the memory with the current session, workspace, and subject; updating it from another session or workspace adds that association. Exact subject-visible type-and-title identities are refined in place. Use the active memory catalog below and do not store transcripts, routine narration, or bulk output.\n${typeCatalog}`, "write", schemas.save, (input, context) => {
       const id = string(input.id);
       return store.save({
         ...(id ? { id } : {}),
@@ -333,9 +333,9 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
         ...(record(input.attributes) ? { attributes: record(input.attributes)! } : {}),
         ...(Array.isArray(input.evidence) ? { evidence: input.evidence.map(parseEvidence) } : {}),
         ...(Array.isArray(input.links) ? { links: input.links.map(parseMemoryLink) } : {}),
-      });
+      }, context?.modelAuthor);
     }),
-    tool("memory.correct", "memory_correct", "Exactly correct supplied fields or reclassify a memory node using its current revision. Reclassification preserves evidence and relationships and returns a new type-derived id. Retired and non-creatable types remain readable but cannot be reclassification targets.", "write", schemas.correct, (input) => {
+    tool("memory.correct", "memory_correct", "Exactly correct supplied fields or reclassify a memory node using its current revision. Reclassification preserves evidence and relationships and returns a new type-derived id. Retired and non-creatable types remain readable but cannot be reclassification targets.", "write", schemas.correct, (input, context) => {
       const patch: Partial<Omit<SaveMemoryNodeInput, "id">> = {};
       if ("type" in input) patch.type = requiredString(input.type, "type") as MemoryNodeType;
       if ("title" in input) patch.title = requiredString(input.title, "title");
@@ -348,10 +348,10 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
       if ("attributes" in input) patch.attributes = requiredRecord(input.attributes, "attributes");
       if ("evidence" in input) patch.evidence = requiredArray(input.evidence, "evidence").map(parseEvidence);
       if ("links" in input) patch.links = requiredArray(input.links, "links").map(parseMemoryLink);
-      return store.correct(requiredString(input.id, "id"), requiredInteger(input.expectedRevision, "expectedRevision"), patch);
+      return store.correct(requiredString(input.id, "id"), requiredInteger(input.expectedRevision, "expectedRevision"), patch, context?.modelAuthor);
     }),
-    tool("memory.link", "memory_link", "Create or refine a directed relationship between durable memory nodes. Profile relation IDs are advisory; other concise relation IDs remain valid.", "write", schemas.link, (input) =>
-      store.link(requiredString(input.fromId, "fromId"), requiredString(input.toId, "toId"), requiredString(input.relation, "relation"), string(input.note) ?? "")),
+    tool("memory.link", "memory_link", "Create or refine a directed relationship between durable memory nodes. Profile relation IDs are advisory; other concise relation IDs remain valid.", "write", schemas.link, (input, context) =>
+      store.link(requiredString(input.fromId, "fromId"), requiredString(input.toId, "toId"), requiredString(input.relation, "relation"), string(input.note) ?? "", context?.modelAuthor)),
   ];
 }
 

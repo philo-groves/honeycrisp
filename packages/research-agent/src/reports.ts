@@ -17,6 +17,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { MemoryGraphStore, type MemoryContext } from "./memory-graph.js";
+import { modelAuthorsForResource, recordModelAuthorship, type ModelAuthor } from "./model-authorship.js";
 import { registerResearchStorageArtifact, type ResearchStorageArtifactManifestEntry } from "./storage.js";
 import type { ResearchArtifactRef, ResearchStorageLayout } from "./types.js";
 
@@ -48,6 +49,7 @@ export interface ReportRecord {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  authors: ModelAuthor[];
 }
 
 export interface ReportDocument extends ReportRecord {
@@ -116,7 +118,7 @@ export class ReportStore {
     return row ? { ...this.toRecord(row), content: readFileSync(this.absolutePath(row.relative_path), "utf8") } : null;
   }
 
-  public create(input: { title: string; summary: string; content: string; status?: ReportStatus; submissionPacketPath?: string }): {
+  public create(input: { title: string; summary: string; content: string; status?: ReportStatus; submissionPacketPath?: string }, author?: ModelAuthor): {
     report: ReportRecord;
     artifactRef: ResearchArtifactRef;
     submissionPacketArtifactRef?: ResearchArtifactRef;
@@ -153,6 +155,7 @@ export class ReportStore {
         packetEntry?.sizeBytes ?? null, 1, now, now,
       );
       this.recordRevision(id, 1, now);
+      recordModelAuthorship(this.database, "report", id, 1, author, now);
       this.database.exec("COMMIT");
       const row = this.readRow(id);
       if (!row) throw new Error(`Report was not persisted: ${id}`);
@@ -167,7 +170,7 @@ export class ReportStore {
     }
   }
 
-  public revise(input: { id: string; expectedRevision: number; content: string; summary?: string; status?: ReportStatus; submissionPacketPath?: string }): {
+  public revise(input: { id: string; expectedRevision: number; content: string; summary?: string; status?: ReportStatus; submissionPacketPath?: string }, author?: ModelAuthor): {
     report: ReportRecord;
     artifactRef: ResearchArtifactRef;
     submissionPacketArtifactRef?: ResearchArtifactRef;
@@ -207,6 +210,7 @@ export class ReportStore {
         id, this.context.workspaceId, input.expectedRevision,
       );
       this.recordRevision(id, revision, updatedAt);
+      recordModelAuthorship(this.database, "report", id, revision, author, updatedAt);
       this.database.exec("COMMIT");
       const updated = this.readRow(id);
       if (!updated) throw new Error(`Report disappeared after revision: ${id}`);
@@ -245,6 +249,7 @@ export class ReportStore {
       title: row.title, summary: row.summary, status: row.status as ReportStatus,
       artifactId: row.artifact_id, submissionPacket: submissionPacketFromRow(row),
       revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at,
+      authors: modelAuthorsForResource(this.database, "report", row.id),
     };
   }
 

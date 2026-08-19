@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { modelAuthorsByResource } from './model-authorship.js';
 import {
   emptyMemoryDreamingSummary,
   getMemoryDreamingSummary,
@@ -168,9 +169,11 @@ function readRunbooks(
   workspaceId: string,
   artifactRevisions: ReadonlyMap<string, HoneycrispArtifactRevisionSummary[]>
 ): HoneycrispRunbookSummary[] {
-  return (database
+  const rows = database
     .prepare('SELECT * FROM honeycrisp_runbooks WHERE workspace_id = ? ORDER BY updated_at ASC, id')
-    .all(workspaceId) as SqlRow[]).map((row) => ({
+    .all(workspaceId) as SqlRow[];
+  const authors = modelAuthorsByResource(database, 'runbook', rows.map((row) => requiredString(row.id)));
+  return rows.map((row) => ({
     id: requiredString(row.id),
     workspaceId: requiredString(row.workspace_id),
     workspaceName: requiredString(row.workspace_name),
@@ -183,6 +186,7 @@ function readRunbooks(
     artifactId: requiredString(row.artifact_id),
     revision: requiredNumber(row.revision),
     revisions: revisionsForArtifact(artifactRevisions, 'runbook', row),
+    authors: authors.get(requiredString(row.id)) ?? [],
     createdAt: requiredString(row.created_at),
     updatedAt: requiredString(row.updated_at)
   }));
@@ -211,6 +215,7 @@ function readNodes(
   const assets = groupedStrings(database, 'SELECT node_id, asset_id AS value FROM memory_node_assets ORDER BY asset_id', visibleNodeIds);
   const tags = groupedStrings(database, 'SELECT node_id, tag AS value FROM memory_node_tags ORDER BY tag', visibleNodeIds);
   const evidence = readEvidence(database, visibleNodeIds);
+  const authors = modelAuthorsByResource(database, 'memory', [...visibleNodeIds]);
   const nodes = rows.map((row) => {
     const id = requiredString(row.id);
     const node: Omit<HoneycrispMemoryNodeSummary, 'provenance'> = {
@@ -235,7 +240,8 @@ function readNodes(
       evidenceRefs: evidence.get(id) ?? [],
       createdAt: requiredString(row.created_at),
       updatedAt: requiredString(row.updated_at),
-      revision: requiredNumber(row.revision)
+      revision: requiredNumber(row.revision),
+      authors: authors.get(id) ?? []
     };
     return {
       ...node,
@@ -258,9 +264,11 @@ function readReports(
   workspaceId: string,
   artifactRevisions: ReadonlyMap<string, HoneycrispArtifactRevisionSummary[]>
 ): HoneycrispReportSummary[] {
-  return (database
+  const rows = database
     .prepare('SELECT * FROM honeycrisp_reports WHERE workspace_id = ? ORDER BY updated_at ASC, id')
-    .all(workspaceId) as SqlRow[]).map((row) => ({
+    .all(workspaceId) as SqlRow[];
+  const authors = modelAuthorsByResource(database, 'report', rows.map((row) => requiredString(row.id)));
+  return rows.map((row) => ({
     id: requiredString(row.id),
     workspaceId: requiredString(row.workspace_id),
     workspaceName: requiredString(row.workspace_name),
@@ -274,6 +282,7 @@ function readReports(
     submissionPacket: reportSubmissionPacket(row),
     revision: requiredNumber(row.revision),
     revisions: revisionsForArtifact(artifactRevisions, 'report', row),
+    authors: authors.get(requiredString(row.id)) ?? [],
     createdAt: requiredString(row.created_at),
     updatedAt: requiredString(row.updated_at)
   }));
