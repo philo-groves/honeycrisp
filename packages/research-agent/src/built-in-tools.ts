@@ -240,6 +240,13 @@ export function createRepositorySearchTool(
             partial: timedOut,
             timedOut,
           },
+          modelOutput: {
+            query,
+            searchedRootCount: attemptedRoots.length,
+            searchedRootLabels: attemptedRoots.map((root) => repositorySearchRootLabel(root)),
+            matches,
+            partial: timedOut,
+          },
         });
       });
     },
@@ -309,6 +316,17 @@ export function createStructuredFileReadTool(
             truncated,
             encoding: "utf8",
             containsNulByte: slice.includes(0),
+            text,
+          },
+          modelOutput: {
+            resolvedPath: target.path,
+            offset,
+            bytesRead: slice.length,
+            totalBytes: file.length,
+            truncated,
+            encoding: "utf8",
+            containsNulByte: slice.includes(0),
+            ...(!target.root ? { outsideContextRoots: true } : {}),
             text,
           },
         });
@@ -547,6 +565,7 @@ function completeResult(
   input: {
     summary: string;
     output: unknown;
+    modelOutput?: unknown;
     artifactRefs?: readonly ResearchArtifactRef[];
   },
 ): ResearchToolExecutionResult {
@@ -557,6 +576,7 @@ function completeResult(
     completedAt: nowIso(),
     summary: input.summary,
     output: input.output,
+    ...("modelOutput" in input ? { modelOutput: input.modelOutput } : {}),
     artifactRefs: input.artifactRefs ?? [],
     followUpActions: [],
   };

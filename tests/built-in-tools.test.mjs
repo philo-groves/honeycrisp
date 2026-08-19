@@ -580,6 +580,24 @@ test("repository search finds bounded local source matches", async () => {
     assert.equal(tool.descriptor.requiredPermissions[0], "filesystem:read");
     assert.deepEqual(tool.descriptor.actionClasses, ["search", "inspect"]);
 
+    const modelProjection = projectModelToolResult(result.result);
+    const modelPayload = JSON.parse(modelProjection.content[0].text);
+    assert.equal(modelPayload.output.query, "parse_context_save");
+    assert.equal(modelPayload.output.matches[0].path, "Src/parse.c");
+    assert.equal(modelPayload.output.searchedRootCount, 1);
+    assert.equal("roots" in modelPayload.output, false);
+    assert.equal("availableRoots" in modelPayload.output, false);
+    assert.equal("attemptedRoots" in modelPayload.output, false);
+
+    const observed = result.events.find((event) => event.kind === "tool.observed");
+    assert.ok(observed);
+    assert.deepEqual(observed.payload.result.availableRoots, result.result.output.availableRoots);
+    assert.ok(observed.payload.fullResultCharacters > observed.payload.modelVisibleResultCharacters);
+    assert.equal(
+      observed.payload.modelResultCharactersRemoved,
+      observed.payload.fullResultCharacters - observed.payload.modelVisibleResultCharacters,
+    );
+
     const inspectResult = await createResearchToolRegistry([tool]).execute({
       id: "inspect_search_1",
       actionClass: "inspect",
@@ -761,6 +779,22 @@ test("structured file read supports ranges and annotates paths outside context r
     assert.equal(readResult.result.output.containsNulByte, false);
     assert.equal(readResult.result.output.withinContextRoot, true);
 
+    const readProjection = projectModelToolResult(readResult.result);
+    const readPayload = JSON.parse(readProjection.content[0].text);
+    assert.equal(readPayload.output.resolvedPath, await realpath(file));
+    assert.equal(readPayload.output.text, "cdef");
+    assert.equal(readPayload.output.offset, 2);
+    assert.equal(readPayload.output.truncated, true);
+    assert.equal("requestedPath" in readPayload.output, false);
+    assert.equal("root" in readPayload.output, false);
+    assert.equal("contextRoots" in readPayload.output, false);
+    assert.equal("withinContextRoot" in readPayload.output, false);
+
+    const readObserved = readResult.events.find((event) => event.kind === "tool.observed");
+    assert.ok(readObserved);
+    assert.deepEqual(readObserved.payload.result.contextRoots, readResult.result.output.contextRoots);
+    assert.ok(readObserved.payload.fullResultCharacters > readObserved.payload.modelVisibleResultCharacters);
+
     const outsideResult = await registry.execute({
       id: "read_2",
       actionClass: "inspect",
@@ -774,6 +808,8 @@ test("structured file read supports ranges and annotates paths outside context r
     assert.equal(outsideResult.result.output.withinContextRoot, false);
     assert.equal(outsideResult.result.output.root, null);
     assert.match(outsideResult.result.summary, /outside workspace context hints/);
+    const outsidePayload = JSON.parse(projectModelToolResult(outsideResult.result).content[0].text);
+    assert.equal(outsidePayload.output.outsideContextRoots, true);
 
     const repeatedResult = await registry.execute(
       {

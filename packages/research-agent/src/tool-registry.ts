@@ -51,6 +51,11 @@ export interface ResearchToolExecutionResult {
   completedAt: string;
   summary: string;
   output?: unknown;
+  /**
+   * Optional compact projection used only for model-visible tool content.
+   * The canonical output remains unchanged for audit events and host consumers.
+   */
+  modelOutput?: unknown;
   modelContent?: ToolResultMessage["content"];
   rawOutputRef?: string;
   artifactRefs?: readonly ResearchArtifactRef[];
@@ -318,6 +323,12 @@ export function createToolObservedEvent(
   options: ResearchToolExecutionContext = {},
 ): ResearchEvent {
   const projectedResult = projectToolResult(result);
+  const fullResultCharacters = serializedContentCharacters(
+    createModelToolResultContent(projectedResult, projectedResult.output, false),
+  );
+  const modelVisibleResultCharacters = serializedContentCharacters(
+    projectModelToolResult(projectedResult).content,
+  );
   return {
     id: createResearchEventId(),
     kind: "tool.observed",
@@ -334,6 +345,9 @@ export function createToolObservedEvent(
       status: projectedResult.status,
       followUpActionsProposed: projectedResult.followUpActions,
       summary: projectedResult.summary,
+      fullResultCharacters,
+      modelVisibleResultCharacters,
+      modelResultCharactersRemoved: Math.max(0, fullResultCharacters - modelVisibleResultCharacters),
       ...(projectedResult.rawOutputRef ? { rawOutputRef: projectedResult.rawOutputRef } : {}),
       ...(projectedResult.error ? { error: projectedResult.error } : {}),
       ...(projectedResult.output !== undefined ? { result: projectedResult.output } : {}),
@@ -365,35 +379,45 @@ export function projectModelToolResult(
   result: ResearchToolExecutionResult,
 ): ModelToolResultProjection {
   const projectedResult = projectToolResult(result);
+  return {
+    content: createModelToolResultContent(
+      projectedResult,
+      "modelOutput" in projectedResult
+        ? projectedResult.modelOutput
+        : projectedResult.output,
+      true,
+    ),
+    details: modelToolResultDetails(projectedResult),
+    isError: projectedResult.status !== "complete",
+  };
+}
+
+function createModelToolResultContent(
+  result: ResearchToolExecutionResult,
+  output: unknown,
+  bounded: boolean,
+): ToolResultMessage["content"] {
   const serialized = JSON.stringify(
     {
-      status: projectedResult.status,
-      summary: projectedResult.summary,
-      output: projectedResult.output,
-      error: projectedResult.error,
-      followUpActions: projectedResult.followUpActions,
+      status: result.status,
+      summary: result.summary,
+      output,
+      error: result.error,
+      followUpActions: result.followUpActions,
     },
     null,
     2,
   );
-  return {
-    content: result.modelContent?.length
-      ? [
-          {
-            type: "text",
-            text: truncateModelToolResult(serialized, result.action.toolName),
-          },
-          ...result.modelContent,
-        ]
-      : [
-          {
-            type: "text",
-            text: truncateModelToolResult(serialized, result.action.toolName),
-          },
-        ],
-    details: modelToolResultDetails(projectedResult),
-    isError: projectedResult.status !== "complete",
-  };
+  const text = bounded
+    ? truncateModelToolResult(serialized, result.action.toolName)
+    : serialized;
+  return result.modelContent?.length
+    ? [{ type: "text", text }, ...result.modelContent]
+    : [{ type: "text", text }];
+}
+
+function serializedContentCharacters(content: ToolResultMessage["content"]): number {
+  return JSON.stringify(content).length;
 }
 
 export function modelToolResultDetails(
