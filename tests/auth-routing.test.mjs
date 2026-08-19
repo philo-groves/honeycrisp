@@ -13,11 +13,31 @@ test("authentication preferences parse only supported providers and methods", ()
     unsupported: "api_key",
     xai: "invalid",
     zai: "subscription",
+    openrouter: "subscription",
   })), {
     "openai-codex": "api_key",
     anthropic: "subscription",
     zai: "subscription",
   });
+});
+
+test("OpenRouter remains API-key-only and exposes OPENROUTER_API_KEY", async () => {
+  const previous = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  try {
+    const router = new ProviderAuthenticationRouter({ openrouter: "subscription" });
+    assert.equal(router.method("openrouter"), "api_key");
+    assert.equal(router.requestApiKey("openrouter"), "test-openrouter-key");
+    assert.equal(router.tryFallback("openrouter", "insufficient credits"), false);
+    const context = router.authContext({
+      env: async (name) => process.env[name],
+      fileExists: async () => false,
+    });
+    assert.equal(await context.env("OPENROUTER_API_KEY"), "test-openrouter-key");
+  } finally {
+    if (previous === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = previous;
+  }
 });
 
 test("Z.ai API-key preference exposes only the dedicated ZAI_API_KEY route", async () => {

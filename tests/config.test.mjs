@@ -60,6 +60,7 @@ test("provider catalogs expose current supplemental models to frontends", () => 
   const [anthropic] = getProviderModelCatalog("anthropic");
   const [openai] = getProviderModelCatalog("openai-codex");
   const [zai] = getProviderModelCatalog("zai");
+  const [openrouter] = getProviderModelCatalog("openrouter");
 
   assert.ok(anthropic?.models.some((model) => model.id === "claude-opus-5"));
   const fable = anthropic?.models.find((model) => model.id === "claude-fable-5");
@@ -83,6 +84,8 @@ test("provider catalogs expose current supplemental models to frontends", () => 
   assert.equal(glm53?.name, "GLM-5.3");
   assert.equal(glm53?.contextWindow, 1_000_000);
   assert.equal(glm53?.maxTokens, 128_000);
+  assert.equal(openrouter?.providerName, "OpenRouter");
+  assert.ok(openrouter?.models.some((model) => model.id === "auto"));
 });
 
 test("provider catalog reports Pi model names and model-specific effort levels", () => {

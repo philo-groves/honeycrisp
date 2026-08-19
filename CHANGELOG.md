@@ -19,6 +19,7 @@
 
 ### Added
 
+- Added OpenRouter as an API-key-only research provider using the Pi model catalog, with `openrouter/auto` as the default lead and auxiliary route and explicit routed-provider policy-risk preflight acknowledgement.
 - Added migration 11 revision-level model authorship for memories, runbooks, and reports. Model-written revisions retain provider/model attribution, and aggregate records expose every distinct contributing model.
 - Security reports now attach a durable `submission.zip` packet imported from the active workspace, with packet metadata retained across report revisions.
 - Added correlated host approval for annotated MCP mutations, multimodal MCP tool-result projection, and disabled-by-default built-in Agent Plugin definitions.

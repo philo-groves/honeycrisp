@@ -28,6 +28,7 @@ test("Honeycrisp owns auxiliary routes, sources, plugins, and retained maintenan
       fallbackEffort: "low",
     }), { provider: "openai-codex", model: "profile-model", effort: "high" });
     assert.equal(providerSemanticsDescriptor().defaultSmallModels.xai, "grok-4.3");
+    assert.equal(providerSemanticsDescriptor().defaultSmallModels.openrouter, "auto");
 
     const scope = { assets: [{
       id: "repo",

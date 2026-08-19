@@ -22,6 +22,7 @@ test("standalone Auto-Review defaults cover each supported provider", () => {
     anthropic: "claude-haiku-4-5",
     xai: "grok-4.3",
     zai: "glm-5-turbo",
+    openrouter: "auto",
   });
 });
 

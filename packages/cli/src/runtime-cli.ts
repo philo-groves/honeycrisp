@@ -225,6 +225,7 @@ interface ParsedArgs {
   anthropicCvpRiskAcknowledged: boolean;
   xaiPolicyRiskAcknowledged: boolean;
   zaiPolicyRiskAcknowledged: boolean;
+  openrouterPolicyRiskAcknowledged: boolean;
   model: string | undefined;
   titleModel: string | undefined;
   titleEffort: ResearchModelEffort | undefined;
@@ -337,6 +338,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let anthropicCvpRiskAcknowledged = false;
   let xaiPolicyRiskAcknowledged = false;
   let zaiPolicyRiskAcknowledged = false;
+  let openrouterPolicyRiskAcknowledged = false;
   let model: string | undefined;
   let titleModel: string | undefined;
   let titleEffort: ResearchModelEffort | undefined;
@@ -456,6 +458,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       xaiPolicyRiskAcknowledged = true;
     } else if (arg === "--zai-policy-risk-acknowledged") {
       zaiPolicyRiskAcknowledged = true;
+    } else if (arg === "--openrouter-policy-risk-acknowledged") {
+      openrouterPolicyRiskAcknowledged = true;
     } else if (arg === "--model") {
       model = readOptionValue(argv, index, arg);
       index += 1;
@@ -663,6 +667,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     anthropicCvpRiskAcknowledged,
     xaiPolicyRiskAcknowledged,
     zaiPolicyRiskAcknowledged,
+    openrouterPolicyRiskAcknowledged,
     model,
     titleModel,
     titleEffort,
@@ -1448,6 +1453,7 @@ function usage(): string {
     "  --anthropic-cvp-risk-acknowledged  Confirm host-recorded Anthropic CVP risk acceptance",
     "  --xai-policy-risk-acknowledged  Confirm host-recorded xAI policy-risk acceptance",
     "  --zai-policy-risk-acknowledged  Confirm host-recorded Z.ai policy-risk acceptance",
+    "  --openrouter-policy-risk-acknowledged  Confirm host-recorded OpenRouter and routed-provider policy-risk acceptance",
     "  --model <model>        Override configured/default model for real mode",
     "  --title-model <model>  Generate a session title with this model from the selected provider",
     "  --title-effort <level> Reasoning effort for session title generation (default: medium)",
@@ -1466,7 +1472,7 @@ function usage(): string {
     "  --shell-options <path> Harness-wide shell utility policy JSON",
     "  --shell-safety-mode <m> Shell safety: manual_approval, auto_review (default), or danger",
     "  --shell-review-models <json> Provider-to-small-reviewer-model JSON object",
-    "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3",
+    "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3, zai=glm-5-turbo, openrouter=auto",
     "  --shell-review-effort <level> Small-model review effort (default: medium)",
     "  --memory-type-descriptions <json> Per-memory-type description overrides used by active agents",
     "  --profile <path>       Explicit research profile JSON (overrides the workspace default)",
@@ -2410,6 +2416,9 @@ async function validateCollaborationProviders(
     if (preference.provider === "zai" && !args.zaiPolicyRiskAcknowledged) {
       throw new Error("Z.ai breakout-room agents require policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.");
     }
+    if (preference.provider === "openrouter" && !args.openrouterPolicyRiskAcknowledged) {
+      throw new Error("OpenRouter breakout-room agents require OpenRouter and routed-provider policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.");
+    }
   }
 }
 
@@ -3304,6 +3313,11 @@ function validateCybersecurityRunPreflight(
   if (modelConfig.provider === "zai" && !args.zaiPolicyRiskAcknowledged) {
     throw new Error(
       "Z.ai cybersecurity research requires policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
+    );
+  }
+  if (modelConfig.provider === "openrouter" && !args.openrouterPolicyRiskAcknowledged) {
+    throw new Error(
+      "OpenRouter cybersecurity research requires OpenRouter and routed-provider policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
     );
   }
 }

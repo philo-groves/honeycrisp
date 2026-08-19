@@ -4,7 +4,7 @@ import {
 } from "@honeycrisp/research-agent";
 import { honeycrispProtocolFailure, honeycrispProtocolSuccess } from "./protocol.js";
 
-const PROVIDERS = new Set<ResearchModelProviderId>(["openai-codex", "anthropic", "xai", "zai"]);
+const PROVIDERS = new Set<ResearchModelProviderId>(["openai-codex", "anthropic", "xai", "zai", "openrouter"]);
 type CompletionEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 const EFFORTS = new Set<CompletionEffort>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const MAX_INPUT_CHARS = 8_000_000;

@@ -587,7 +587,9 @@ export async function verifyProviderAuth(
 
   const model = modelId
     ? models.getModel(providerId, modelId)
-    : models.getModels(providerId)[0];
+    : providerId === "openrouter"
+      ? models.getModel(providerId, "auto")
+      : models.getModels(providerId)[0];
 
   if (!model) {
     throw new Error(

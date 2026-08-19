@@ -4,7 +4,7 @@ import {
   type Models,
 } from "@earendil-works/pi-ai";
 
-export const RESEARCH_MODEL_PROVIDER_IDS = ["openai-codex", "anthropic", "xai", "zai"] as const;
+export const RESEARCH_MODEL_PROVIDER_IDS = ["openai-codex", "anthropic", "xai", "zai", "openrouter"] as const;
 
 export type ResearchModelProviderId = typeof RESEARCH_MODEL_PROVIDER_IDS[number];
 export type ProviderAuthenticationMethod = "subscription" | "api_key";
@@ -15,6 +15,7 @@ const API_KEY_ENVIRONMENT_VARIABLES: Readonly<Record<ResearchModelProviderId, st
   anthropic: "ANTHROPIC_API_KEY",
   xai: "XAI_API_KEY",
   zai: "ZAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
 };
 
 export function readProviderAuthenticationPreferences(
@@ -27,7 +28,9 @@ export function readProviderAuthenticationPreferences(
     const preferences: ProviderAuthenticationPreferences = {};
     for (const providerId of RESEARCH_MODEL_PROVIDER_IDS) {
       const method = parsed[providerId];
-      if (method === "subscription" || method === "api_key") preferences[providerId] = method;
+      if (method === "api_key" || (providerId !== "openrouter" && method === "subscription")) {
+        preferences[providerId] = method;
+      }
     }
     return preferences;
   } catch {
@@ -41,8 +44,13 @@ export class ProviderAuthenticationRouter {
 
   constructor(preferences: ProviderAuthenticationPreferences = readProviderAuthenticationPreferences()) {
     for (const providerId of RESEARCH_MODEL_PROVIDER_IDS) {
-      const preferred = preferences[providerId] ?? "subscription";
-      this.#methods.set(providerId, preferred === "api_key" && !this.apiKey(providerId) ? "subscription" : preferred);
+      const preferred = providerId === "openrouter" ? "api_key" : preferences[providerId] ?? "subscription";
+      this.#methods.set(
+        providerId,
+        providerId !== "openrouter" && preferred === "api_key" && !this.apiKey(providerId)
+          ? "subscription"
+          : preferred,
+      );
     }
   }
 
@@ -84,6 +92,7 @@ export class ProviderAuthenticationRouter {
 
   tryFallback(providerId: string, errorMessage: string): boolean {
     if (!isResearchModelProviderId(providerId)) return false;
+    if (providerId === "openrouter") return false;
     if (this.#fallbackProviders.has(providerId)) return false;
     const current = this.#methods.get(providerId) ?? "subscription";
     if (!isAuthenticationUsageExhaustion(errorMessage, current)) return false;

@@ -214,6 +214,34 @@ test("Z.ai cybersecurity runs require policy-use risk acknowledgement", async ()
   }
 });
 
+test("OpenRouter cybersecurity runs require routed-provider policy-use risk acknowledgement", async () => {
+  const authFile = await createEmptyAuthFilePath();
+  const { workspaceRoot, contextPath } = await createAuthorizedWorkspaceContext("openrouter-policy");
+  try {
+    const result = runTopCli([
+      "--provider",
+      "openrouter",
+      "--model",
+      "auto",
+      "--workspace-root",
+      workspaceRoot,
+      "--workspace-context",
+      contextPath,
+      "-p",
+      "Inspect the authorized target.",
+    ], {
+      HONEYCRISP_AUTH_FILE: authFile,
+      OPENROUTER_API_KEY: "test-only-key",
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /OpenRouter cybersecurity research requires OpenRouter and routed-provider policy-use risk acknowledgement/);
+    assert.match(result.stderr, /Beale Settings > Providers/);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("main CLI supports deterministic mock mode without auth", async () => {
   const authFile = await createEmptyAuthFilePath();
   const result = runTopCli(

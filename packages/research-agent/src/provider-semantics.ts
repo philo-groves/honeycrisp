@@ -8,6 +8,7 @@ export const DEFAULT_SMALL_MODELS: Readonly<Record<ResearchProviderId, string>> 
   anthropic: 'claude-haiku-4-5',
   xai: 'grok-4.3',
   zai: 'glm-5-turbo',
+  openrouter: 'auto',
 });
 
 export interface ProviderSemanticsDescriptor {
