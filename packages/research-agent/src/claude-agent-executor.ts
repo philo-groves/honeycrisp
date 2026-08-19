@@ -2,6 +2,7 @@ import {
   createSdkMcpServer,
   query,
   tool,
+  type OutputFormat,
   type SDKAssistantMessage,
   type SDKResultMessage,
   type SDKUserMessage,
@@ -69,11 +70,13 @@ export interface CompleteClaudeAgentTextOptions {
   cwd?: string;
   signal?: AbortSignal;
   authenticationPreferences?: ProviderAuthenticationPreferences;
+  outputFormat?: OutputFormat;
 }
 
 export interface ClaudeAgentTextCompletion {
   text: string;
   usage: Record<string, unknown>;
+  structuredOutput?: unknown;
 }
 
 /**
@@ -113,6 +116,7 @@ export async function completeClaudeAgentText(
               preset: "claude_code",
               append: options.systemPrompt,
             },
+            ...(options.outputFormat ? { outputFormat: options.outputFormat } : {}),
             ...(effort ? { effort } : {}),
             ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
             env: authenticationRouter.claudeEnvironment(),
@@ -144,6 +148,9 @@ export async function completeClaudeAgentText(
       modelUsage: result.modelUsage,
       totalCostUsd: result.total_cost_usd,
     },
+    ...(result.structured_output !== undefined
+      ? { structuredOutput: result.structured_output }
+      : {}),
   };
 }
 

@@ -5,6 +5,7 @@ import {
   classifyShellNetworkIntent,
   createShellSafetyAuthorizer,
   DEFAULT_SHELL_REVIEW_MODELS,
+  sanitizeShellAuthorizationDecision,
 } from "../packages/research-agent/dist/index.js";
 
 const BASE_REQUEST = {
@@ -72,7 +73,8 @@ test("Anthropic Auto-Review always uses the Claude Agent SDK completion route", 
     async completeClaudeText(options) {
       calls.push(options);
       return {
-        text: JSON.stringify({ decision: "approved", proofing: false, reason: "Bounded workspace inspection." }),
+        text: "unstructured fallback text",
+        structuredOutput: { decision: "approved", proofing: false, reason: "Bounded workspace inspection." },
         usage: { inputTokens: 20 },
       };
     },
@@ -83,6 +85,19 @@ test("Anthropic Auto-Review always uses the Claude Agent SDK completion route", 
   assert.equal(decision.reviewer?.provider, "anthropic");
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.model, "claude-haiku-4-5");
+  assert.deepEqual(calls[0]?.outputFormat, {
+    type: "json_schema",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["decision", "proofing", "reason"],
+      properties: {
+        decision: { type: "string", enum: ["approved", "denied"] },
+        proofing: { type: "boolean" },
+        reason: { type: "string", minLength: 1, maxLength: 1_000 },
+      },
+    },
+  });
 });
 
 test("network intent is audit metadata and does not create an application-level denial", async () => {
@@ -436,7 +451,7 @@ test("Auto-Review uses the active provider small model and emits a redacted audi
   assert.equal(calls[0].provider, "openai-codex");
   assert.equal(calls[0].modelId, "gpt-5.6-luna");
   assert.equal(calls[0].options.reasoning, "medium");
-  assert.equal(calls[0].options.maxTokens, 256);
+  assert.equal(calls[0].options.maxTokens, 1_024);
   assert.match(calls[0].context.messages[0].content, /password=stdin-secret/);
   assert.match(calls[0].context.messages[0].content, /"authorizationRecorded":true/);
   assert.match(calls[0].context.messages[0].content, /"executionPosture":"operator_managed"/);
@@ -450,6 +465,55 @@ test("Auto-Review uses the active provider small model and emits a redacted audi
   await authorize(BASE_REQUEST);
   assert.equal(calls[1].provider, "xai");
   assert.equal(calls[1].modelId, "grok-4.3");
+});
+
+test("Pi Auto-Review routes every non-Anthropic provider with the bounded review budget", async () => {
+  for (const reviewer of [
+    { provider: "openai-codex", model: "gpt-5.6-luna", reasoningEffort: "medium" },
+    { provider: "xai", model: "grok-4.3", reasoningEffort: "medium" },
+    { provider: "zai", model: "glm-5-turbo", reasoningEffort: "medium" },
+    { provider: "openrouter", model: "auto", reasoningEffort: "medium" },
+  ]) {
+    const calls = [];
+    const authorize = createShellSafetyAuthorizer({
+      getMode: () => "auto_review",
+      getReviewerSelection: () => reviewer,
+      requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+      models: fixtureModels(
+        '{"decision":"approved","proofing":false,"reason":"Bounded inspection."}',
+        calls,
+      ),
+    });
+
+    const decision = await authorize(BASE_REQUEST);
+    assert.equal(decision.decision, "approved");
+    assert.equal(calls[0]?.provider, reviewer.provider);
+    assert.equal(calls[0]?.modelId, reviewer.model);
+    assert.equal(calls[0]?.options.maxTokens, 1_024);
+  }
+});
+
+test("Auto-Review repairs one malformed provider response before failing closed", async () => {
+  const calls = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "xai",
+      model: "grok-4.3",
+      reasoningEffort: "medium",
+    }),
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: fixtureModels([
+      "I approve this command.",
+      '{"decision":"approved","proofing":false,"reason":"Bounded inspection."}',
+    ], calls),
+  });
+
+  const decision = await authorize(BASE_REQUEST);
+  assert.equal(decision.decision, "approved");
+  assert.equal(calls[0].completionCount, 2);
+  assert.doesNotMatch(calls[0].contexts[0].messages[0].content, /prior response/i);
+  assert.match(calls[0].contexts[1].messages[0].content, /prior response did not match/i);
 });
 
 test("Auto-Review denial waits for a correlated one-command researcher override", async () => {
@@ -543,28 +607,35 @@ test("Auto-Review requires proofing commands to originate from a runbook cell", 
   assert.equal(approved.source, "small_model");
 });
 
-test("Auto-Review fails closed for missing, malformed, oversized, and timed-out reviews", async () => {
+test("Auto-Review fails closed with sanitized diagnostics for missing, malformed, oversized, and timed-out reviews", async () => {
   const reviewer = {
     provider: "openai-codex",
     model: "gpt-5.6-luna",
     reasoningEffort: "medium",
   };
-  for (const response of [
-    "approved",
-    String.fromCharCode(96).repeat(3) + 'json\n{"decision":"approved","reason":"safe"}\n' + String.fromCharCode(96).repeat(3),
-    '{"decision":"approved","reason":"safe","extra":true}',
-    '{"decision":"unknown","reason":"safe"}',
+  for (const [response, category] of [
+    ["approved", "invalid_json"],
+    [String.fromCharCode(96).repeat(3) + 'json\n{"decision":"approved","reason":"safe"}\n' + String.fromCharCode(96).repeat(3), "invalid_json"],
+    ['{"decision":"approved","reason":"safe","extra":true}', "invalid_schema"],
+    ['{"decision":"unknown","reason":"safe"}', "invalid_schema"],
   ]) {
+    const calls = [];
     const authorize = createShellSafetyAuthorizer({
       getMode: () => "auto_review",
       getReviewerSelection: () => reviewer,
       requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
-      models: fixtureModels(response, []),
+      models: fixtureModels(response, calls),
     });
     const decision = await authorize(BASE_REQUEST);
     assert.equal(decision.decision, "denied");
     assert.match(decision.reason, /failed closed/);
     assert.doesNotMatch(decision.reason, /approved|unknown/);
+    assert.deepEqual(decision.reviewFailure, {
+      category,
+      phase: "response",
+      attempts: 2,
+    });
+    assert.equal(calls[0].completionCount, 2);
   }
 
   let calls = 0;
@@ -630,7 +701,51 @@ test("Auto-Review fails closed for missing, malformed, oversized, and timed-out 
       },
     },
   });
-  assert.equal((await timedOut(BASE_REQUEST)).decision, "denied");
+  const timedOutDecision = await timedOut(BASE_REQUEST);
+  assert.equal(timedOutDecision.decision, "denied");
+  assert.equal(timedOutDecision.reviewFailure?.category, "timeout");
+});
+
+test("Auto-Review classifies provider failures without retaining provider error text", async () => {
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "xai",
+      model: "grok-4.3",
+      reasoningEffort: "medium",
+    }),
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: {
+      getModel(provider, id) {
+        return { provider, id };
+      },
+      async completeSimple() {
+        throw new Error("401 Unauthorized: secret-provider-detail");
+      },
+    },
+  });
+
+  const decision = await authorize(BASE_REQUEST);
+  assert.equal(decision.decision, "denied");
+  assert.deepEqual(decision.reviewFailure, {
+    category: "authentication",
+    phase: "request",
+    attempts: 1,
+  });
+  assert.doesNotMatch(JSON.stringify(decision), /secret-provider-detail/);
+  const sanitized = sanitizeShellAuthorizationDecision({
+    ...decision,
+    reviewFailure: {
+      ...decision.reviewFailure,
+      providerDetail: "must-not-survive",
+    },
+  });
+  assert.deepEqual(sanitized.reviewFailure, decision.reviewFailure);
+  assert.doesNotMatch(JSON.stringify(sanitized), /must-not-survive/);
+  assert.equal(sanitizeShellAuthorizationDecision({
+    ...decision,
+    reviewFailure: { category: "raw_provider_error", phase: "response", attempts: 1 },
+  }).reviewFailure, undefined);
 });
 
 test("Auto-Review timeout and outer abort fail closed when a provider ignores AbortSignal", async () => {
@@ -671,21 +786,35 @@ test("Auto-Review timeout and outer abort fail closed when a provider ignores Ab
   const pending = aborted(BASE_REQUEST, controller.signal);
   await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
-  assert.equal((await pending).decision, "denied");
+  const abortedDecision = await pending;
+  assert.equal(abortedDecision.decision, "denied");
+  assert.equal(abortedDecision.reviewFailure?.category, "aborted");
   assert.equal(calls, 2);
 });
 
 function fixtureModels(responseText, calls) {
+  let completionCount = 0;
   return {
     getModel(provider, modelId) {
       calls.push({ provider, modelId });
       return { provider, id: modelId };
     },
     async completeSimple(selectedModel, context, options) {
-      Object.assign(calls.at(-1), { selectedModel, context, options });
+      completionCount += 1;
+      const call = calls.at(-1);
+      Object.assign(call, {
+        selectedModel,
+        context,
+        contexts: [...(call.contexts ?? []), context],
+        options,
+        completionCount,
+      });
+      const selectedResponse = Array.isArray(responseText)
+        ? responseText[Math.min(completionCount - 1, responseText.length - 1)]
+        : responseText;
       return {
         role: "assistant",
-        content: [{ type: "text", text: responseText }],
+        content: [{ type: "text", text: selectedResponse }],
         api: "fixture",
         provider: selectedModel.provider,
         model: selectedModel.id,

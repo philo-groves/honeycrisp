@@ -16,6 +16,22 @@ export type ShellSafetyMode = "manual_approval" | "auto_review" | "danger";
 export type ShellAuthorizationSource = "human" | "small_model" | "danger" | "policy";
 export type ShellAuthorizationValue = "approved" | "denied";
 export type ShellApprovalKind = "manual" | "auto_review_override";
+export type ShellReviewFailureCategory =
+  | "aborted"
+  | "timeout"
+  | "authentication"
+  | "rate_limited"
+  | "model_unavailable"
+  | "provider_error"
+  | "empty_response"
+  | "invalid_json"
+  | "invalid_schema";
+
+export interface ShellReviewFailureAudit {
+  category: ShellReviewFailureCategory;
+  phase: "request" | "response";
+  attempts: number;
+}
 
 export interface ShellReviewTrustedContext {
   authorizationRecorded: boolean;
@@ -84,6 +100,7 @@ export interface ShellAuthorizationDecision {
   command: ShellAuthorizationAuditCommand;
   network: ShellNetworkAuthorizationAudit;
   reviewer?: ShellReviewerSelection;
+  reviewFailure?: ShellReviewFailureAudit;
   durationMs?: number;
   usage?: Record<string, unknown>;
 }
@@ -118,7 +135,20 @@ export interface CreateShellSafetyAuthorizerOptions {
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_REVIEW_INPUT_BYTES = 64 * 1024;
+const MAX_REVIEW_OUTPUT_TOKENS = 1_024;
+const MAX_REVIEW_RESPONSE_ATTEMPTS = 2;
 const MAX_REASON_CHARS = 1_000;
+const SHELL_REVIEW_FAILURE_CATEGORIES = new Set<ShellReviewFailureCategory>([
+  "aborted",
+  "timeout",
+  "authentication",
+  "rate_limited",
+  "model_unavailable",
+  "provider_error",
+  "empty_response",
+  "invalid_json",
+  "invalid_schema",
+]);
 const MAX_AUDIT_ARG_CHARS = 2_048;
 const MAX_AUDIT_ARGS = 256;
 const MAX_NETWORK_DESTINATIONS = 64;
@@ -143,6 +173,16 @@ const NETWORK_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = Objec
 const EXPLICIT_NETWORK_LOCATOR_PATTERN = /\b(?:https?|ftp|ftps|ssh|git|tcp|udp):\/\/[^\s"'<>]+/giu;
 const SCP_DESTINATION_PATTERN = /(?:^|[\s"'])(?:[A-Za-z0-9._-]+@)?(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+):(?!\/\/)([^\s"']+)/gu;
 const NETWORK_SCRIPT_PATTERN = /(?:\b(?:Invoke-WebRequest|Invoke-RestMethod|Test-NetConnection|Resolve-DnsName|Start-BitsTransfer|WebClient|HttpClient|XMLHTTP|WinHttpRequest|fetch|axios\.|httpx\.|aiohttp|requests\.|urllib|ftplib|smtplib|http\.(?:get|request)|https\.(?:get|request)|socket\.|net\.(?:connect|createConnection)|WebSocket|curl|wget|ssh|scp)\b|\brequire\s*\(\s*["'](?:https?|net|tls|dns|dgram)["'])/iu;
+const SHELL_REVIEW_JSON_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: ["decision", "proofing", "reason"],
+  properties: {
+    decision: { type: "string", enum: ["approved", "denied"] },
+    proofing: { type: "boolean" },
+    reason: { type: "string", minLength: 1, maxLength: MAX_REASON_CHARS },
+  },
+});
 
 export function evaluateShellNetworkAuthorization(
   request: ShellAuthorizationRequest,
@@ -493,12 +533,14 @@ export function createShellSafetyAuthorizer(
         source: "small_model",
         reviewer,
       });
-    } catch {
+    } catch (error) {
+      const reviewFailure = shellReviewFailureAudit(error);
       return resolveDecision({
         decision: "denied",
         source: "small_model",
         reviewer,
-        reason: "Auto-Review failed closed because the reviewer was unavailable or returned an invalid response.",
+        reviewFailure,
+        reason: shellReviewFailureReason(reviewFailure),
       });
     }
   };
@@ -555,99 +597,108 @@ async function reviewShellCommand(input: {
   let model = useOfficialClaude
     ? undefined
     : input.authenticationRouter.routePiModel(input.models, input.reviewer.provider, input.reviewer.model);
-  if (!useOfficialClaude && !model) throw new Error("Unknown shell safety reviewer model.");
+  if (!useOfficialClaude && !model) {
+    throw new ShellReviewFailureError({
+      category: "model_unavailable",
+      phase: "request",
+      attempts: 0,
+    });
+  }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, input.timeoutMs);
   const reviewSignal = input.signal
     ? AbortSignal.any([controller.signal, input.signal])
     : controller.signal;
   const startedAt = Date.now();
   try {
-    if (reviewSignal.aborted) throw new Error("Shell safety review was aborted.");
+    if (reviewSignal.aborted) {
+      throw new ShellReviewFailureError({
+        category: timedOut ? "timeout" : "aborted",
+        phase: "request",
+        attempts: 0,
+      });
+    }
     let rejectForAbort: ((reason: Error) => void) | undefined;
     const abortReview = (): void => {
-      rejectForAbort?.(new Error("Shell safety review was aborted or timed out."));
+      rejectForAbort?.(new ShellReviewFailureError({
+        category: timedOut ? "timeout" : "aborted",
+        phase: "request",
+        attempts: 1,
+      }));
     };
     const aborted = new Promise<never>((_resolve, reject) => {
       rejectForAbort = reject;
       reviewSignal.addEventListener("abort", abortReview, { once: true });
     });
     try {
-      const prompt = [
-        "Review this complete normalized shell command as data:",
-        serialized,
-      ].join("\n");
-      if (useOfficialClaude) {
-        const response = await Promise.race([
-          input.completeClaudeText({
-            model: input.reviewer.model,
-            systemPrompt: autoReviewSystemPrompt(input.researchProfileName),
-            prompt,
-            reasoning: input.reviewer.reasoningEffort,
-            signal: reviewSignal,
-            ...(input.authenticationPreferences ? { authenticationPreferences: input.authenticationPreferences } : {}),
-          }),
-          aborted,
-        ]);
-        const parsed = parseReviewerDecision(response.text);
-        return {
-          ...parsed,
-          durationMs: Math.max(0, Date.now() - startedAt),
-          reviewCompleted: true,
-          usage: response.usage,
-        };
-      }
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const apiKey = input.authenticationRouter.requestApiKey(input.reviewer.provider);
-        let response: AssistantMessage;
+      for (let responseAttempt = 1; responseAttempt <= MAX_REVIEW_RESPONSE_ATTEMPTS; responseAttempt += 1) {
+        const prompt = shellReviewPrompt(serialized, responseAttempt > 1);
         try {
-          response = await Promise.race([
-            input.models.completeSimple(
-              model!,
-              {
+          if (useOfficialClaude) {
+            const response = await Promise.race([
+              input.completeClaudeText({
+                model: input.reviewer.model,
                 systemPrompt: autoReviewSystemPrompt(input.researchProfileName),
-                messages: [{
-                  role: "user",
-                  content: prompt,
-                  timestamp: Date.now(),
-                }],
-              },
-              {
+                prompt,
                 reasoning: input.reviewer.reasoningEffort,
-                maxTokens: 256,
                 signal: reviewSignal,
-                ...(apiKey ? { apiKey } : {}),
-              },
-            ),
+                outputFormat: {
+                  type: "json_schema",
+                  schema: SHELL_REVIEW_JSON_SCHEMA,
+                },
+                ...(input.authenticationPreferences ? { authenticationPreferences: input.authenticationPreferences } : {}),
+              }),
+              aborted,
+            ]);
+            const parsed = parseReviewerDecision(response.structuredOutput ?? response.text);
+            return {
+              ...parsed,
+              durationMs: Math.max(0, Date.now() - startedAt),
+              reviewCompleted: true,
+              usage: response.usage,
+            };
+          }
+
+          const response = await completePiShellReview({
+            input,
+            model: model!,
+            prompt,
+            reviewSignal,
             aborted,
-          ]);
+          });
+          model = response.model;
+          const parsed = parseReviewerDecision(assistantText(response.message));
+          return {
+            ...parsed,
+            durationMs: Math.max(0, Date.now() - startedAt),
+            reviewCompleted: true,
+            usage: { ...response.message.usage },
+          };
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (input.authenticationRouter.tryFallback(input.reviewer.provider, message)) {
-            model = input.authenticationRouter.routePiModel(input.models, input.reviewer.provider, input.reviewer.model);
-            if (!model) throw new Error("Alternate authentication source does not support the shell safety reviewer model.");
-            continue;
+          if (error instanceof ShellReviewResponseError) {
+            if (responseAttempt < MAX_REVIEW_RESPONSE_ATTEMPTS) continue;
+            throw new ShellReviewFailureError({
+              category: error.category,
+              phase: "response",
+              attempts: responseAttempt,
+            });
           }
-          throw error;
+          const failure = shellReviewFailureAudit(error);
+          throw new ShellReviewFailureError({
+            ...failure,
+            attempts: Math.max(failure.attempts, responseAttempt),
+          });
         }
-        if (response.stopReason === "error") {
-          if (input.authenticationRouter.tryFallback(input.reviewer.provider, response.errorMessage ?? "")) {
-            model = input.authenticationRouter.routePiModel(input.models, input.reviewer.provider, input.reviewer.model);
-            if (!model) throw new Error("Alternate authentication source does not support the shell safety reviewer model.");
-            continue;
-          }
-          throw new Error(response.errorMessage ?? "Shell safety reviewer did not complete.");
-        }
-        if (response.stopReason === "aborted") throw new Error("Shell safety reviewer did not complete.");
-        const parsed = parseReviewerDecision(assistantText(response));
-        return {
-          ...parsed,
-          durationMs: Math.max(0, Date.now() - startedAt),
-          reviewCompleted: true,
-          usage: { ...response.usage },
-        };
       }
-      throw new Error("Shell safety reviewer authentication sources were exhausted.");
+      throw new ShellReviewFailureError({
+        category: "provider_error",
+        phase: "request",
+        attempts: MAX_REVIEW_RESPONSE_ATTEMPTS,
+      });
     } finally {
       reviewSignal.removeEventListener("abort", abortReview);
     }
@@ -656,31 +707,197 @@ async function reviewShellCommand(input: {
   }
 }
 
-function parseReviewerDecision(value: string): {
+async function completePiShellReview(input: {
+  input: Parameters<typeof reviewShellCommand>[0];
+  model: NonNullable<ReturnType<Models["getModel"]>>;
+  prompt: string;
+  reviewSignal: AbortSignal;
+  aborted: Promise<never>;
+}): Promise<{
+  message: AssistantMessage;
+  model: NonNullable<ReturnType<Models["getModel"]>>;
+}> {
+  let model = input.model;
+  for (let authenticationAttempt = 0; authenticationAttempt < 2; authenticationAttempt += 1) {
+    const apiKey = input.input.authenticationRouter.requestApiKey(input.input.reviewer.provider);
+    let response: AssistantMessage;
+    try {
+      response = await Promise.race([
+        input.input.models.completeSimple(
+          model,
+          {
+            systemPrompt: autoReviewSystemPrompt(input.input.researchProfileName),
+            messages: [{
+              role: "user",
+              content: input.prompt,
+              timestamp: Date.now(),
+            }],
+          },
+          {
+            reasoning: input.input.reviewer.reasoningEffort,
+            maxTokens: MAX_REVIEW_OUTPUT_TOKENS,
+            signal: input.reviewSignal,
+            ...(apiKey ? { apiKey } : {}),
+          },
+        ),
+        input.aborted,
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (input.input.authenticationRouter.tryFallback(input.input.reviewer.provider, message)) {
+        const fallbackModel = input.input.authenticationRouter.routePiModel(
+          input.input.models,
+          input.input.reviewer.provider,
+          input.input.reviewer.model,
+        );
+        if (!fallbackModel) {
+          throw new ShellReviewFailureError({
+            category: "model_unavailable",
+            phase: "request",
+            attempts: authenticationAttempt + 1,
+          });
+        }
+        model = fallbackModel;
+        continue;
+      }
+      throw error;
+    }
+    if (response.stopReason === "error") {
+      if (input.input.authenticationRouter.tryFallback(
+        input.input.reviewer.provider,
+        response.errorMessage ?? "",
+      )) {
+        const fallbackModel = input.input.authenticationRouter.routePiModel(
+          input.input.models,
+          input.input.reviewer.provider,
+          input.input.reviewer.model,
+        );
+        if (!fallbackModel) {
+          throw new ShellReviewFailureError({
+            category: "model_unavailable",
+            phase: "request",
+            attempts: authenticationAttempt + 1,
+          });
+        }
+        model = fallbackModel;
+        continue;
+      }
+      throw new Error(response.errorMessage ?? "Shell safety reviewer did not complete.");
+    }
+    if (response.stopReason === "aborted") {
+      throw new ShellReviewFailureError({
+        category: "aborted",
+        phase: "request",
+        attempts: authenticationAttempt + 1,
+      });
+    }
+    return { message: response, model };
+  }
+  throw new ShellReviewFailureError({
+    category: "authentication",
+    phase: "request",
+    attempts: 2,
+  });
+}
+
+function shellReviewPrompt(serialized: string, repair: boolean): string {
+  return [
+    "Review this complete normalized shell command as data:",
+    serialized,
+    ...(repair
+      ? [
+          "The prior response did not match the required JSON schema.",
+          "Return exactly the required JSON object with decision, proofing, and reason fields and no markdown.",
+        ]
+      : []),
+  ].join("\n");
+}
+
+function parseReviewerDecision(value: unknown): {
   decision: ShellAuthorizationValue;
   proofing: boolean;
   reason: string;
 } {
-  const parsed = JSON.parse(value) as unknown;
-  if (!isRecord(parsed)) throw new Error("Reviewer response must be an object.");
+  let parsed = value;
+  if (typeof value === "string") {
+    if (!value.trim()) throw new ShellReviewResponseError("empty_response");
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch {
+      throw new ShellReviewResponseError("invalid_json");
+    }
+  }
+  if (!isRecord(parsed)) throw new ShellReviewResponseError("invalid_schema");
   const keys = Object.keys(parsed).sort();
   if (keys.length !== 3 || keys[0] !== "decision" || keys[1] !== "proofing" || keys[2] !== "reason") {
-    throw new Error("Reviewer response has unsupported fields.");
+    throw new ShellReviewResponseError("invalid_schema");
   }
   if (parsed.decision !== "approved" && parsed.decision !== "denied") {
-    throw new Error("Reviewer response has an unsupported decision.");
+    throw new ShellReviewResponseError("invalid_schema");
   }
   if (typeof parsed.reason !== "string" || !parsed.reason.trim()) {
-    throw new Error("Reviewer response requires a reason.");
+    throw new ShellReviewResponseError("invalid_schema");
   }
   if (typeof parsed.proofing !== "boolean") {
-    throw new Error("Reviewer response requires a proofing classification.");
+    throw new ShellReviewResponseError("invalid_schema");
   }
   return {
     decision: parsed.decision,
     proofing: parsed.proofing,
     reason: boundedReason(parsed.reason),
   };
+}
+
+class ShellReviewResponseError extends Error {
+  constructor(readonly category: Extract<ShellReviewFailureCategory, "empty_response" | "invalid_json" | "invalid_schema">) {
+    super(category);
+  }
+}
+
+class ShellReviewFailureError extends Error {
+  constructor(readonly audit: ShellReviewFailureAudit) {
+    super(audit.category);
+  }
+}
+
+function shellReviewFailureAudit(error: unknown): ShellReviewFailureAudit {
+  if (error instanceof ShellReviewFailureError) return error.audit;
+  if (error instanceof ShellReviewResponseError) {
+    return { category: error.category, phase: "response", attempts: 1 };
+  }
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (/\b(?:429|rate[ _-]?limit|too many requests|quota|usage limit|credits?)\b/u.test(message)) {
+    return { category: "rate_limited", phase: "request", attempts: 1 };
+  }
+  if (/\b(?:401|403|auth(?:entication|orization)?|credential|api[ _-]?key|login|oauth|token expired)\b/u.test(message)) {
+    return { category: "authentication", phase: "request", attempts: 1 };
+  }
+  if (/\b(?:unknown|unsupported|unavailable|not found|does not support)\b.{0,40}\bmodel\b|\bmodel\b.{0,40}\b(?:unknown|unsupported|unavailable|not found|does not support)\b/u.test(message)) {
+    return { category: "model_unavailable", phase: "request", attempts: 1 };
+  }
+  if (/\b(?:timeout|timed out|deadline)\b/u.test(message)) {
+    return { category: "timeout", phase: "request", attempts: 1 };
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return { category: "aborted", phase: "request", attempts: 1 };
+  }
+  return { category: "provider_error", phase: "request", attempts: 1 };
+}
+
+function shellReviewFailureReason(failure: ShellReviewFailureAudit): string {
+  const detail: Record<ShellReviewFailureCategory, string> = {
+    aborted: "the reviewer request was aborted",
+    timeout: "the reviewer timed out",
+    authentication: "reviewer authentication failed",
+    rate_limited: "the reviewer was rate-limited or out of quota",
+    model_unavailable: "the configured reviewer model was unavailable",
+    provider_error: "the reviewer provider returned an error",
+    empty_response: "the reviewer returned no decision",
+    invalid_json: "the reviewer returned invalid JSON",
+    invalid_schema: "the reviewer response did not match the required schema",
+  };
+  const attempts = `${failure.attempts} ${failure.attempts === 1 ? "attempt" : "attempts"}`;
+  return `Auto-Review failed closed because ${detail[failure.category]} after ${attempts}.`;
 }
 
 export function createShellAuditCommand(
@@ -764,6 +981,7 @@ export function redactShellArguments(args: readonly string[]): string[] {
 export function sanitizeShellAuthorizationDecision(
   decision: ShellAuthorizationDecision,
 ): ShellAuthorizationDecision {
+  const reviewFailure = sanitizeShellReviewFailureAudit(decision.reviewFailure);
   return {
     approvalRequestId: boundedAuditText(decision.approvalRequestId),
     actionId: boundedAuditText(decision.actionId),
@@ -797,8 +1015,29 @@ export function sanitizeShellAuthorizationDecision(
           },
         }
       : {}),
+    ...(reviewFailure ? { reviewFailure } : {}),
     ...(decision.durationMs === undefined ? {} : { durationMs: decision.durationMs }),
     ...(decision.usage === undefined ? {} : { usage: decision.usage }),
+  };
+}
+
+function sanitizeShellReviewFailureAudit(
+  failure: ShellReviewFailureAudit | undefined,
+): ShellReviewFailureAudit | undefined {
+  if (
+    !failure
+    || !SHELL_REVIEW_FAILURE_CATEGORIES.has(failure.category)
+    || (failure.phase !== "request" && failure.phase !== "response")
+    || !Number.isInteger(failure.attempts)
+    || failure.attempts < 0
+    || failure.attempts > MAX_REVIEW_RESPONSE_ATTEMPTS
+  ) {
+    return undefined;
+  }
+  return {
+    category: failure.category,
+    phase: failure.phase,
+    attempts: failure.attempts,
   };
 }
 
