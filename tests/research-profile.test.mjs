@@ -107,7 +107,7 @@ test("bundled profiles define domain-specific Longshot workflows", () => {
   assert.equal(mathematics.version, "1.5.0");
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);
-  assert.match(securityLongshot?.description ?? "", /reportable high- or critical-severity vulnerabilities/);
+  assert.equal(securityLongshot?.description, "Hunt for ambitious, reportable high- or critical-severity vulnerabilities.");
   assert.match(securityLongshot?.goalSuggestionInstructions.join(" ") ?? "", /broad attack surface.*explicit systemic impact ceiling/);
   assert.match(securityLongshot?.goalSuggestionInstructions.join(" ") ?? "", /not.*binary verification task/);
   assert.match(securityLongshot?.promptInstructions.join(" ") ?? "", /severity, and reportability evidence-gated/);

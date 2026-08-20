@@ -539,7 +539,7 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     {
       id: "longshot",
       name: "Longshot",
-      description: "Hunt for ambitious, reportable high- or critical-severity vulnerabilities in underexplored attack surfaces.",
+      description: "Hunt for ambitious, reportable high- or critical-severity vulnerabilities.",
       goalSuggestionCount: 4,
       goalSuggestionInstructions: [
         "Propose open-ended research territories with a credible path to reportable high or critical impact, grounded in broad architecture, trust boundaries, prior evidence, or historical vulnerability patterns.",
