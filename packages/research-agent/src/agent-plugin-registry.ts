@@ -246,7 +246,8 @@ export class AgentPluginRegistry {
         label: normalizedUrl,
         sourceAssetId: 'agent-plugin-repository',
         sourceAssetKind: 'repo',
-        sensitivity: 'public'
+        sensitivity: 'public',
+        clonedDirectory: null
       },
       '',
       { repositoryStoreDirectory: this.pluginStorePath }

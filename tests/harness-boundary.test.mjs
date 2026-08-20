@@ -36,11 +36,12 @@ test("Honeycrisp owns auxiliary routes, sources, plugins, and retained maintenan
       direction: "in_scope",
       sensitivity: "public",
       value: "https://github.com/Netflix/zuul",
-      attributes: {},
+      attributes: { clonedDirectory: join(root, "repositories", "zuul") },
     }] };
     assert.equal(normalizeSourceRepositoryUrl("git@github.com:Netflix/zuul.git"), "https://github.com/Netflix/zuul");
     assert.deepEqual(extractSourceRepositoryUrls("Review github.com/Netflix/zuul."), ["https://github.com/Netflix/zuul"]);
     assert.equal(sourceRepositoryCandidates(scope)[0].url, "https://github.com/Netflix/zuul");
+    assert.equal(sourceRepositoryCandidates(scope)[0].clonedDirectory, join(root, "repositories", "zuul"));
 
     const pluginRoot = join(root, "plugin");
     await mkdir(join(pluginRoot, "skills", "recon"), { recursive: true });

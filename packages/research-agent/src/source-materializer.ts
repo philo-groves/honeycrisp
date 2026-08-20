@@ -23,6 +23,7 @@ export interface SourceRepositoryCandidate {
   sourceAssetId: string;
   sourceAssetKind: string;
   sensitivity: string;
+  clonedDirectory: string | null;
 }
 
 export interface SourceRepositorySelection {
@@ -72,7 +73,8 @@ export function sourceRepositoryCandidates(scope: SourceWorkspaceScope): SourceR
         label: asset.value,
         sourceAssetId: asset.id,
         sourceAssetKind: asset.kind,
-        sensitivity: asset.sensitivity
+        sensitivity: asset.sensitivity,
+        clonedDirectory: stringAttribute(asset.attributes?.clonedDirectory) || null
       });
     }
   }
