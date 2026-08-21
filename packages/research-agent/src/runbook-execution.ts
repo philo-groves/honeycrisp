@@ -11,6 +11,8 @@ import {
 export interface RunbookExecutionRequest {
   runbookId: string;
   cellId?: string;
+  startCellId?: string;
+  endCellId?: string;
   signal?: AbortSignal;
   proofTarget: RunbookProofTarget;
   deviceOs?: string;
@@ -44,7 +46,11 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
     const proofTarget = parseProofTarget(request.proofTarget);
     const deviceOs = proofTarget === "device" ? requiredText(request.deviceOs, "deviceOs") : undefined;
     if (activeRunbooks.has(runbookId)) throw new Error(`Runbook is already executing: ${runbookId}`);
-    const cells = options.store.executionPlan(runbookId, request.cellId);
+    const cells = options.store.executionPlan(runbookId, {
+      ...(request.cellId ? { cellId: request.cellId } : {}),
+      ...(request.startCellId ? { startCellId: request.startCellId } : {}),
+      ...(request.endCellId ? { endCellId: request.endCellId } : {}),
+    });
     const runId = `runbook_run_${randomUUID()}`;
     const startedAt = new Date().toISOString();
     const startedMs = Date.now();
@@ -192,7 +198,9 @@ export function createRunbookExecutionTool(
     required: ["id", "proofTarget"],
     properties: {
       id: { type: "string", description: "Runbook ID to execute." },
-      cellId: { type: "string", description: "Optional code cell ID. Omit to run every code cell in order." },
+      cellId: { type: "string", description: "Optional exact code cell ID from runbook.get. Cannot be combined with a range." },
+      startCellId: { type: "string", description: "Optional inclusive first code cell ID from runbook.get. Omit to start at the first code cell." },
+      endCellId: { type: "string", description: "Optional inclusive last code cell ID from runbook.get. Omit to continue through the final code cell." },
       proofTarget: { type: "string", enum: [...RUNBOOK_PROOF_TARGETS], description: "Where this proof executes: localhost, device, vm, web, or other." },
       deviceOs: { type: "string", description: "Required when proofTarget is device, for example iOS 27.0 or Android 17." },
     },
@@ -201,7 +209,7 @@ export function createRunbookExecutionTool(
     descriptor: {
       name: "runbook.run",
       transportName: "runbook_run",
-      description: "Execute one runbook code cell or the complete ordered runbook through the normal Honeycrisp shell safety boundary. Use this for proofing; Auto-Review denies proof commands issued directly through shell.run outside a runbook.",
+      description: "Execute one code cell, an inclusive ordered cell range, or a complete runbook through the normal Honeycrisp shell safety boundary. Use startCellId after repairing a late failure so already-successful cells are not repeated. Auto-Review denies proof commands issued directly through shell.run outside a runbook.",
       actionClasses: ["experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],
@@ -216,6 +224,12 @@ export function createRunbookExecutionTool(
           runbookId: requiredText(action.input.id, "id"),
           ...(typeof action.input.cellId === "string" && action.input.cellId.trim()
             ? { cellId: action.input.cellId.trim() }
+            : {}),
+          ...(typeof action.input.startCellId === "string" && action.input.startCellId.trim()
+            ? { startCellId: action.input.startCellId.trim() }
+            : {}),
+          ...(typeof action.input.endCellId === "string" && action.input.endCellId.trim()
+            ? { endCellId: action.input.endCellId.trim() }
             : {}),
           ...(context?.signal ? { signal: context.signal } : {}),
           proofTarget: parseProofTarget(action.input.proofTarget),

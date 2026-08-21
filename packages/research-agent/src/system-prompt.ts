@@ -12,6 +12,7 @@ import {
 export interface CreateResearchSystemPromptOptions {
   hasTools: boolean;
   hasMemoryTools?: boolean;
+  hasFindingTools?: boolean;
   hasRunbookTools?: boolean;
   hasReportTools?: boolean;
   hasSessionDispositionTool?: boolean;
@@ -103,11 +104,19 @@ export function createResearchSystemPrompt(
         "- Evidence is attached to graph nodes as supporting references, not stored as its own memory type. Do not create finding memories; represent suspected flaws as hypotheses and proven flaws as primitives or chains.",
       ]),
     ] : []),
+    ...(options.hasFindingTools ? [
+      "Use canonical findings as an evidence-gated lifecycle, separate from durable memory:",
+      "- Call finding.list before pursuing a vulnerability candidate. Continue an existing finding or a recorded coverage gap instead of repeating completed, rejected, or already-covered work.",
+      "- Link a finding to the durable hypothesis, primitive, or chain that explains it. Creation records only a hypothesis; never skip lifecycle gates.",
+      "- Advance observed behavior only with direct evidence, reproduced behavior only with the runId emitted by a successful runbook.run execution, and verified behavior only with independent evidence outside the originating session.",
+      "- Treat stale findings and contradictions as revalidation work. Preserve prior evidence and explain what changed instead of restarting discovery.",
+    ] : []),
     ...(options.hasRunbookTools ? [
       "Use runbooks as durable executable research artifacts:",
       ...(profile?.agent.runbookInstructions.map((instruction) => `- ${instruction}`) ?? [
         "- List existing workspace runbooks before creating one. Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
         "- Keep runbooks healthy and reproducible: record prerequisites, exact bounded commands or code, an explicit supported language per code cell, expected evidence, interpretation, and cleanup. Execute all proofing through runbook.run; Auto-Review denies proof commands outside runbooks.",
+        "- If a run fails late, repair the cause and resume with runbook.run startCellId/endCellId using the cell IDs returned by runbook.get. Do not repeat an already-successful prefix unless its state must be rebuilt.",
         "- Prefer appending to the relevant runbook over scattering reusable procedure across narration or memory. Keep concise research facts in memory and multi-step procedures in runbooks.",
         "- Mark a runbook completed when its procedure is proven and reusable; leave exploratory work active, and archive superseded procedures.",
       ]),

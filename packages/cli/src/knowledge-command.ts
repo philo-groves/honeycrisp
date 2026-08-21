@@ -15,6 +15,7 @@ import {
   type MemoryDreamingProfileInput,
   type MemoryDreamingRunContext,
   type ResearchProfileSnapshot,
+  refreshFindingStaleness,
 } from "@honeycrisp/research-agent/knowledge";
 import {
   honeycrispProtocolFailure,
@@ -28,6 +29,9 @@ interface SummaryInput {
   sessionId?: string;
   researchProfile?: ResearchProfileSnapshot | null;
   includeForeignCatalogs?: boolean;
+  sourceRevision?: string | null;
+  environmentFingerprint?: string | null;
+  assetIds?: string[];
 }
 
 interface DreamingApplyInput {
@@ -57,6 +61,16 @@ export async function runKnowledgeCommand(argv: readonly string[], requestId?: s
     switch (command) {
       case "summary": {
         const input = await readJsonOption<SummaryInput>(argv);
+        if (input.sourceRevision || input.environmentFingerprint) {
+          refreshFindingStaleness({
+            databasePath: layout.databasePath,
+            workspaceId: requiredText(input.workspaceId, "workspaceId"),
+            ...(input.sourceRevision !== undefined ? { sourceRevision: input.sourceRevision } : {}),
+            ...(input.environmentFingerprint !== undefined
+              ? { environmentFingerprint: input.environmentFingerprint }
+              : {}),
+          });
+        }
         result = getHoneycrispMemorySummary({
           databasePath: layout.databasePath,
           artifactDirectoryPath: layout.artifactDirectoryPath,
@@ -65,6 +79,7 @@ export async function runKnowledgeCommand(argv: readonly string[], requestId?: s
           ...(input.sessionId ? { sessionId: input.sessionId } : {}),
           ...(input.researchProfile !== undefined ? { researchProfile: input.researchProfile } : {}),
           ...(input.includeForeignCatalogs === true ? { includeForeignCatalogs: true } : {}),
+          ...(input.assetIds ? { assetIds: input.assetIds } : {}),
         });
         break;
       }

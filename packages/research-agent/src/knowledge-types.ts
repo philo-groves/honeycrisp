@@ -85,6 +85,156 @@ export interface MemoryEdgeSummary {
   updatedAt: string;
 }
 
+export type FindingStatus =
+  | "hypothesis"
+  | "observed"
+  | "reproduced"
+  | "verified"
+  | "report_ready"
+  | "disclosed"
+  | "stale"
+  | "rejected";
+
+export type FindingEvidenceKind =
+  | "code"
+  | "artifact"
+  | "command"
+  | "url"
+  | "runbook_execution"
+  | "independent_verification"
+  | "report"
+  | "disclosure";
+
+export interface FindingEvidenceSummary {
+  id: string;
+  kind: FindingEvidenceKind;
+  referenceId: string | null;
+  contentHash: string | null;
+  summary: string;
+  sessionId: string | null;
+  actorId: string | null;
+  independent: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface FindingTransitionSummary {
+  id: string;
+  revision: number;
+  fromStatus: FindingStatus | null;
+  toStatus: FindingStatus;
+  reason: string;
+  actorId: string | null;
+  evidenceIds: string[];
+  createdAt: string;
+}
+
+export interface FindingSummary {
+  id: string;
+  workspaceId: string;
+  subjectId: string;
+  memoryNodeId: string;
+  originSessionId: string | null;
+  title: string;
+  summary: string;
+  impact: string;
+  status: FindingStatus;
+  staleFromStatus: FindingStatus | null;
+  confidence: number;
+  sourceRevision: string | null;
+  environmentFingerprint: string | null;
+  reproductionRunbookId: string | null;
+  reportId: string | null;
+  disclosureReference: string | null;
+  staleReason: string | null;
+  evidence: FindingEvidenceSummary[];
+  transitions: FindingTransitionSummary[];
+  authors: ModelAuthorSummary[];
+  createdAt: string;
+  updatedAt: string;
+  revision: number;
+}
+
+export type CampaignNodeKind = "memory" | "finding" | "runbook" | "report" | "asset";
+
+export interface CampaignGraphNodeSummary {
+  id: string;
+  kind: CampaignNodeKind;
+  label: string;
+  status: string;
+  memoryNodeId: string | null;
+  findingId: string | null;
+  assetId: string | null;
+  evidenceCount: number;
+  updatedAt: string;
+}
+
+export interface CampaignGraphEdgeSummary {
+  fromId: string;
+  toId: string;
+  relation: string;
+  contradictory: boolean;
+}
+
+export type CampaignGapKind =
+  | "unexplored_asset"
+  | "unsupported_memory"
+  | "unobserved_hypothesis"
+  | "missing_reproduction"
+  | "missing_independent_verification"
+  | "missing_report"
+  | "stale_finding"
+  | "contradiction";
+
+export interface CampaignCoverageGapSummary {
+  id: string;
+  kind: CampaignGapKind;
+  priority: "critical" | "high" | "medium" | "low";
+  title: string;
+  rationale: string;
+  relatedNodeIds: string[];
+  suggestedPrompt: string;
+}
+
+export interface CampaignContradictionSummary {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  relation: string;
+  summary: string;
+}
+
+export type CampaignMomentumState =
+  | "empty"
+  | "exploring"
+  | "building"
+  | "observed"
+  | "reproducing"
+  | "verifying"
+  | "reporting"
+  | "complete"
+  | "blocked";
+
+export interface CampaignGraphSummary {
+  nodes: CampaignGraphNodeSummary[];
+  edges: CampaignGraphEdgeSummary[];
+  coverageGaps: CampaignCoverageGapSummary[];
+  contradictions: CampaignContradictionSummary[];
+  momentum: {
+    state: CampaignMomentumState;
+    reason: string;
+    supportingNodeIds: string[];
+  };
+  nextActions: CampaignCoverageGapSummary[];
+  counts: {
+    findings: number;
+    verifiedFindings: number;
+    disclosedFindings: number;
+    coverageGaps: number;
+    contradictions: number;
+  };
+}
+
 export interface ArtifactRevisionSummary {
   revision: number;
   sessionId: string | null;
@@ -103,6 +253,16 @@ export interface RunbookSummary {
   status: "draft" | "active" | "completed" | "archived";
   artifactId: string;
   revision: number;
+  contentRevision: number;
+  execution: {
+    runCount: number;
+    completedRunCount: number;
+    executedCellCount: number;
+    latest: {
+      status: "running" | "succeeded" | "failed" | "blocked";
+      startedAt: string;
+    } | null;
+  };
   revisions: ArtifactRevisionSummary[];
   authors: ModelAuthorSummary[];
   createdAt: string;
@@ -202,6 +362,8 @@ export interface MemorySummary {
   edges: MemoryEdgeSummary[];
   runbooks: RunbookSummary[];
   reports: ReportSummary[];
+  findings: FindingSummary[];
+  campaign: CampaignGraphSummary;
   dreaming: MemoryDreamingSummary;
   directories: MemoryDirectorySummary[];
   lastError: string | null;

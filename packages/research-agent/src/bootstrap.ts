@@ -18,6 +18,7 @@ import {
 } from "./model-context.js";
 import { createId, createResearchEventId, nowIso } from "./ids.js";
 import { fallbackResearchFinalDisposition, type ResearchFinalDisposition } from "./session-disposition-tool.js";
+import type { CampaignGraphSummary } from "./knowledge-types.js";
 import {
   normalizeResearchProfile,
   resolveResearchProfile,
@@ -48,6 +49,7 @@ export interface RunResearchAgentInput {
   workspaceContext?: ResearchWorkspaceContext;
   agentInstructions?: ResearchAgentInstructions;
   memoryContext?: readonly ResearchModelMemoryContextNode[];
+  campaignContext?: CampaignGraphSummary;
   events?: readonly ResearchEvent[];
   tools?: readonly ResearchToolDescriptor[];
   skills?: readonly ResearchSkillDescriptor[];
@@ -79,6 +81,7 @@ export interface RunResearchAgentResult {
   workspaceContext: ResearchWorkspaceContext;
   modelWorkspaceContext: ResearchModelWorkspaceContext;
   memoryContext: readonly ResearchModelMemoryContextNode[];
+  campaignContext?: CampaignGraphSummary;
   modelSelectedSkills: readonly ResearchModelSkillContext[];
   availableTools: readonly ResearchAvailableToolContext[];
   selectedSkills: readonly ResearchSelectedSkill[];
@@ -143,6 +146,7 @@ export async function runResearchAgent(
     prompt: input.prompt,
     workspace: modelWorkspaceContext,
     memory: memoryContext,
+    campaign: input.campaignContext,
     selectedSkills: modelSelectedSkills,
     researchProfile: {
       id: resolvedResearchProfile.profile.id,
@@ -162,6 +166,7 @@ export async function runResearchAgent(
     contextSections: [
       { label: "workspace", content: modelWorkspaceContext },
       { label: "memory", content: memoryContext },
+      ...(input.campaignContext ? [{ label: "campaign", content: input.campaignContext }] : []),
       {
         label: "selected_skills",
         content: modelSelectedSkills,
@@ -197,6 +202,7 @@ export async function runResearchAgent(
       request: { prompt: input.prompt },
       workspaceContext: modelWorkspaceContext,
       memoryContext,
+      ...(input.campaignContext ? { campaignContext: input.campaignContext } : {}),
       selectedSkills: modelSelectedSkills,
       availableTools,
       collaborationTools,
@@ -280,6 +286,7 @@ export async function runResearchAgent(
     workspaceContext,
     modelWorkspaceContext,
     memoryContext,
+    ...(input.campaignContext ? { campaignContext: input.campaignContext } : {}),
     availableTools,
     modelSelectedSkills,
     selectedSkills,
@@ -300,6 +307,7 @@ function compiledContextMetrics(input: {
   prompt: string;
   workspace: unknown;
   memory: readonly unknown[];
+  campaign?: unknown;
   selectedSkills: readonly unknown[];
   researchProfile: unknown;
   researchIntent: ResearchRunIntent | undefined;
@@ -311,6 +319,7 @@ function compiledContextMetrics(input: {
     request: serializedCharacters(input.prompt),
     workspace: serializedCharacters(input.workspace),
     memory: serializedCharacters(input.memory),
+    campaign: serializedCharacters(input.campaign),
     selectedSkills: serializedCharacters(input.selectedSkills),
     researchProfile: serializedCharacters(input.researchProfile),
     researchIntent: serializedCharacters(input.researchIntent),

@@ -1010,6 +1010,9 @@ export class MemoryGraphStore {
         version: 1,
         name: "tiered_memory_graph_baseline",
         up(database) {
+          const adoptedSubjectSchema = tableExists(database, "memory_nodes")
+            && !tableHasColumn(database, "memory_nodes", "tier")
+            && tableHasColumn(database, "memory_nodes", "subject_id");
           database.exec(`
       CREATE TABLE IF NOT EXISTS memory_nodes (
         id TEXT PRIMARY KEY,
@@ -1063,8 +1066,6 @@ export class MemoryGraphStore {
       );
     `);
     database.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS memory_nodes_tier_identity_idx ON memory_nodes(tier, scope_key, type, title_norm);
-      CREATE INDEX IF NOT EXISTS memory_nodes_context_idx ON memory_nodes(tier, scope_key, updated_at);
       CREATE INDEX IF NOT EXISTS memory_nodes_type_status_idx ON memory_nodes(type, status);
       CREATE INDEX IF NOT EXISTS memory_nodes_updated_at_idx ON memory_nodes(updated_at);
       CREATE INDEX IF NOT EXISTS memory_node_assets_asset_idx ON memory_node_assets(asset_id, node_id);
@@ -1073,6 +1074,14 @@ export class MemoryGraphStore {
       CREATE INDEX IF NOT EXISTS memory_evidence_node_idx ON memory_evidence_refs(node_id);
       DROP TABLE IF EXISTS honeycrisp_meta;
           `);
+          if (adoptedSubjectSchema) {
+            database.exec("CREATE INDEX IF NOT EXISTS memory_nodes_subject_identity_idx ON memory_nodes(subject_id, type, title_norm, updated_at);");
+          } else {
+            database.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS memory_nodes_tier_identity_idx ON memory_nodes(tier, scope_key, type, title_norm);
+              CREATE INDEX IF NOT EXISTS memory_nodes_context_idx ON memory_nodes(tier, scope_key, updated_at);
+            `);
+          }
         },
       },
       {
@@ -1148,37 +1157,43 @@ export class MemoryGraphStore {
         name: "memory_context_memberships",
         up(database) {
           database.exec(`
-            CREATE TABLE memory_node_sessions (
+            CREATE TABLE IF NOT EXISTS memory_node_sessions (
               node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
               session_id TEXT NOT NULL,
               PRIMARY KEY(node_id, session_id)
             );
-            CREATE TABLE memory_node_workspaces (
+            CREATE TABLE IF NOT EXISTS memory_node_workspaces (
               node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
               workspace_id TEXT NOT NULL,
               workspace_name TEXT NOT NULL,
               PRIMARY KEY(node_id, workspace_id)
             );
-            INSERT OR IGNORE INTO memory_node_sessions(node_id, session_id)
-              SELECT id, session_id FROM memory_nodes WHERE session_id IS NOT NULL AND trim(session_id) <> '';
-            INSERT OR IGNORE INTO memory_node_workspaces(node_id, workspace_id, workspace_name)
-              SELECT id, workspace_id, workspace_name FROM memory_nodes;
-            UPDATE memory_nodes
-              SET subject_id = 'subject_workspace:' || workspace_id
-              WHERE subject_id IS NULL OR trim(subject_id) = '';
-            UPDATE memory_nodes
-              SET subject_name = workspace_name
-              WHERE subject_name IS NULL OR trim(subject_name) = '';
-            DROP INDEX IF EXISTS memory_nodes_tier_identity_idx;
-            DROP INDEX IF EXISTS memory_nodes_context_idx;
-            ALTER TABLE memory_nodes DROP COLUMN tier;
-            ALTER TABLE memory_nodes DROP COLUMN scope_key;
-            ALTER TABLE memory_nodes DROP COLUMN session_id;
-            ALTER TABLE memory_nodes DROP COLUMN workspace_id;
-            ALTER TABLE memory_nodes DROP COLUMN workspace_name;
-            CREATE INDEX memory_nodes_subject_identity_idx ON memory_nodes(subject_id, type, title_norm, updated_at);
-            CREATE INDEX memory_node_sessions_session_idx ON memory_node_sessions(session_id, node_id);
-            CREATE INDEX memory_node_workspaces_workspace_idx ON memory_node_workspaces(workspace_id, node_id);
+          `);
+          if (tableHasColumn(database, "memory_nodes", "tier")) {
+            database.exec(`
+              INSERT OR IGNORE INTO memory_node_sessions(node_id, session_id)
+                SELECT id, session_id FROM memory_nodes WHERE session_id IS NOT NULL AND trim(session_id) <> '';
+              INSERT OR IGNORE INTO memory_node_workspaces(node_id, workspace_id, workspace_name)
+                SELECT id, workspace_id, workspace_name FROM memory_nodes;
+              UPDATE memory_nodes
+                SET subject_id = 'subject_workspace:' || workspace_id
+                WHERE subject_id IS NULL OR trim(subject_id) = '';
+              UPDATE memory_nodes
+                SET subject_name = workspace_name
+                WHERE subject_name IS NULL OR trim(subject_name) = '';
+              DROP INDEX IF EXISTS memory_nodes_tier_identity_idx;
+              DROP INDEX IF EXISTS memory_nodes_context_idx;
+              ALTER TABLE memory_nodes DROP COLUMN tier;
+              ALTER TABLE memory_nodes DROP COLUMN scope_key;
+              ALTER TABLE memory_nodes DROP COLUMN session_id;
+              ALTER TABLE memory_nodes DROP COLUMN workspace_id;
+              ALTER TABLE memory_nodes DROP COLUMN workspace_name;
+            `);
+          }
+          database.exec(`
+            CREATE INDEX IF NOT EXISTS memory_nodes_subject_identity_idx ON memory_nodes(subject_id, type, title_norm, updated_at);
+            CREATE INDEX IF NOT EXISTS memory_node_sessions_session_idx ON memory_node_sessions(session_id, node_id);
+            CREATE INDEX IF NOT EXISTS memory_node_workspaces_workspace_idx ON memory_node_workspaces(workspace_id, node_id);
           `);
         },
       },
@@ -1335,6 +1350,75 @@ export class MemoryGraphStore {
             );
             CREATE INDEX IF NOT EXISTS honeycrisp_model_authorship_resource_idx
               ON honeycrisp_model_authorship(resource_kind, resource_id, created_at);
+          `);
+        },
+      },
+      {
+        version: 12,
+        name: "runbook_execution_ledger",
+        up(database) {
+          database.exec(`
+            CREATE TABLE IF NOT EXISTS honeycrisp_runbook_executions (
+              run_id TEXT PRIMARY KEY,
+              runbook_id TEXT NOT NULL REFERENCES honeycrisp_runbooks(id) ON DELETE CASCADE,
+              workspace_id TEXT NOT NULL,
+              status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'blocked')),
+              proof_target TEXT NOT NULL CHECK (proof_target IN ('localhost', 'device', 'vm', 'web', 'other')),
+              device_os TEXT,
+              started_at TEXT NOT NULL,
+              completed_at TEXT,
+              duration_ms INTEGER,
+              error TEXT
+            );
+            CREATE INDEX IF NOT EXISTS honeycrisp_runbook_executions_runbook_status_idx
+              ON honeycrisp_runbook_executions(workspace_id, runbook_id, status, started_at);
+          `);
+        },
+      },
+      {
+        version: 13,
+        name: "runbook_content_and_execution_metrics",
+        up(database) {
+          if (!tableHasColumn(database, "honeycrisp_runbooks", "content_revision")) {
+            database.exec(`ALTER TABLE honeycrisp_runbooks
+              ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1 CHECK (content_revision > 0);`);
+          }
+          if (!tableHasColumn(database, "honeycrisp_runbook_executions", "selected_cell_count")) {
+            database.exec(`ALTER TABLE honeycrisp_runbook_executions
+              ADD COLUMN selected_cell_count INTEGER NOT NULL DEFAULT 0 CHECK (selected_cell_count >= 0);`);
+          }
+          if (!tableHasColumn(database, "honeycrisp_runbook_executions", "completed_cell_count")) {
+            database.exec(`ALTER TABLE honeycrisp_runbook_executions
+              ADD COLUMN completed_cell_count INTEGER NOT NULL DEFAULT 0 CHECK (completed_cell_count >= 0);`);
+          }
+          if (!tableHasColumn(database, "honeycrisp_artifact_revisions", "revision_kind")) {
+            database.exec(`ALTER TABLE honeycrisp_artifact_revisions
+              ADD COLUMN revision_kind TEXT NOT NULL DEFAULT 'content'
+              CHECK (revision_kind IN ('content', 'execution'));`);
+          }
+          database.exec(`
+            UPDATE honeycrisp_runbooks
+            SET content_revision = MAX(1, (
+              SELECT COUNT(DISTINCT authorship.revision)
+              FROM honeycrisp_model_authorship AS authorship
+              WHERE authorship.resource_kind = 'runbook'
+                AND authorship.resource_id = honeycrisp_runbooks.id
+            ));
+
+            UPDATE honeycrisp_artifact_revisions
+            SET revision_kind = 'execution'
+            WHERE artifact_kind = 'runbook'
+              AND EXISTS (
+                SELECT 1 FROM honeycrisp_model_authorship AS any_authorship
+                WHERE any_authorship.resource_kind = 'runbook'
+                  AND any_authorship.resource_id = honeycrisp_artifact_revisions.artifact_id
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM honeycrisp_model_authorship AS content_authorship
+                WHERE content_authorship.resource_kind = 'runbook'
+                  AND content_authorship.resource_id = honeycrisp_artifact_revisions.artifact_id
+                  AND content_authorship.revision = honeycrisp_artifact_revisions.revision
+              );
           `);
         },
       },
@@ -1856,10 +1940,11 @@ function memoryNodeValidationHash(node: Omit<MemoryNode, "provenance"> | MemoryN
 
 function nodeCanParticipateInActiveCatalog(
   node: MemoryNode,
-  activeCatalog: Pick<ActiveMemoryCatalog, "preservesLegacyNodeIds">,
+  activeCatalog: Pick<ActiveMemoryCatalog, "preservesLegacyNodeIds" | "profile" | "memory">,
 ): boolean {
   return node.provenance.catalogHash === null
     ? activeCatalog.preservesLegacyNodeIds
+      || activeCatalog.profile?.id === "security-research"
     : node.provenance.activeCatalog;
 }
 
@@ -2184,11 +2269,16 @@ function stableNodeId(
 function legacyStableNodeId(tier: string, scopeKey: string, type: MemoryNodeType, title: string): string { return `${type}_${createHash("sha256").update(`${tier}:${scopeKey}:${type}:${title}`).digest("hex").slice(0, 20)}`; }
 function renameLegacyFindingMemoryIds(database: DatabaseSync): void {
   database.exec("PRAGMA defer_foreign_keys = ON");
+  const tiered = tableHasColumn(database, "memory_nodes", "tier");
   const rows = database
-    .prepare("SELECT id, tier, scope_key, title_norm FROM memory_nodes WHERE type = 'trajectory' AND id GLOB 'finding_*'")
-    .all() as Array<{ id: string; tier: string; scope_key: string; title_norm: string }>;
+    .prepare(tiered
+      ? "SELECT id, tier, scope_key, title_norm FROM memory_nodes WHERE type = 'trajectory' AND id GLOB 'finding_*'"
+      : "SELECT id, subject_id, title_norm FROM memory_nodes WHERE type = 'trajectory' AND id GLOB 'finding_*'")
+    .all() as Array<{ id: string; tier?: string; scope_key?: string; subject_id?: string; title_norm: string }>;
   for (const row of rows) {
-    const nextId = legacyStableNodeId(row.tier, row.scope_key, "trajectory", row.title_norm);
+    const nextId = tiered
+      ? legacyStableNodeId(row.tier!, row.scope_key!, "trajectory", row.title_norm)
+      : `trajectory_${createHash("sha256").update(`${row.subject_id ?? "legacy"}:trajectory:${row.title_norm}`).digest("hex").slice(0, 20)}`;
     if (database.prepare("SELECT id FROM memory_nodes WHERE id = ?").get(nextId)) {
       throw new Error(`Cannot rename legacy finding memory ${row.id}; trajectory id already exists: ${nextId}.`);
     }

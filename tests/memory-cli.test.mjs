@@ -468,6 +468,7 @@ test("main CLI injects relevant graph memory without storage or tool-policy prom
   assert.deepEqual(sectionLabels, [
     "workspace",
     "memory",
+    "campaign",
     "selected_skills",
     "research_profile",
   ]);
@@ -667,6 +668,9 @@ test("tools CLI lists configured tools, MCP allowlist, governance, and selected 
       "code.query",
       "code.references",
       "file.read",
+      "finding.create",
+      "finding.list",
+      "finding.transition",
       "memory.correct",
       "memory.get",
       "memory.link",
@@ -847,6 +851,9 @@ test("tools CLI honors disabled tool families and treats repository roots as con
     "memory.save",
     "memory.correct",
     "memory.link",
+    "finding.list",
+    "finding.create",
+    "finding.transition",
     "runbook.list",
     "runbook.get",
     "runbook.create",
@@ -866,7 +873,7 @@ test("tools CLI honors disabled tool families and treats repository roots as con
   assert.equal(workspaceDefault.status, 0, workspaceDefault.stderr);
   assert.deepEqual(
     workspaceDefaultPayload.tools.map((tool) => tool.name),
-    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "report.list", "report.get", "report.create", "report.revise", "shell.run", "repository.search", "file.read", "runbook.run"],
+    ["session.disposition", "memory.search", "memory.get", "memory.save", "memory.correct", "memory.link", "finding.list", "finding.create", "finding.transition", "runbook.list", "runbook.get", "runbook.create", "runbook.append", "report.list", "report.get", "report.create", "report.revise", "shell.run", "repository.search", "file.read", "runbook.run"],
   );
   assert.equal(
     workspaceDefaultPayload.workspaceContext.workspaceRoot,

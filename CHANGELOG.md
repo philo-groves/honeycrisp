@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- Added a workspace-owned canonical finding store with stable identities, optimistic revisions, append-only ordered transitions, model authorship, and evidence-gated observation, reproduction, independent verification, report-ready, disclosure, rejection, and stale states.
+- Added migration 12's durable runbook execution ledger so reproduction gates validate successful Honeycrisp executions rather than model-supplied status claims. Historical notebook-only run metadata is not promoted into the trusted ledger; rerun an existing runbook before using it to advance a finding.
+- Added migration 13's independent runbook content revision and execution counters. Existing content revisions are conservatively backfilled from recorded model authorship, authored runbooks' non-author revision events are reclassified as execution state, and historical notebook-only cell execution counts remain zero.
+- `runbook.run` and live session controls now accept inclusive `startCellId`/`endCellId` ranges, and `runbook.get` exposes stable cell IDs and indexes so failed procedures can resume after repair without repeating successful prefix cells.
+- Added campaign graph projection and agent context for authorized assets, memory, findings, runbooks, reports, coverage gaps, contradictions, prioritized next actions, and typed momentum.
+- Added `finding.list`, `finding.create`, and `finding.transition` tools for the bundled security profile.
+
+### Changed
+
+- Protocol descriptors now expose contract v3 runtime build identity, schema versions, and required capabilities; memory-summary v3 adds runbook content and execution metrics, and WebSocket server hellos carry the same runtime contract metadata.
+- Runbook execution state still advances the internal optimistic-concurrency revision, but no longer creates content revision events; content edits, completed runs, executed cells, and latest run status are tracked independently.
+- Workspace context may carry host-derived source revision, environment fingerprint, and authorized asset identities so finding staleness and campaign coverage use the same host facts.
+- Memory summaries and run initialization now reconcile finding staleness before projecting campaign state, including headless runtime entry points.
+
+### Fixed
+
+- Honeycrisp core migrations can adopt an existing subject-scoped Beale memory database without attempting legacy tier-column indexes or migration steps.
+
+### Security
+
+- Finding tools no longer accept model-supplied session or actor provenance. Lifecycle advancement requires matching durable evidence references, successful workspace runbook execution records, exact workspace report identities, and a verification session distinct from the finding's origin.
+
 ### Changed
 
 - Source repository candidates now retain the cloned directory recorded on their workspace resource metadata.

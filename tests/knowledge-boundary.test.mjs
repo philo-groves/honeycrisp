@@ -79,7 +79,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
       subjectId: context.subjectId,
       researchProfile: profileInput.profileSnapshot,
     });
-    assert.equal(summary.nodeCount, 1);
+    assert.equal(summary.nodeCount, 1, summary.lastError ?? undefined);
     assert.equal(summary.runbookCount, 1);
     assert.equal(summary.reportCount, 1);
     assert.equal(getKnowledgeRunbook(databasePath, layout.artifactDirectoryPath, context.workspaceId, runbook.id).nbformat, 4);

@@ -3,6 +3,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { modelAuthorsByResource } from './model-authorship.js';
+import { buildCampaignGraph, emptyCampaignGraph } from './campaign-graph.js';
+import { readFindings } from './findings.js';
 import {
   emptyMemoryDreamingSummary,
   getMemoryDreamingSummary,
@@ -35,6 +37,7 @@ interface ActiveMemoryCatalog {
   hash: string;
   json: string;
   memory: ResearchProfileSnapshot['profile']['memory'];
+  profileId: string;
   preservesLegacyNodeIds: boolean;
 }
 
@@ -48,6 +51,8 @@ export interface HoneycrispMemorySummaryOptions {
   researchProfile?: ResearchProfileSnapshot | null;
   /** Reserved for an explicit historical catalog audit; normal summaries never include foreign catalogs. */
   includeForeignCatalogs?: boolean;
+  /** Authorized asset identifiers used to expose uncovered campaign territory. */
+  assetIds?: readonly string[];
 }
 
 export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptions): HoneycrispMemorySummary {
@@ -93,6 +98,15 @@ export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptio
     const artifactRevisions = readArtifactRevisions(database, workspaceId);
     const runbooks = tableExists(database, 'honeycrisp_runbooks') ? readRunbooks(database, workspaceId, artifactRevisions) : [];
     const reports = tableExists(database, 'honeycrisp_reports') ? readReports(database, workspaceId, artifactRevisions) : [];
+    const findings = readFindings(database, workspaceId);
+    const campaign = buildCampaignGraph({
+      nodes,
+      edges,
+      findings,
+      runbooks,
+      reports,
+      ...(options.assetIds ? { assetIds: options.assetIds } : {}),
+    });
     return {
       ...base,
       source: 'honeycrisp_sqlite',
@@ -112,6 +126,8 @@ export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptio
       edges,
       runbooks,
       reports,
+      findings,
+      campaign,
       dreaming: getMemoryDreamingSummary(database, workspaceId)
     };
   } catch (error) {
@@ -158,6 +174,8 @@ function emptySummary(
     edges: [],
     runbooks: [],
     reports: [],
+    findings: [],
+    campaign: emptyCampaignGraph(),
     dreaming: emptyMemoryDreamingSummary(),
     directories: [artifactDirectorySummary(artifactDirectoryPath)],
     lastError: null
@@ -172,24 +190,61 @@ function readRunbooks(
   const rows = database
     .prepare('SELECT * FROM honeycrisp_runbooks WHERE workspace_id = ? ORDER BY updated_at ASC, id')
     .all(workspaceId) as SqlRow[];
+  const hasContentRevision = tableHasColumn(database, 'honeycrisp_runbooks', 'content_revision');
+  const executionMetrics = runbookExecutionMetrics(database, workspaceId);
   const authors = modelAuthorsByResource(database, 'runbook', rows.map((row) => requiredString(row.id)));
-  return rows.map((row) => ({
-    id: requiredString(row.id),
-    workspaceId: requiredString(row.workspace_id),
-    workspaceName: requiredString(row.workspace_name),
-    subjectId: optionalString(row.subject_id),
-    subjectName: optionalString(row.subject_name),
-    sessionId: optionalString(row.session_id),
-    title: requiredString(row.title),
-    purpose: requiredString(row.purpose),
-    status: requiredRunbookStatus(row.status),
-    artifactId: requiredString(row.artifact_id),
-    revision: requiredNumber(row.revision),
-    revisions: revisionsForArtifact(artifactRevisions, 'runbook', row),
-    authors: authors.get(requiredString(row.id)) ?? [],
-    createdAt: requiredString(row.created_at),
-    updatedAt: requiredString(row.updated_at)
-  }));
+  return rows.map((row) => {
+    const id = requiredString(row.id);
+    return {
+      id,
+      workspaceId: requiredString(row.workspace_id),
+      workspaceName: requiredString(row.workspace_name),
+      subjectId: optionalString(row.subject_id),
+      subjectName: optionalString(row.subject_name),
+      sessionId: optionalString(row.session_id),
+      title: requiredString(row.title),
+      purpose: requiredString(row.purpose),
+      status: requiredRunbookStatus(row.status),
+      artifactId: requiredString(row.artifact_id),
+      revision: requiredNumber(row.revision),
+      contentRevision: hasContentRevision ? requiredNumber(row.content_revision) : 1,
+      execution: executionMetrics.get(id) ?? emptyRunbookExecutionMetrics(),
+      revisions: revisionsForArtifact(artifactRevisions, 'runbook', row),
+      authors: authors.get(id) ?? [],
+      createdAt: requiredString(row.created_at),
+      updatedAt: requiredString(row.updated_at)
+    };
+  });
+}
+
+function runbookExecutionMetrics(
+  database: DatabaseSync,
+  workspaceId: string,
+): Map<string, HoneycrispRunbookSummary['execution']> {
+  const result = new Map<string, HoneycrispRunbookSummary['execution']>();
+  if (!tableExists(database, 'honeycrisp_runbook_executions')) return result;
+  const completedCells = tableHasColumn(database, 'honeycrisp_runbook_executions', 'completed_cell_count')
+    ? 'completed_cell_count'
+    : '0 AS completed_cell_count';
+  const rows = database.prepare(`SELECT runbook_id, status, started_at, ${completedCells}
+    FROM honeycrisp_runbook_executions
+    WHERE workspace_id = ?
+    ORDER BY started_at DESC, run_id DESC`).all(workspaceId) as SqlRow[];
+  for (const row of rows) {
+    const runbookId = requiredString(row.runbook_id);
+    const status = requiredRunbookExecutionStatus(row.status);
+    const metrics = result.get(runbookId) ?? emptyRunbookExecutionMetrics();
+    metrics.runCount += 1;
+    if (status !== 'running') metrics.completedRunCount += 1;
+    metrics.executedCellCount += requiredNumber(row.completed_cell_count);
+    if (!metrics.latest) metrics.latest = { status, startedAt: requiredString(row.started_at) };
+    result.set(runbookId, metrics);
+  }
+  return result;
+}
+
+function emptyRunbookExecutionMetrics(): HoneycrispRunbookSummary['execution'] {
+  return { runCount: 0, completedRunCount: 0, executedCellCount: 0, latest: null };
 }
 
 function readNodes(
@@ -255,7 +310,7 @@ function readNodes(
   });
   if (!catalogColumn || includeForeignCatalogs) return nodes;
   return nodes.filter((node) => node.provenance.catalogHash === null
-    ? activeCatalog?.preservesLegacyNodeIds === true
+    ? activeCatalog?.preservesLegacyNodeIds === true || activeCatalog?.profileId === 'security-research'
     : node.provenance.activeCatalog);
 }
 
@@ -309,9 +364,12 @@ function readArtifactRevisions(
 ): Map<string, HoneycrispArtifactRevisionSummary[]> {
   const grouped = new Map<string, HoneycrispArtifactRevisionSummary[]>();
   if (!tableExists(database, 'honeycrisp_artifact_revisions')) return grouped;
+  const contentRevisionFilter = tableHasColumn(database, 'honeycrisp_artifact_revisions', 'revision_kind')
+    ? " AND revision_kind = 'content'"
+    : '';
   const rows = database.prepare(`SELECT artifact_kind, artifact_id, session_id, revision, created_at
     FROM honeycrisp_artifact_revisions
-    WHERE workspace_id = ?
+    WHERE workspace_id = ?${contentRevisionFilter}
     ORDER BY created_at, artifact_kind, artifact_id, revision`).all(workspaceId) as SqlRow[];
   for (const row of rows) {
     const kind = requiredArtifactRevisionKind(row.artifact_kind);
@@ -402,6 +460,7 @@ function activeMemoryCatalog(snapshot: ResearchProfileSnapshot | null): ActiveMe
     hash: createHash('sha256').update(MEMORY_CATALOG_HASH_DOMAIN).update(json).digest('hex'),
     json,
     memory: snapshot.profile.memory,
+    profileId: snapshot.profileId,
     preservesLegacyNodeIds: memoryCatalogPreservesLegacyNodeIds(snapshot.profile.memory)
   };
 }
@@ -662,6 +721,11 @@ function fallbackMemorySubjectId(workspaceId: string): string {
 function requiredRunbookStatus(value: unknown): HoneycrispRunbookSummary['status'] {
   if (value === 'draft' || value === 'active' || value === 'completed' || value === 'archived') return value;
   throw new Error('Expected a Honeycrisp runbook status.');
+}
+
+function requiredRunbookExecutionStatus(value: unknown): NonNullable<HoneycrispRunbookSummary['execution']['latest']>['status'] {
+  if (value === 'running' || value === 'succeeded' || value === 'failed' || value === 'blocked') return value;
+  throw new Error('Expected a Honeycrisp runbook execution status.');
 }
 
 function requiredReportStatus(value: unknown): HoneycrispReportSummary['status'] {

@@ -1158,6 +1158,7 @@ export function runMemoryDreaming(
 
       for (const decision of plan.merge) {
         const mergedSurvivorId = catalog && decision.survivor.provenance.state === 'legacy_unrecorded'
+          && !catalogPreservesLegacyIdentity(catalog)
           ? stableMemoryNodeId(
               database,
               decision.survivor.subjectId,
@@ -1223,6 +1224,7 @@ export function runMemoryDreaming(
         const revisedNodeId = catalog
           && decision.structural
           && decision.node.provenance.state === 'legacy_unrecorded'
+          && !catalogPreservesLegacyIdentity(catalog)
           ? stableMemoryNodeId(
               database,
               decision.node.subjectId,
@@ -1564,7 +1566,7 @@ function readDreamingCandidates(
   return candidates.filter((candidate) =>
     !provenanceAvailable
     || candidate.provenance.state !== 'legacy_unrecorded'
-    || catalog?.preservesLegacyNodeIds === true
+    || (catalog !== null && catalogPreservesLegacyIdentity(catalog))
   );
 }
 
@@ -2522,11 +2524,16 @@ function memoryCatalogRowParticipates(
   activeCatalog: MemoryDreamingCatalog | null
 ): boolean {
   if (!activeCatalog) return false;
-  if (catalogHash === null) return activeCatalog.preservesLegacyNodeIds;
+  if (catalogHash === null) return catalogPreservesLegacyIdentity(activeCatalog);
   if (catalogHash === activeCatalog.hash) return true;
   const sourceCatalogJson = memoryCatalogSnapshotJson(database, catalogHash);
   return sourceCatalogJson !== null
     && memoryCatalogJsonIsCompatibleWithNode(node, sourceCatalogJson, activeCatalog.memory);
+}
+
+function catalogPreservesLegacyIdentity(activeCatalog: MemoryDreamingCatalog): boolean {
+  return activeCatalog.preservesLegacyNodeIds
+    || activeCatalog.profile.id === 'security-research';
 }
 
 function memoryCatalogSnapshotJson(database: DatabaseSync, catalogHash: string): string | null {

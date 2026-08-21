@@ -49,6 +49,27 @@ export interface RunbookCellInput {
   exitCode?: number;
 }
 
+export interface RunbookCellRecord extends RunbookCellInput {
+  id: string;
+  index: number;
+}
+
+export interface RunbookExecutionMetrics {
+  runCount: number;
+  completedRunCount: number;
+  executedCellCount: number;
+  latest: {
+    status: "running" | "succeeded" | "failed" | "blocked";
+    startedAt: string;
+  } | null;
+}
+
+export interface RunbookExecutionSelection {
+  cellId?: string;
+  startCellId?: string;
+  endCellId?: string;
+}
+
 export interface RunbookRecord {
   id: string;
   workspaceId: string;
@@ -62,6 +83,8 @@ export interface RunbookRecord {
   artifactId: string;
   cellCount: number;
   revision: number;
+  contentRevision: number;
+  execution: RunbookExecutionMetrics;
   createdAt: string;
   updatedAt: string;
   authors: ModelAuthor[];
@@ -70,7 +93,7 @@ export interface RunbookRecord {
 export interface RunbookPage extends RunbookRecord {
   offset: number;
   totalCells: number;
-  cells: RunbookCellInput[];
+  cells: RunbookCellRecord[];
 }
 
 interface RunbookRow {
@@ -88,6 +111,7 @@ interface RunbookRow {
   content_hash: string;
   size_bytes: number;
   revision: number;
+  content_revision: number;
   created_at: string;
   updated_at: string;
 }
@@ -153,7 +177,8 @@ export class RunbookStore {
       ...this.toRecord(row, notebook.cells.length),
       offset,
       totalCells: notebook.cells.length,
-      cells: notebook.cells.slice(offset, offset + limit).map(notebookCellToInput),
+      cells: notebook.cells.slice(offset, offset + limit).map((cell, index) =>
+        notebookCellToRecord(cell, offset + index)),
     };
   }
 
@@ -174,7 +199,18 @@ export class RunbookStore {
     const artifactId = id;
     const now = new Date().toISOString();
     const relativePath = join("runbooks", safeSegment(this.context.workspaceId), `${id}.ipynb`);
-    const notebook = createNotebook({ id, title, purpose, status, context: this.context, revision: 1, createdAt: now, updatedAt: now, cells });
+    const notebook = createNotebook({
+      id,
+      title,
+      purpose,
+      status,
+      context: this.context,
+      revision: 1,
+      contentRevision: 1,
+      createdAt: now,
+      updatedAt: now,
+      cells,
+    });
 
     this.database.exec("BEGIN IMMEDIATE");
     try {
@@ -184,8 +220,8 @@ export class RunbookStore {
           `INSERT INTO honeycrisp_runbooks (
              id, workspace_id, workspace_name, subject_id, subject_name, session_id,
              title, purpose, status, artifact_id, relative_path, content_hash,
-             size_bytes, revision, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             size_bytes, revision, content_revision, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -201,6 +237,7 @@ export class RunbookStore {
           relativePath,
           entry.contentHash,
           entry.sizeBytes,
+          1,
           1,
           now,
           now,
@@ -239,6 +276,7 @@ export class RunbookStore {
       }
       const current = this.readNotebook(row);
       const revision = row.revision + 1;
+      const contentRevision = row.content_revision + 1;
       const updatedAt = new Date().toISOString();
       const status = input.status ?? row.status as RunbookStatus;
       const notebook: RunbookNotebook = {
@@ -249,6 +287,7 @@ export class RunbookStore {
             ...current.metadata.honeycrisp,
             status,
             revision,
+            contentRevision,
             updatedAt,
           },
         },
@@ -257,10 +296,20 @@ export class RunbookStore {
       this.database
         .prepare(
           `UPDATE honeycrisp_runbooks
-           SET status = ?, content_hash = ?, size_bytes = ?, revision = ?, updated_at = ?
+           SET status = ?, content_hash = ?, size_bytes = ?, revision = ?, content_revision = ?, updated_at = ?
            WHERE id = ? AND workspace_id = ? AND revision = ?`,
         )
-        .run(status, entry.contentHash, entry.sizeBytes, revision, updatedAt, id, this.context.workspaceId, input.expectedRevision);
+        .run(
+          status,
+          entry.contentHash,
+          entry.sizeBytes,
+          revision,
+          contentRevision,
+          updatedAt,
+          id,
+          this.context.workspaceId,
+          input.expectedRevision,
+        );
       this.recordRevision(id, revision, updatedAt);
       recordModelAuthorship(this.database, "runbook", id, revision, author, updatedAt);
       this.database.exec("COMMIT");
@@ -273,15 +322,20 @@ export class RunbookStore {
     }
   }
 
-  public executionPlan(id: string, cellId?: string): RunbookExecutionPlanCell[] {
+  public executionPlan(id: string, selection: RunbookExecutionSelection = {}): RunbookExecutionPlanCell[] {
     const row = this.readRow(requiredText(id, "id", 200));
     if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
     if (row.status === "archived") throw new Error("Archived runbooks cannot be executed.");
+    const cellId = optionalText(selection.cellId, "cellId", 200);
+    const startCellId = optionalText(selection.startCellId, "startCellId", 200);
+    const endCellId = optionalText(selection.endCellId, "endCellId", 200);
+    if (cellId && (startCellId || endCellId)) {
+      throw new Error("cellId cannot be combined with startCellId or endCellId.");
+    }
     const notebook = this.readNotebook(row);
-    const cells = notebook.cells
+    const executableCells = notebook.cells
       .map((cell, index) => ({ cell, id: notebookCellId(cell, index) }))
       .filter(({ cell }) => cell.cell_type === "code")
-      .filter(({ id: candidateId }) => !cellId || candidateId === cellId)
       .map(({ cell, id: candidateId }) => {
         const honeycrisp = isRecord(cell.metadata.honeycrisp) ? cell.metadata.honeycrisp : {};
         const vscode = isRecord(cell.metadata.vscode) ? cell.metadata.vscode : {};
@@ -295,9 +349,22 @@ export class RunbookStore {
               : null,
         };
       });
-    if (cellId && cells.length === 0) throw new Error(`Code cell not found in runbook ${id}: ${cellId}`);
-    if (cells.length === 0) throw new Error("Runbook has no executable code cells.");
-    return cells;
+    if (executableCells.length === 0) throw new Error("Runbook has no executable code cells.");
+    if (cellId) {
+      const cell = executableCells.find((candidate) => candidate.id === cellId);
+      if (!cell) throw new Error(`Code cell not found in runbook ${id}: ${cellId}`);
+      return [cell];
+    }
+    const startIndex = startCellId
+      ? executableCells.findIndex((candidate) => candidate.id === startCellId)
+      : 0;
+    const endIndex = endCellId
+      ? executableCells.findIndex((candidate) => candidate.id === endCellId)
+      : executableCells.length - 1;
+    if (startCellId && startIndex < 0) throw new Error(`Start code cell not found in runbook ${id}: ${startCellId}`);
+    if (endCellId && endIndex < 0) throw new Error(`End code cell not found in runbook ${id}: ${endCellId}`);
+    if (startIndex > endIndex) throw new Error("startCellId must precede or equal endCellId in runbook order.");
+    return executableCells.slice(startIndex, endIndex + 1);
   }
 
   public beginExecution(
@@ -322,6 +389,19 @@ export class RunbookStore {
         if (!cellIds.includes(cellId)) return;
         setCellExecution(cell, { runId, status: "queued", startedAt, proofTarget, ...(deviceOs ? { deviceOs } : {}) });
       });
+    }, () => {
+      this.database.prepare(`INSERT INTO honeycrisp_runbook_executions (
+        run_id, runbook_id, workspace_id, status, proof_target, device_os,
+        started_at, completed_at, duration_ms, error, selected_cell_count, completed_cell_count
+      ) VALUES (?, ?, ?, 'running', ?, ?, ?, NULL, NULL, NULL, ?, 0)`).run(
+        runId,
+        id,
+        this.context.workspaceId,
+        proofTarget,
+        deviceOs ?? null,
+        startedAt,
+        cellIds.length,
+      );
     });
   }
 
@@ -379,6 +459,17 @@ export class RunbookStore {
       if (input.error && !input.stderr) {
         cell.outputs.push({ output_type: "error", ename: input.status, evalue: input.error, traceback: [input.error] });
       }
+    }, () => {
+      const result = this.database.prepare(`UPDATE honeycrisp_runbook_executions
+        SET completed_cell_count = completed_cell_count + 1
+        WHERE run_id = ? AND runbook_id = ? AND workspace_id = ? AND status = 'running'`).run(
+        input.runId,
+        input.id,
+        this.context.workspaceId,
+      );
+      if (Number(result.changes) !== 1) {
+        throw new Error(`Runbook execution ledger entry is missing or already complete: ${input.runId}`);
+      }
     });
   }
 
@@ -432,10 +523,29 @@ export class RunbookStore {
         proofTarget: input.proofTarget,
         ...(input.deviceOs ? { deviceOs: input.deviceOs } : {}),
       };
+    }, () => {
+      const result = this.database.prepare(`UPDATE honeycrisp_runbook_executions SET
+        status = ?, completed_at = ?, duration_ms = ?, error = ?
+        WHERE run_id = ? AND runbook_id = ? AND workspace_id = ? AND status = 'running'`).run(
+        input.status,
+        input.completedAt,
+        Math.max(0, Math.round(input.durationMs)),
+        input.error?.slice(0, 2_000) ?? null,
+        input.runId,
+        input.id,
+        this.context.workspaceId,
+      );
+      if (Number(result.changes) !== 1) {
+        throw new Error(`Runbook execution ledger entry is missing or already complete: ${input.runId}`);
+      }
     });
   }
 
-  private updateNotebook(id: string, mutate: (notebook: RunbookNotebook) => void): void {
+  private updateNotebook(
+    id: string,
+    mutate: (notebook: RunbookNotebook) => void,
+    persistExecution?: () => void,
+  ): void {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const row = this.readRow(requiredText(id, "id", 200));
@@ -450,12 +560,13 @@ export class RunbookStore {
         updatedAt,
       };
       const entry = this.writeAndRegister(id, row.artifact_id, row.relative_path, row.title, notebook);
-      this.database.prepare(
+      const result = this.database.prepare(
         `UPDATE honeycrisp_runbooks
          SET content_hash = ?, size_bytes = ?, revision = ?, updated_at = ?
          WHERE id = ? AND workspace_id = ? AND revision = ?`,
       ).run(entry.contentHash, entry.sizeBytes, revision, updatedAt, id, this.context.workspaceId, row.revision);
-      this.recordRevision(id, revision, updatedAt);
+      if (Number(result.changes) !== 1) throw new Error(`Runbook revision conflict while recording execution state: ${id}`);
+      persistExecution?.();
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -471,8 +582,8 @@ export class RunbookStore {
 
   private recordRevision(artifactId: string, revision: number, createdAt: string): void {
     this.database.prepare(`INSERT INTO honeycrisp_artifact_revisions (
-      artifact_kind, artifact_id, workspace_id, session_id, revision, created_at
-    ) VALUES ('runbook', ?, ?, ?, ?, ?)`).run(
+      artifact_kind, artifact_id, workspace_id, session_id, revision, created_at, revision_kind
+    ) VALUES ('runbook', ?, ?, ?, ?, ?, 'content')`).run(
       artifactId,
       this.context.workspaceId,
       this.context.sessionId ?? null,
@@ -495,9 +606,39 @@ export class RunbookStore {
       artifactId: row.artifact_id,
       cellCount: knownCellCount ?? this.readNotebook(row).cells.length,
       revision: row.revision,
+      contentRevision: row.content_revision,
+      execution: this.readExecutionMetrics(row.id),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       authors: modelAuthorsForResource(this.database, "runbook", row.id),
+    };
+  }
+
+  private readExecutionMetrics(runbookId: string): RunbookExecutionMetrics {
+    const totals = this.database.prepare(`SELECT
+      COUNT(*) AS run_count,
+      SUM(CASE WHEN status <> 'running' THEN 1 ELSE 0 END) AS completed_run_count,
+      COALESCE(SUM(completed_cell_count), 0) AS executed_cell_count
+      FROM honeycrisp_runbook_executions
+      WHERE runbook_id = ? AND workspace_id = ?`).get(runbookId, this.context.workspaceId) as {
+        run_count?: unknown;
+        completed_run_count?: unknown;
+        executed_cell_count?: unknown;
+      } | undefined;
+    const latest = this.database.prepare(`SELECT status, started_at
+      FROM honeycrisp_runbook_executions
+      WHERE runbook_id = ? AND workspace_id = ?
+      ORDER BY started_at DESC, run_id DESC LIMIT 1`).get(runbookId, this.context.workspaceId) as {
+        status?: unknown;
+        started_at?: unknown;
+      } | undefined;
+    return {
+      runCount: numberOrZero(totals?.run_count),
+      completedRunCount: numberOrZero(totals?.completed_run_count),
+      executedCellCount: numberOrZero(totals?.executed_cell_count),
+      latest: isRunLedgerStatus(latest?.status) && typeof latest.started_at === "string"
+        ? { status: latest.status, startedAt: latest.started_at }
+        : null,
     };
   }
 
@@ -547,6 +688,7 @@ function createNotebook(input: {
   status: RunbookStatus;
   context: MemoryContext;
   revision: number;
+  contentRevision: number;
   createdAt: string;
   updatedAt: string;
   cells: RunbookCellInput[];
@@ -568,6 +710,7 @@ function createNotebook(input: {
         sessionId: input.context.sessionId ?? null,
         status: input.status,
         revision: input.revision,
+        contentRevision: input.contentRevision,
         createdAt: input.createdAt,
         updatedAt: input.updatedAt,
       },
@@ -610,10 +753,12 @@ function setCellExecution(cell: NotebookCell, execution: RunbookExecutionState):
   cell.metadata.honeycrisp = { ...honeycrisp, latestRun: execution };
 }
 
-function notebookCellToInput(cell: NotebookCell): RunbookCellInput {
+function notebookCellToRecord(cell: NotebookCell, index: number): RunbookCellRecord {
   const honeycrisp = isRecord(cell.metadata?.honeycrisp) ? cell.metadata.honeycrisp : {};
   const outputs = Array.isArray(cell.outputs) ? cell.outputs : [];
   return {
+    id: notebookCellId(cell, index),
+    index,
     kind: cell.cell_type,
     source: cell.source.join(""),
     ...(typeof honeycrisp.language === "string" ? { language: honeycrisp.language } : {}),
@@ -692,6 +837,14 @@ function safeSegment(value: string): string {
 function clampInteger(value: number, minimum: number, maximum: number): number {
   if (!Number.isFinite(value)) return minimum;
   return Math.max(minimum, Math.min(maximum, Math.floor(value)));
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function isRunLedgerStatus(value: unknown): value is "running" | "succeeded" | "failed" | "blocked" {
+  return value === "running" || value === "succeeded" || value === "failed" || value === "blocked";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

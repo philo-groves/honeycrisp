@@ -15,6 +15,9 @@ export interface CreateResearchWorkspaceContextInput {
   projectNotes?: readonly string[];
   authorization?: ResearchWorkspaceAuthorizationContext;
   memoryContext?: ResearchMemoryContext;
+  sourceRevision?: string;
+  environmentFingerprint?: string;
+  authorizedAssetIds?: readonly string[];
 }
 
 export type WorkspaceRepositoryInput =
@@ -34,6 +37,9 @@ export interface ResearchWorkspaceContextOverlay {
   projectNotes?: readonly string[];
   authorization?: ResearchWorkspaceAuthorizationContext;
   memoryContext?: ResearchMemoryContext;
+  sourceRevision?: string;
+  environmentFingerprint?: string;
+  authorizedAssetIds?: readonly string[];
 }
 
 export function createResearchWorkspaceContext(
@@ -57,6 +63,11 @@ export function createResearchWorkspaceContext(
     workspaceRoot,
     ...(input.authorization ? { authorization: input.authorization } : {}),
     ...(input.memoryContext ? { memoryContext: input.memoryContext } : {}),
+    ...(normalizedString(input.sourceRevision) ? { sourceRevision: normalizedString(input.sourceRevision)! } : {}),
+    ...(normalizedString(input.environmentFingerprint)
+      ? { environmentFingerprint: normalizedString(input.environmentFingerprint)! }
+      : {}),
+    ...(input.authorizedAssetIds ? { authorizedAssetIds: uniqueStrings(input.authorizedAssetIds) } : {}),
     knownRepositories: uniqueRepositories(repositories),
     materializedSourcePaths,
     projectNotes: uniqueStrings(input.projectNotes ?? []),
@@ -90,11 +101,17 @@ export function loadResearchWorkspaceContextFile(
   ]);
   const authorization = normalizeAuthorization(parsed.authorization);
   const memoryContext = normalizeMemoryContext(parsed.memoryContext ?? parsed.memoryTierContext);
+  const sourceRevision = normalizedString(parsed.sourceRevision);
+  const environmentFingerprint = normalizedString(parsed.environmentFingerprint);
+  const authorizedAssetIds = uniqueStrings(readStringArray(parsed.authorizedAssetIds));
   return {
     schemaVersion: 1,
     ...(workspaceRoot ? { workspaceRoot } : {}),
     ...(authorization ? { authorization } : {}),
     ...(memoryContext ? { memoryContext } : {}),
+    ...(sourceRevision ? { sourceRevision } : {}),
+    ...(environmentFingerprint ? { environmentFingerprint } : {}),
+    ...(authorizedAssetIds.length > 0 ? { authorizedAssetIds } : {}),
     ...(knownRepositories.length > 0 ? { knownRepositories } : {}),
     ...(materializedSourcePaths.length > 0 ? { materializedSourcePaths } : {}),
     ...(projectNotes.length > 0 ? { projectNotes } : {}),
@@ -122,6 +139,15 @@ export function mergeResearchWorkspaceContexts(
       : input.base.memoryContext
         ? { memoryContext: input.base.memoryContext }
         : {}),
+    ...(overlay.sourceRevision ?? input.base.sourceRevision
+      ? { sourceRevision: overlay.sourceRevision ?? input.base.sourceRevision! }
+      : {}),
+    ...(overlay.environmentFingerprint ?? input.base.environmentFingerprint
+      ? { environmentFingerprint: overlay.environmentFingerprint ?? input.base.environmentFingerprint! }
+      : {}),
+    ...(overlay.authorizedAssetIds ?? input.base.authorizedAssetIds
+      ? { authorizedAssetIds: uniqueStrings(overlay.authorizedAssetIds ?? input.base.authorizedAssetIds ?? []) }
+      : {}),
     knownRepositories: uniqueRepositories([
       ...input.base.knownRepositories,
       ...(overlay.knownRepositories ?? []),
@@ -174,6 +200,10 @@ function normalizeAuthorization(
     ...optionalStringProperty(value, "activeFrom"),
     ...optionalStringProperty(value, "expiresAt"),
   };
+}
+
+function normalizedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function optionalStringProperty(

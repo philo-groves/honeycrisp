@@ -20,7 +20,15 @@ export type HoneycrispControlMessage = HoneycrispControlRequest & (
   | { type: "configure"; modelSelection: HoneycrispModelSelection }
   | { type: "steer"; instruction: string; modelSelection?: HoneycrispModelSelection }
   | { type: "configure_shell_safety"; shellSafetyMode: ShellSafetyMode }
-  | { type: "runbook_execute"; runbookId: string; cellId?: string; proofTarget: RunbookProofTarget; deviceOs?: string }
+  | {
+      type: "runbook_execute";
+      runbookId: string;
+      cellId?: string;
+      startCellId?: string;
+      endCellId?: string;
+      proofTarget: RunbookProofTarget;
+      deviceOs?: string;
+    }
   | {
       type: "resolve_shell_approval";
       approvalRequestId: string;
@@ -281,6 +289,8 @@ export class HoneycrispControlStream {
         const execution = this.runbookExecutionHandler({
           runbookId: message.runbookId,
           ...(message.cellId ? { cellId: message.cellId } : {}),
+          ...(message.startCellId ? { startCellId: message.startCellId } : {}),
+          ...(message.endCellId ? { endCellId: message.endCellId } : {}),
           proofTarget: message.proofTarget,
           ...(message.deviceOs ? { deviceOs: message.deviceOs } : {}),
         });
@@ -433,6 +443,15 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
     const cellId = parsed.cellId === undefined
       ? undefined
       : parseRequiredText(parsed.cellId, "Runbook cell ID", 200);
+    const startCellId = parsed.startCellId === undefined
+      ? undefined
+      : parseRequiredText(parsed.startCellId, "Runbook start cell ID", 200);
+    const endCellId = parsed.endCellId === undefined
+      ? undefined
+      : parseRequiredText(parsed.endCellId, "Runbook end cell ID", 200);
+    if (cellId && (startCellId || endCellId)) {
+      throw new Error("Runbook cellId cannot be combined with startCellId or endCellId.");
+    }
     const proofTarget = parseProofTarget(parsed.proofTarget);
     const deviceOs = proofTarget === "device"
       ? parseRequiredText(parsed.deviceOs, "Runbook target device OS", 120)
@@ -442,6 +461,8 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
       type: "runbook_execute",
       runbookId,
       ...(cellId ? { cellId } : {}),
+      ...(startCellId ? { startCellId } : {}),
+      ...(endCellId ? { endCellId } : {}),
       proofTarget,
       ...(deviceOs ? { deviceOs } : {}),
       ...(requestId ? { requestId } : {}),

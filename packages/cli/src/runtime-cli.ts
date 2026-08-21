@@ -19,6 +19,9 @@ import {
   createLocalInspectionTool,
   createDeterministicAgentExecutor,
   createMemoryGraphTools,
+  createFindingTools,
+  FindingStore,
+  buildCampaignGraph,
   createRunbookTools,
   createRunbookExecutor,
   createRunbookExecutionTool,
@@ -108,6 +111,8 @@ import type {
   MemoryTypeDescriptions,
   MemoryTypeDescriptionsInput,
   ResearchModelMemoryContextNode,
+  CampaignGraphSummary,
+  MemoryNodeSummary,
   ResearchProfile,
   ResearchProfileModelJob,
   ResolvedResearchProfile,
@@ -1967,6 +1972,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
                 runbookId: request.runbookId,
                 runId: null,
                 cellId: request.cellId ?? null,
+                startCellId: request.startCellId ?? null,
+                endCellId: request.endCellId ?? null,
                 status: "failed",
                 proofTarget: request.proofTarget,
                 ...(request.deviceOs ? { deviceOs: request.deviceOs } : {}),
@@ -2024,6 +2031,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
         workspaceRoot: args.workspaceRoot,
         workspaceContext: runtimeConfig.workspaceContext,
         memoryContext: runtimeConfig.memoryContext,
+        campaignContext: runtimeConfig.campaignContext,
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
         ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
@@ -3373,11 +3381,20 @@ async function createRuntimeConfig(args: {
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
   memoryContext: readonly ResearchModelMemoryContextNode[];
+  campaignContext: CampaignGraphSummary;
   runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
   memoryGraph: MemoryGraphStore;
-  executeRunbook?: (request: { runbookId: string; cellId?: string; signal?: AbortSignal; proofTarget: "localhost" | "device" | "vm" | "web" | "other"; deviceOs?: string }) => Promise<void>;
+  executeRunbook?: (request: {
+    runbookId: string;
+    cellId?: string;
+    startCellId?: string;
+    endCellId?: string;
+    signal?: AbortSignal;
+    proofTarget: "localhost" | "device" | "vm" | "web" | "other";
+    deviceOs?: string;
+  }) => Promise<void>;
   cleanup?: () => Promise<void>;
 }> {
   const workspaceRoot = args.workspaceRoot ?? process.cwd();
@@ -3414,6 +3431,7 @@ async function createRuntimeConfig(args: {
     workspaceRoot,
   });
   let runbookStore: RunbookStore | undefined;
+  let reportStore: ReportStore | undefined;
   let shellTool: ResearchExecutableTool | undefined;
 
   const memoryGraph = new MemoryGraphStore({
@@ -3430,6 +3448,23 @@ async function createRuntimeConfig(args: {
     : [];
   executableTools.push(...memoryTools);
   toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));
+  const findingStore = new FindingStore(memoryGraph);
+  findingStore.refreshStaleness(
+    workspaceContext.sourceRevision ?? null,
+    workspaceContext.environmentFingerprint ?? null,
+    "host",
+  );
+  const findingTools = resolvedResearchProfile.profile.id === "security-research"
+    ? createFindingTools(findingStore, {
+        ...(workspaceContext.sourceRevision ? { sourceRevision: workspaceContext.sourceRevision } : {}),
+        ...(workspaceContext.environmentFingerprint
+          ? { environmentFingerprint: workspaceContext.environmentFingerprint }
+          : {}),
+      })
+    : [];
+  executableTools.push(...findingTools);
+  toolDescriptors.push(...findingTools.map((tool) => tool.descriptor));
+  cleanupCallbacks.push(async () => findingStore.close());
   cleanupCallbacks.push(async () => memoryGraph.close());
   if (resolvedResearchProfile.profile.capabilities.runbooksEnabled) {
     const runbooks = new RunbookStore(
@@ -3450,6 +3485,7 @@ async function createRuntimeConfig(args: {
       memoryGraph.getContext(),
       { packetCandidateRoots: [workspaceRoot] },
     );
+    reportStore = reports;
     const reportTools = createReportTools(reports, {
       ...(resolvedResearchProfile.profile.id === "security-research"
         ? { requireConfirmedChain: true, requireSubmissionPacket: true, memoryGraph }
@@ -3462,6 +3498,67 @@ async function createRuntimeConfig(args: {
   const memoryContext = args.prompt && resolvedResearchProfile.profile.capabilities.memoryEnabled
     ? compileMemoryModelContext(memoryGraph, args.prompt)
     : [];
+  const campaignMemoryNodes: MemoryNodeSummary[] = memoryGraph.search({ scope: "workspace", limit: 1_000 }).map((node) => ({
+    id: node.id,
+    sessionIds: [...node.sessionIds],
+    workspaces: [...node.workspaces],
+    subjectId: node.subjectId,
+    subjectName: node.subjectName,
+    type: node.type,
+    title: node.title,
+    summary: node.summary,
+    body: node.body,
+    status: node.status,
+    confidence: node.confidence,
+    assetIds: [...node.assetIds],
+    tags: [...node.tags],
+    attributes: node.attributes,
+    evidenceRefs: node.evidence.map((evidence) => ({
+      id: evidence.id,
+      kind: evidence.kind,
+      pathBase: evidence.pathBase ?? null,
+      path: evidence.path ?? null,
+      locator: evidence.locator,
+      summary: evidence.summary,
+      createdAt: evidence.createdAt,
+    })),
+    createdAt: node.createdAt,
+    updatedAt: node.updatedAt,
+    revision: node.revision,
+    authors: [],
+  }));
+  const campaignContext = buildCampaignGraph({
+    nodes: campaignMemoryNodes,
+    edges: memoryGraph.listEdgesForNodes(campaignMemoryNodes.map((node) => node.id)).map((edge) => ({
+      fromId: edge.fromId,
+      toId: edge.toId,
+      relation: edge.relation,
+      note: edge.note,
+      createdAt: edge.createdAt,
+      updatedAt: edge.updatedAt,
+    })),
+    findings: findingStore.list(),
+    runbooks: (runbookStore?.list({ limit: 200 }) ?? []).map((runbook) => ({
+      ...runbook,
+      revisions: [{
+        revision: runbook.revision,
+        sessionId: runbook.sessionId,
+        createdAt: runbook.updatedAt,
+      }],
+    })),
+    reports: (reportStore?.list({ limit: 200 }) ?? []).map((report) => ({
+      ...report,
+      revisions: [{
+        revision: report.revision,
+        sessionId: report.sessionId,
+        createdAt: report.updatedAt,
+      }],
+    })),
+    assetIds: workspaceContext.authorizedAssetIds ?? [
+      ...workspaceContext.knownRepositories.map((repository) => repository.rootPath),
+      ...workspaceContext.materializedSourcePaths,
+    ],
+  });
   const mcpCapture = await configureRuntimeMcpTools({
     runtimeTools,
     executableTools,
@@ -3612,6 +3709,7 @@ async function createRuntimeConfig(args: {
     governance,
     workspaceContext,
     memoryContext,
+    campaignContext,
     runtimeTools,
     dispositionRecorder,
     memoryGraph,

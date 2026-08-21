@@ -113,6 +113,9 @@ export interface ResearchWorkspaceContext {
   authorization?: ResearchWorkspaceAuthorizationContext;
   knownRepositories: readonly ResearchWorkspaceRepositoryContext[];
   materializedSourcePaths: readonly string[];
+  sourceRevision?: string;
+  environmentFingerprint?: string;
+  authorizedAssetIds?: readonly string[];
   projectNotes: readonly string[];
 }
 

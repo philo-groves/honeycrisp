@@ -414,6 +414,9 @@ export function createPiAgentExecutor(
       const hasMemoryTools = researchToolNames.has("memory_search")
         && researchToolNames.has("memory_save")
         && researchToolNames.has("memory_link");
+      const hasFindingTools = researchToolNames.has("finding_list")
+        && researchToolNames.has("finding_create")
+        && researchToolNames.has("finding_transition");
       const hasRunbookTools = researchToolNames.has("runbook_list")
         && researchToolNames.has("runbook_create")
         && researchToolNames.has("runbook_append");
@@ -722,6 +725,7 @@ export function createPiAgentExecutor(
             systemPrompt: createResearchSystemPrompt({
               hasTools: tools.length > 0,
               hasMemoryTools,
+              hasFindingTools,
               hasRunbookTools,
               hasReportTools,
               hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,

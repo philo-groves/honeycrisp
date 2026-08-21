@@ -104,14 +104,15 @@ test("control stream validates and dispatches runbook execution requests", async
     type: "runbook_execute",
     requestId: "runbook-control-1",
     runbookId: "runbook-1",
-    cellId: "cell-2",
+    startCellId: "cell-2",
+    endCellId: "cell-4",
     proofTarget: "device",
     deviceOs: "iOS 27.0",
   })}\n`);
   await new Promise((resolve) => setImmediate(resolve));
   await controls.waitForRunbookExecutions();
 
-  assert.deepEqual(requests, [{ runbookId: "runbook-1", cellId: "cell-2", proofTarget: "device", deviceOs: "iOS 27.0" }]);
+  assert.deepEqual(requests, [{ runbookId: "runbook-1", startCellId: "cell-2", endCellId: "cell-4", proofTarget: "device", deviceOs: "iOS 27.0" }]);
   assert.deepEqual(events, [{ type: "runbook_execute", accepted: true, requestId: "runbook-control-1" }]);
   controls.close();
   input.destroy();

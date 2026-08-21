@@ -47,11 +47,15 @@ test("WebSocket transport authenticates and exchanges versioned session messages
     client: { name: "test", version: "1" },
   }));
   await transport.waitForClient();
-  assert.deepEqual(await hello, {
+  const helloMessage = await hello;
+  assert.match(helloMessage.server.buildId, /^[a-f0-9]{24}$/);
+  assert.deepEqual({ ...helloMessage, server: { ...helloMessage.server, buildId: "[build]" } }, {
     protocolVersion: 1,
     type: "server.hello",
     sessionId: "session-1",
-    server: { name: "honeycrisp", version: "test" },
+    server: { name: "honeycrisp", version: "test", buildId: "[build]" },
+    contractVersion: 3,
+    schemas: { protocol: 1, session: 1, memorySummary: 3, finding: 1, campaignGraph: 1 },
     capabilities: ["session.events", "session.controls"],
   });
 
