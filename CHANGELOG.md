@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added bounded cursor pages for session transcripts and traces, targeted event-detail reads, current collaboration snapshots, and separate capture metadata/detail queries.
 - Added a workspace-owned canonical finding store with stable identities, optimistic revisions, append-only ordered transitions, model authorship, and evidence-gated observation, reproduction, independent verification, report-ready, disclosure, rejection, and stale states.
 - Added migration 12's durable runbook execution ledger so reproduction gates validate successful Honeycrisp executions rather than model-supplied status claims. Historical notebook-only run metadata is not promoted into the trusted ledger; rerun an existing runbook before using it to advance a finding.
 - Added migration 13's independent runbook content revision and execution counters. Existing content revisions are conservatively backfilled from recorded model authorship, authored runbooks' non-author revision events are reclassified as execution state, and historical notebook-only cell execution counts remain zero.
@@ -13,13 +14,17 @@
 
 ### Changed
 
-- Protocol descriptors now expose contract v3 runtime build identity, schema versions, and required capabilities; memory-summary v3 adds runbook content and execution metrics, and WebSocket server hellos carry the same runtime contract metadata.
+- Protocol contract v4 makes core session queries metadata-only, bounds update pages by count and bytes, and advertises bounded-read and targeted-detail capabilities.
+- Live model text and thought deltas remain available on the WebSocket transport but durable session storage retains only completed snapshots. Context-composition telemetry is recorded once per agent turn/model request.
+- Session captures now reference normalized durable event streams instead of embedding complete event timelines and agent diagnostics. Migration 4 compacts existing capture rows and refreshes their integrity hashes.
+- Protocol descriptors expose runtime build identity, schema versions, and required capabilities; memory-summary v3 adds runbook content and execution metrics, and WebSocket server hellos carry the same runtime contract metadata.
 - Runbook execution state still advances the internal optimistic-concurrency revision, but no longer creates content revision events; content edits, completed runs, executed cells, and latest run status are tracked independently.
 - Workspace context may carry host-derived source revision, environment fingerprint, and authorized asset identities so finding staleness and campaign coverage use the same host facts.
 - Memory summaries and run initialization now reconcile finding staleness before projecting campaign state, including headless runtime entry points.
 
 ### Fixed
 
+- Persisted live events now use mutation receipts without re-reading the complete session after every append.
 - Honeycrisp core migrations can adopt an existing subject-scoped Beale memory database without attempting legacy tier-column indexes or migration steps.
 
 ### Security

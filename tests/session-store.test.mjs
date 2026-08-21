@@ -46,8 +46,12 @@ test("session store owns creation, lifecycle, capture import, and queries as one
     });
     assert.equal(imported.status, "completed");
     assert.equal(imported.finalResponse, "The parser is safe.");
-    assert.equal(imported.events.length, 2);
+    assert.equal(store.get(created.id).events.length, 2);
     assert.equal(imported.attempts[0].capture.schemaVersion, 5);
+    assert.equal(imported.attempts[0].capture.raw.eventTimeline, undefined);
+    assert.equal(imported.attempts[0].capture.eventStreams.timeline.count, 1);
+    assert.equal(imported.attempts[0].capture.raw.agent.raw.agentEvents, undefined);
+    assert.equal(imported.attempts[0].capture.eventStreams.agentDiagnostics.count, 2);
     assert.equal(store.get(created.id).attempts[0].capture.schemaVersion, 5);
     assert.equal(store.list("workspace_one")[0].revision, 3);
     assert.throws(
@@ -225,6 +229,15 @@ test("session summary lists stay bounded when canonical sessions contain large e
   assert.equal(Object.hasOwn(listed.result[0].attempts[0], "capture"), false);
   assert.deepEqual(listed.result[0].tokenUsage, { totalTokens: 12_345 });
 
+  const projected = runCli(
+    ["session", "get-update", "--session-id", "session_large_history", "--max-bytes", "1024", "--json"],
+    { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+  );
+  assert.equal(projected.result.events.length, 1);
+  assert.equal(projected.result.events[0].payload.detailAvailableOnRequest, true);
+  assert.equal(projected.result.events[0].payload.sizeBytes > 2 * 1024 * 1024, true);
+  assert.ok(JSON.stringify(projected).length < 20_000);
+
   const batched = runCli(
     [
       "session", "list-summaries",
@@ -324,7 +337,11 @@ test("session migration transactionally normalizes legacy embedded event histori
   const migrated = new HoneycrispSessionStore({ databasePath });
   try {
     assert.deepEqual(migrated.get("session_legacy")?.events, legacyDocument.events);
-    assert.deepEqual(migrated.get("session_legacy")?.attempts[0].capture, legacyDocument.attempts[0].capture);
+    const capture = migrated.get("session_legacy")?.attempts[0].capture;
+    assert.equal(capture?.attemptId, "attempt_legacy");
+    assert.equal(capture?.schemaVersion, 5);
+    assert.equal(capture?.raw.retained, true);
+    assert.equal(capture?.eventStreams.timeline.source, "honeycrisp_session_events");
   } finally {
     migrated.close();
   }
@@ -388,7 +405,7 @@ test("session CLI reports actionable integrity and database corruption failures"
   tamper.close();
 
   const integrityFailure = runCliFailure(
-    ["session", "get", "--session-id", "session_integrity", "--json"],
+    ["session", "event-details", "--session-id", "session_integrity", "--event-id", "event_integrity", "--json"],
     { ...process.env, HONEYCRISP_DATABASE_PATH: integrityDatabasePath },
   );
   assert.equal(integrityFailure.error.code, "session_integrity_failed");
@@ -465,6 +482,65 @@ test("session cursor updates omit prior events and capture bodies", async () => 
   assert.ok(JSON.stringify(appended).length < 1_000);
 });
 
+test("session event, collaboration, capture, and nested trace reads are targeted and bounded", () => {
+  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  try {
+    store.create({
+      id: "session_targeted",
+      workspaceId: "workspace_targeted",
+      attemptId: "attempt_targeted",
+      title: "Targeted reads",
+      prompt: "Read only requested state.",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    store.appendEventReceipt("session_targeted", {
+      id: "trace_batch_one",
+      kind: "beale.trace_batch",
+      timestamp: "2026-08-16T12:00:00.000Z",
+      summary: "Trace batch",
+      payload: { records: [{ id: "trace_nested", summary: "Nested trace", payload: { detail: true } }] },
+    });
+    store.appendEventReceipt("session_targeted", {
+      id: "room_one_create",
+      kind: "beale.breakout_room",
+      timestamp: "2026-08-16T12:01:00.000Z",
+      summary: "Room created",
+      payload: { record: { id: "room_one", status: "active" } },
+    });
+    store.appendEventReceipt("session_targeted", {
+      id: "room_one_complete",
+      kind: "beale.breakout_room",
+      timestamp: "2026-08-16T12:02:00.000Z",
+      summary: "Room completed",
+      payload: { record: { id: "room_one", status: "completed" } },
+    });
+    store.appendEventReceipt("session_targeted", {
+      id: "event_after_nested",
+      kind: "agent.event",
+      timestamp: "2026-08-16T12:03:00.000Z",
+      summary: "After nested cursor",
+      payload: { retained: true },
+    });
+
+    const update = store.getUpdate("session_targeted", "trace_nested");
+    assert.deepEqual(update?.events.map((event) => event.id), [
+      "room_one_create", "room_one_complete", "event_after_nested",
+    ]);
+    assert.equal(update?.nextAfterEventId, "event_after_nested");
+    assert.equal(update?.hasMore, false);
+    assert.deepEqual(store.getEventDetails("session_targeted", ["trace_nested"]).map((event) => event.id), [
+      "trace_batch_one",
+    ]);
+    const collaboration = store.getCollaborationState("session_targeted");
+    assert.equal(collaboration.rooms.length, 1);
+    assert.equal(collaboration.rooms[0].payload.record.status, "completed");
+    assert.deepEqual(store.getEventPage("session_targeted", { stream: "transcript" }).events, []);
+  } finally {
+    store.close();
+  }
+});
+
 test("versioned session CLI imports captures and serves the canonical query", async () => {
   const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-protocol-"));
   const databasePath = join(directory, "memory.sqlite");
@@ -495,7 +571,18 @@ test("versioned session CLI imports captures and serves the canonical query", as
   assert.equal(imported.operation, "session.import_capture");
   const queried = runCli(["session", "get", "--session-id", "session_cli", "--json"], env);
   assert.equal(queried.result.status, "completed");
-  assert.equal(queried.result.finalResponse, "The parser is safe.");
+  assert.equal(Object.hasOwn(queried.result, "finalResponse"), false);
+  assert.equal(Object.hasOwn(queried.result, "events"), false);
+  const update = runCli(["session", "get-update", "--session-id", "session_cli", "--tail", "--json"], env);
+  assert.equal(update.result.finalResponse, "The parser is safe.");
+  const captures = runCli(["session", "captures", "--session-id", "session_cli", "--json"], env);
+  assert.equal(captures.result[0].attemptId, "attempt_cli");
+  assert.equal(captures.result[0].eventStreams.timeline.count, 1);
+  const capture = runCli([
+    "session", "capture", "--session-id", "session_cli", "--attempt-id", "attempt_cli", "--json",
+  ], env);
+  assert.equal(Object.hasOwn(capture.result.raw, "eventTimeline"), false);
+  assert.equal(Object.hasOwn(capture.result.raw.agent.raw, "agentEvents"), false);
 });
 
 test("session CLI reads remain available while the runtime holds a write transaction", async () => {
@@ -599,6 +686,12 @@ function captureFixture() {
       startedAt: "2026-08-15T12:00:00.000Z",
       completedAt: "2026-08-15T12:01:00.000Z",
       outputText: "The parser is safe.",
+      raw: {
+        agentEvents: [
+          { eventId: "diagnostic_one", type: "context_composed", turn: 1 },
+          { eventId: "diagnostic_two", type: "turn_completed", turn: 1 },
+        ],
+      },
       finalDisposition: {
         outcome: "objective_achieved",
         summary: "Inspection complete.",

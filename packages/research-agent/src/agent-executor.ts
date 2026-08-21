@@ -436,6 +436,7 @@ export function createPiAgentExecutor(
         const reservations = new Map<string, number>();
         let toolCallCount = 0;
         let currentTurn = 0;
+        const contextCompositionEmittedTurns = new Set<number>();
         let emittedMessageCount = 0;
         let finalAssistantMessage: AssistantMessage | null = null;
         const modelCalls: Record<string, unknown>[] = [];
@@ -537,12 +538,15 @@ export function createPiAgentExecutor(
         };
         const dynamicStreamFn: StreamFn = (_model, context, streamOptions) => {
           const active = activeModelSelection();
-          void emitRuntimeEvent({
-            type: "context_composed",
-            phase: "model_request",
-            turn: currentTurn,
-            ...agentContextCompositionMetrics(context),
-          });
+          if (!contextCompositionEmittedTurns.has(currentTurn)) {
+            contextCompositionEmittedTurns.add(currentTurn);
+            void emitRuntimeEvent({
+              type: "context_composed",
+              phase: "model_request",
+              turn: currentTurn,
+              ...agentContextCompositionMetrics(context),
+            });
+          }
           const routedModel = authenticationRouter.routePiModel(models, active.model.provider, active.model.id);
           if (!routedModel) {
             throw new Error(`Unknown routed model ${active.model.provider}/${active.model.id}`);

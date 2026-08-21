@@ -39,13 +39,27 @@ export interface HoneycrispSessionCapture {
   attemptId: string;
   capturedAt: string;
   schemaVersion: number;
-  request: Record<string, unknown>;
-  agent: Record<string, unknown>;
-  researchProfile?: Record<string, unknown>;
-  storage?: Record<string, unknown>;
-  storageManifest?: Record<string, unknown>;
-  runtimeConfig?: Record<string, unknown>;
+  eventStreams: {
+    timeline: HoneycrispSessionCaptureEventReference;
+    agentDiagnostics: HoneycrispSessionCaptureEventReference;
+  };
   raw: Record<string, unknown>;
+}
+
+export interface HoneycrispSessionCaptureEventReference {
+  source: "honeycrisp_session_events";
+  sessionId: string;
+  attemptId: string;
+  count: number;
+}
+
+export interface HoneycrispSessionCaptureSummary {
+  attemptId: string;
+  capturedAt: string;
+  schemaVersion: number;
+  sizeBytes: number;
+  contentHash: string;
+  eventStreams: HoneycrispSessionCapture["eventStreams"];
 }
 
 export interface HoneycrispSessionAttempt {
@@ -99,6 +113,37 @@ export interface HoneycrispSessionUpdate {
   finalResponse: string | null;
   events: HoneycrispSessionEvent[];
   eventOffset: number;
+  nextAfterEventId: string | null;
+  hasEarlier: boolean;
+  hasMore: boolean;
+}
+
+export type HoneycrispSessionEventStream = "all" | "transcript" | "trace";
+
+export interface HoneycrispSessionEventPageInput {
+  afterEventId?: string | null;
+  limit?: number;
+  maxBytes?: number;
+  tail?: boolean;
+  stream?: HoneycrispSessionEventStream;
+}
+
+export interface HoneycrispSessionEventPage {
+  sessionId: string;
+  stream: HoneycrispSessionEventStream;
+  events: HoneycrispSessionEvent[];
+  eventOffset: number;
+  nextAfterEventId: string | null;
+  hasEarlier: boolean;
+  hasMore: boolean;
+}
+
+export interface HoneycrispSessionCollaborationState {
+  sessionId: string;
+  revision: number;
+  rooms: HoneycrispSessionEvent[];
+  members: HoneycrispSessionEvent[];
+  messages: HoneycrispSessionEvent[];
 }
 
 export interface HoneycrispSessionMutationReceipt {
@@ -300,6 +345,36 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
       }
     },
   },
+  {
+    version: 4,
+    name: "compact_session_capture_event_histories",
+    up(database: DatabaseSync): void {
+      const rows = database.prepare(`
+        SELECT session_id, attempt_id, capture_json, content_hash
+        FROM honeycrisp_session_captures
+        ORDER BY session_id ASC, attempt_id ASC
+      `).all() as Array<{
+        session_id?: unknown;
+        attempt_id?: unknown;
+        capture_json?: unknown;
+        content_hash?: unknown;
+      }>;
+      const update = database.prepare(`
+        UPDATE honeycrisp_session_captures
+        SET capture_json = ?, content_hash = ?
+        WHERE session_id = ? AND attempt_id = ?
+      `);
+      for (const row of rows) {
+        const sessionId = requiredStoredString(row.session_id, "Honeycrisp session capture session id");
+        const attemptId = requiredStoredString(row.attempt_id, "Honeycrisp session capture attempt id");
+        const document = requiredStoredString(row.capture_json, "Honeycrisp session capture");
+        verifyJsonHash(document, row.content_hash, "Honeycrisp session capture");
+        const compacted = compactStoredCapture(JSON.parse(document) as unknown, sessionId, attemptId);
+        const compactedDocument = JSON.stringify(compacted);
+        update.run(compactedDocument, hashJson(compactedDocument), sessionId, attemptId);
+      }
+    },
+  },
 ] as const;
 
 export class HoneycrispSessionStore {
@@ -412,6 +487,42 @@ export class HoneycrispSessionStore {
     return session;
   }
 
+  public getSummary(sessionId: string): HoneycrispSessionSummary | null {
+    const session = this.getSessionCore(requiredString(sessionId, "Session id"));
+    if (!session) return null;
+    return sessionSummary(session, this.readSummaryTokenUsage([session.id]).get(session.id) ?? 0);
+  }
+
+  public getCapture(sessionId: string, attemptId: string): HoneycrispSessionCapture | null {
+    const normalizedSessionId = requiredString(sessionId, "Session id");
+    const normalizedAttemptId = requiredString(attemptId, "Attempt id");
+    const row = this.database.prepare(`
+      SELECT attempt_id, capture_json, content_hash FROM honeycrisp_session_captures
+      WHERE session_id = ? AND attempt_id = ?
+    `).get(normalizedSessionId, normalizedAttemptId) as StoredSessionCaptureRow | undefined;
+    return row ? decodeCaptureRow(row, normalizedSessionId) : null;
+  }
+
+  public listCaptureSummaries(sessionId: string): HoneycrispSessionCaptureSummary[] {
+    const normalizedSessionId = requiredString(sessionId, "Session id");
+    const rows = this.database.prepare(`
+      SELECT attempt_id, capture_json, content_hash FROM honeycrisp_session_captures
+      WHERE session_id = ? ORDER BY attempt_id ASC
+    `).all(normalizedSessionId) as StoredSessionCaptureRow[];
+    return rows.map((row) => {
+      const document = requiredStoredString(row.capture_json, "Honeycrisp session capture");
+      const capture = decodeCaptureRow(row, normalizedSessionId);
+      return {
+        attemptId: capture.attemptId,
+        capturedAt: capture.capturedAt,
+        schemaVersion: capture.schemaVersion,
+        sizeBytes: Buffer.byteLength(document),
+        contentHash: requiredStoredString(row.content_hash, "Honeycrisp session capture hash"),
+        eventStreams: capture.eventStreams,
+      };
+    });
+  }
+
   public list(workspaceId: string, limit = 100): HoneycrispSessionRecord[] {
     const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
     const rows = this.database.prepare(`
@@ -491,24 +602,29 @@ export class HoneycrispSessionStore {
     return sessions.map((session) => sessionSummary(session, tokenUsage.get(session.id) ?? 0));
   }
 
-  public getUpdate(sessionId: string, afterEventId?: string | null): HoneycrispSessionUpdate | null {
+  public getUpdate(
+    sessionId: string,
+    afterEventId?: string | null,
+    input: Omit<HoneycrispSessionEventPageInput, "afterEventId" | "stream"> = {},
+  ): HoneycrispSessionUpdate | null {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     if (this.normalizedEventStorage) {
       const session = this.getSessionCore(normalizedSessionId);
       if (!session) return null;
-      const normalizedAfterEventId = optionalString(afterEventId);
-      const cursor = normalizedAfterEventId
-        ? this.database.prepare(`
-            SELECT event_offset FROM honeycrisp_session_events
-            WHERE session_id = ? AND event_id = ?
-          `).get(normalizedSessionId, normalizedAfterEventId) as { event_offset?: unknown } | undefined
-        : undefined;
-      const eventOffset = typeof cursor?.event_offset === "number" ? cursor.event_offset + 1 : 0;
+      const page = this.getEventPage(normalizedSessionId, {
+        ...input,
+        ...(afterEventId !== undefined ? { afterEventId } : {}),
+        stream: "all",
+        tail: optionalString(afterEventId) ? false : input.tail ?? true,
+      });
       return {
         session: sessionSummary(session),
         finalResponse: session.finalResponse,
-        events: this.readEvents(normalizedSessionId, eventOffset),
-        eventOffset,
+        events: page.events,
+        eventOffset: page.eventOffset,
+        nextAfterEventId: page.nextAfterEventId,
+        hasEarlier: page.hasEarlier,
+        hasMore: page.hasMore,
       };
     }
     const session = this.get(normalizedSessionId);
@@ -523,6 +639,115 @@ export class HoneycrispSessionStore {
       finalResponse: session.finalResponse,
       events: session.events.slice(eventOffset),
       eventOffset,
+      nextAfterEventId: session.events.at(-1)?.id ?? null,
+      hasEarlier: eventOffset > 0,
+      hasMore: false,
+    };
+  }
+
+  public getEventPage(sessionId: string, input: HoneycrispSessionEventPageInput = {}): HoneycrispSessionEventPage {
+    const normalizedSessionId = requiredString(sessionId, "Session id");
+    if (!this.getSessionCore(normalizedSessionId)) throw new Error(`Session not found: ${normalizedSessionId}`);
+    const stream = input.stream ?? "all";
+    if (stream !== "all" && stream !== "transcript" && stream !== "trace") {
+      throw new Error(`Unsupported session event stream: ${stream}.`);
+    }
+    const limit = boundedInteger(input.limit, 500, 1, 2_000);
+    const maxBytes = boundedInteger(input.maxBytes, 2 * 1024 * 1024, 1_024, 8 * 1024 * 1024);
+    const afterEventId = optionalString(input.afterEventId);
+    const cursorOffset = afterEventId ? this.eventOffsetForCursor(normalizedSessionId, afterEventId) : null;
+    const tail = input.tail === true && !afterEventId;
+    const filter = eventStreamSql(stream);
+    const direction = tail ? "DESC" : "ASC";
+    const comparison = cursorOffset === null ? "" : "AND event_offset > ?";
+    const query = this.database.prepare(`
+      SELECT event_offset, event_json, content_hash FROM honeycrisp_session_events
+      WHERE session_id = ? ${comparison} ${filter}
+      ORDER BY event_offset ${direction}
+      LIMIT ?
+    `);
+    const rows = (cursorOffset === null
+      ? query.all(normalizedSessionId, limit + 1)
+      : query.all(normalizedSessionId, cursorOffset, limit + 1)
+    ) as Array<StoredSessionEventRow & { event_offset?: unknown }>;
+    const orderedRows = tail ? [...rows].reverse() : rows;
+    const selected: typeof orderedRows = [];
+    let bytes = 0;
+    const candidates = tail ? [...orderedRows].reverse() : orderedRows;
+    for (const row of candidates) {
+      if (selected.length >= limit) break;
+      const document = requiredStoredString(row.event_json, "Honeycrisp session event");
+      const nextBytes = Buffer.byteLength(document);
+      if (selected.length > 0 && bytes + nextBytes > maxBytes) break;
+      selected.push(row);
+      bytes += Math.min(nextBytes, maxBytes);
+    }
+    if (tail) selected.reverse();
+    const events = selected.map((row) => {
+      const document = requiredStoredString(row.event_json, "Honeycrisp session event");
+      return Buffer.byteLength(document) > maxBytes
+        ? projectOversizedSessionEvent(decodeEventRow(row), Buffer.byteLength(document))
+        : decodeEventRow(row);
+    });
+    const firstOffset = numericOffset(selected[0]?.event_offset);
+    const lastOffset = numericOffset(selected.at(-1)?.event_offset);
+    const bounds = this.eventStreamBounds(normalizedSessionId, stream);
+    return {
+      sessionId: normalizedSessionId,
+      stream,
+      events,
+      eventOffset: firstOffset ?? (cursorOffset === null ? 0 : cursorOffset + 1),
+      nextAfterEventId: events.at(-1)?.id ?? afterEventId ?? null,
+      hasEarlier: firstOffset !== null && bounds.minimum !== null && firstOffset > bounds.minimum,
+      hasMore: lastOffset !== null && bounds.maximum !== null && lastOffset < bounds.maximum,
+    };
+  }
+
+  public getEventDetails(sessionId: string, eventIds: readonly string[]): HoneycrispSessionEvent[] {
+    const normalizedSessionId = requiredString(sessionId, "Session id");
+    const normalizedIds = [...new Set(eventIds.map((eventId) => requiredString(eventId, "Session event id")))];
+    if (normalizedIds.length === 0) return [];
+    if (normalizedIds.length > 100) throw new Error("At most 100 session event details may be requested at once.");
+    const placeholders = normalizedIds.map(() => "?").join(", ");
+    const rows = this.database.prepare(`
+      SELECT event_json, content_hash FROM honeycrisp_session_events
+      WHERE session_id = ? AND (
+        event_id IN (${placeholders})
+        OR EXISTS (
+          SELECT 1 FROM json_each(json_extract(event_json, '$.payload.records')) AS nested
+          WHERE json_extract(nested.value, '$.id') IN (${placeholders})
+        )
+      )
+      ORDER BY event_offset ASC
+    `).all(normalizedSessionId, ...normalizedIds, ...normalizedIds) as StoredSessionEventRow[];
+    return rows.map(decodeEventRow);
+  }
+
+  public getCollaborationState(sessionId: string, messageLimit = 200): HoneycrispSessionCollaborationState {
+    const normalizedSessionId = requiredString(sessionId, "Session id");
+    const session = this.getSessionCore(normalizedSessionId);
+    if (!session) throw new Error(`Session not found: ${normalizedSessionId}`);
+    const readKind = (kind: string, limit: number): HoneycrispSessionEvent[] => {
+      const rows = this.database.prepare(`
+        SELECT event_json, content_hash FROM honeycrisp_session_events
+        WHERE session_id = ? AND json_extract(event_json, '$.kind') = ?
+        ORDER BY event_offset DESC
+        LIMIT ?
+      `).all(normalizedSessionId, kind, limit) as StoredSessionEventRow[];
+      return rows.map(decodeEventRow).reverse();
+    };
+    const roomEvents = readKind("beale.breakout_room", 2_000);
+    const memberEvents = readKind("beale.breakout_member", 4_000);
+    const messageEvents = readKind(
+      "beale.breakout_message",
+      boundedInteger(messageLimit, 200, 1, 1_000),
+    );
+    return {
+      sessionId: normalizedSessionId,
+      revision: session.revision,
+      rooms: latestRecordEvents(roomEvents),
+      members: latestRecordEvents(memberEvents),
+      messages: messageEvents,
     };
   }
 
@@ -712,18 +937,7 @@ export class HoneycrispSessionStore {
       const disposition = decodeDisposition(agent.finalDisposition);
       const response = optionalString(agent.outputText);
 
-      attempt.capture = {
-        attemptId: attempt.id,
-        capturedAt,
-        schemaVersion: numberValue(capture.schemaVersion),
-        request: recordValue(capture.request) ?? {},
-        agent,
-        ...(recordValue(capture.researchProfile) ? { researchProfile: recordValue(capture.researchProfile)! } : {}),
-        ...(recordValue(capture.storage) ? { storage: recordValue(capture.storage)! } : {}),
-        ...(recordValue(capture.storageManifest) ? { storageManifest: recordValue(capture.storageManifest)! } : {}),
-        ...(recordValue(capture.runtimeConfig) ? { runtimeConfig: recordValue(capture.runtimeConfig)! } : {}),
-        raw: capture,
-      };
+      attempt.capture = compactImportedCapture(capture, session.id, attempt.id, capturedAt);
       attempt.status = status;
       attempt.summary = summary;
       attempt.endedAt = capturedAt;
@@ -747,7 +961,7 @@ export class HoneycrispSessionStore {
   ): HoneycrispSessionRecord {
     this.database.exec("BEGIN IMMEDIATE;");
     try {
-      const session = this.get(sessionId);
+      const session = this.getSessionCore(requiredString(sessionId, "Session id"));
       if (!session) throw new Error(`Session not found: ${sessionId}`);
       if (expectedRevision !== undefined && session.revision !== expectedRevision) {
         throw new Error(
@@ -850,11 +1064,38 @@ export class HoneycrispSessionStore {
       WHERE session_id = ? AND event_offset >= ?
       ORDER BY event_offset ASC
     `).all(sessionId, fromOffset) as StoredSessionEventRow[];
-    return rows.map((row) => {
-      const document = requiredStoredString(row.event_json, "Honeycrisp session event");
-      verifyJsonHash(document, row.content_hash, "Honeycrisp session event");
-      return normalizeEvent(JSON.parse(document) as HoneycrispSessionEvent);
-    });
+    return rows.map(decodeEventRow);
+  }
+
+  private eventStreamBounds(
+    sessionId: string,
+    stream: HoneycrispSessionEventStream,
+  ): { minimum: number | null; maximum: number | null } {
+    const row = this.database.prepare(`
+      SELECT MIN(event_offset) AS minimum, MAX(event_offset) AS maximum
+      FROM honeycrisp_session_events
+      WHERE session_id = ? ${eventStreamSql(stream)}
+    `).get(sessionId) as { minimum?: unknown; maximum?: unknown } | undefined;
+    return {
+      minimum: numericOffset(row?.minimum),
+      maximum: numericOffset(row?.maximum),
+    };
+  }
+
+  private eventOffsetForCursor(sessionId: string, eventId: string): number | null {
+    const row = this.database.prepare(`
+      SELECT event_offset FROM honeycrisp_session_events
+      WHERE session_id = ? AND (
+        event_id = ?
+        OR EXISTS (
+          SELECT 1 FROM json_each(json_extract(event_json, '$.payload.records')) AS nested
+          WHERE json_extract(nested.value, '$.id') = ?
+        )
+      )
+      ORDER BY event_offset DESC
+      LIMIT 1
+    `).get(sessionId, eventId, eventId) as { event_offset?: unknown } | undefined;
+    return numericOffset(row?.event_offset);
   }
 
   private readSummaryTokenUsage(sessionIds: readonly string[]): Map<string, number> {
@@ -888,15 +1129,15 @@ export class HoneycrispSessionStore {
     `).get(sessionId) as { next_offset?: unknown } | undefined;
     let offset = typeof offsetRow?.next_offset === "number" ? offsetRow.next_offset : 0;
     const insert = this.database.prepare(`
-      INSERT INTO honeycrisp_session_events (
+      INSERT OR IGNORE INTO honeycrisp_session_events (
         session_id, event_offset, event_id, event_json, content_hash
       ) VALUES (?, ?, ?, ?, ?)
     `);
     for (const event of events) {
       const normalized = normalizeEvent(event);
       const document = JSON.stringify(normalized);
-      insert.run(sessionId, offset, normalized.id, document, hashJson(document));
-      offset += 1;
+      const result = insert.run(sessionId, offset, normalized.id, document, hashJson(document));
+      if (Number(result.changes) === 1) offset += 1;
     }
   }
 
@@ -908,11 +1149,7 @@ export class HoneycrispSessionStore {
     `).all(session.id) as StoredSessionCaptureRow[];
     const captures = new Map(rows.map((row) => {
       const attemptId = requiredStoredString(row.attempt_id, "Honeycrisp session capture attempt id");
-      const document = requiredStoredString(row.capture_json, "Honeycrisp session capture");
-      verifyJsonHash(document, row.content_hash, "Honeycrisp session capture");
-      const parsed = JSON.parse(document) as unknown;
-      if (!isRecord(parsed)) throw new Error("Honeycrisp session capture is invalid.");
-      return [attemptId, parsed as unknown as HoneycrispSessionCapture] as const;
+      return [attemptId, decodeCaptureRow(row, session.id)] as const;
     }));
     for (const attempt of session.attempts) attempt.capture = captures.get(attempt.id) ?? attempt.capture;
   }
@@ -1015,6 +1252,197 @@ function sessionMutationReceipt(session: HoneycrispSessionRecord): HoneycrispSes
     revision: session.revision,
     updatedAt: session.updatedAt,
   };
+}
+
+function compactImportedCapture(
+  capture: Record<string, unknown>,
+  sessionId: string,
+  attemptId: string,
+  capturedAt: string,
+): HoneycrispSessionCapture {
+  const timelineCount = Array.isArray(capture.eventTimeline) ? capture.eventTimeline.length : 0;
+  const agent = recordValue(capture.agent);
+  const agentRaw = recordValue(agent?.raw);
+  const agentDiagnosticCount = Array.isArray(agentRaw?.agentEvents) ? agentRaw.agentEvents.length : 0;
+  const eventStreams: HoneycrispSessionCapture["eventStreams"] = {
+    timeline: sessionCaptureEventReference(sessionId, attemptId, timelineCount),
+    agentDiagnostics: sessionCaptureEventReference(sessionId, attemptId, agentDiagnosticCount),
+  };
+  const compactedRaw: Record<string, unknown> = { ...capture };
+  delete compactedRaw.eventTimeline;
+  compactedRaw.eventTimelineRef = eventStreams.timeline;
+  if (agent) {
+    const compactedAgent: Record<string, unknown> = { ...agent };
+    if (agentRaw) {
+      const compactedAgentRaw: Record<string, unknown> = { ...agentRaw };
+      delete compactedAgentRaw.agentEvents;
+      compactedAgentRaw.agentEventsRef = eventStreams.agentDiagnostics;
+      compactedAgent.raw = compactedAgentRaw;
+    }
+    compactedRaw.agent = compactedAgent;
+  }
+  return {
+    attemptId,
+    capturedAt,
+    schemaVersion: numberValue(capture.schemaVersion),
+    eventStreams,
+    raw: compactedRaw,
+  };
+}
+
+function compactStoredCapture(value: unknown, sessionId: string, attemptId: string): HoneycrispSessionCapture {
+  if (!isRecord(value)) throw new Error("Honeycrisp session capture is invalid.");
+  const raw = recordValue(value.raw) ?? value;
+  const capturedAt = optionalString(value.capturedAt) ?? optionalString(raw.capturedAt) ?? new Date(0).toISOString();
+  const schemaVersion = typeof raw.schemaVersion === "number" ? raw.schemaVersion : value.schemaVersion;
+  const compacted = compactImportedCapture({ ...raw, schemaVersion }, sessionId, attemptId, capturedAt);
+  const storedStreams = recordValue(value.eventStreams);
+  const storedTimeline = recordValue(storedStreams?.timeline);
+  const storedDiagnostics = recordValue(storedStreams?.agentDiagnostics);
+  const eventStreams: HoneycrispSessionCapture["eventStreams"] = {
+    timeline: sessionCaptureEventReference(
+      sessionId,
+      attemptId,
+      finiteNonNegativeNumber(storedTimeline?.count) ?? compacted.eventStreams.timeline.count,
+    ),
+    agentDiagnostics: sessionCaptureEventReference(
+      sessionId,
+      attemptId,
+      finiteNonNegativeNumber(storedDiagnostics?.count) ?? compacted.eventStreams.agentDiagnostics.count,
+    ),
+  };
+  const compactedRaw: Record<string, unknown> = { ...compacted.raw, eventTimelineRef: eventStreams.timeline };
+  const compactedAgent = recordValue(compactedRaw.agent);
+  const compactedAgentRaw = recordValue(compactedAgent?.raw);
+  if (compactedAgent && compactedAgentRaw) {
+    compactedRaw.agent = {
+      ...compactedAgent,
+      raw: { ...compactedAgentRaw, agentEventsRef: eventStreams.agentDiagnostics },
+    };
+  }
+  return {
+    ...compacted,
+    schemaVersion: typeof value.schemaVersion === "number" ? numberValue(value.schemaVersion) : compacted.schemaVersion,
+    eventStreams,
+    raw: compactedRaw,
+  };
+}
+
+function sessionCaptureEventReference(
+  sessionId: string,
+  attemptId: string,
+  count: number,
+): HoneycrispSessionCaptureEventReference {
+  return {
+    source: "honeycrisp_session_events",
+    sessionId,
+    attemptId,
+    count: Math.max(0, Math.trunc(count)),
+  };
+}
+
+function decodeCaptureRow(row: StoredSessionCaptureRow, sessionId: string): HoneycrispSessionCapture {
+  const attemptId = requiredStoredString(row.attempt_id, "Honeycrisp session capture attempt id");
+  const document = requiredStoredString(row.capture_json, "Honeycrisp session capture");
+  verifyJsonHash(document, row.content_hash, "Honeycrisp session capture");
+  const parsed = JSON.parse(document) as unknown;
+  return compactStoredCapture(parsed, sessionId, attemptId);
+}
+
+function decodeEventRow(row: StoredSessionEventRow): HoneycrispSessionEvent {
+  const document = requiredStoredString(row.event_json, "Honeycrisp session event");
+  verifyJsonHash(document, row.content_hash, "Honeycrisp session event");
+  return normalizeEvent(JSON.parse(document) as HoneycrispSessionEvent);
+}
+
+function projectOversizedSessionEvent(event: HoneycrispSessionEvent, sizeBytes: number): HoneycrispSessionEvent {
+  const payload = recordValue(event.payload);
+  if (event.kind === "beale.trace_batch" && Array.isArray(payload?.records)) {
+    return {
+      ...event,
+      payload: {
+        detailAvailableOnRequest: true,
+        sizeBytes,
+        records: payload.records.slice(0, 256).flatMap((candidate) => {
+          const record = recordValue(candidate);
+          if (!record) return [];
+          return [{
+            id: optionalString(record.id) ?? `projected_${randomUUID()}`,
+            runId: optionalString(record.runId) ?? "",
+            attemptId: optionalString(record.attemptId),
+            sequence: finiteNonNegativeNumber(record.sequence) ?? 0,
+            type: optionalString(record.type) ?? "research_event",
+            source: optionalString(record.source) ?? "executor",
+            summary: truncateText(optionalString(record.summary) ?? "Large trace event", 400),
+            payload: { detailAvailableOnRequest: true, sizeBytes },
+            sensitivity: optionalString(record.sensitivity) ?? "internal",
+            modelVisible: record.modelVisible !== false,
+            createdAt: optionalString(record.createdAt) ?? event.timestamp,
+            artifactId: optionalString(record.artifactId),
+            toolCallId: optionalString(record.toolCallId),
+            approvalId: optionalString(record.approvalId),
+          }];
+        }),
+      },
+    };
+  }
+  if (event.kind === "beale.transcript") {
+    const record = recordValue(payload?.record);
+    if (record) {
+      return {
+        ...event,
+        payload: {
+          record: {
+            ...record,
+            contentMarkdown: truncateText(optionalString(record.contentMarkdown) ?? "", 8_000),
+            metadata: {
+              ...(recordValue(record.metadata) ?? {}),
+              detailAvailableOnRequest: true,
+              sizeBytes,
+            },
+          },
+        },
+      };
+    }
+  }
+  return {
+    ...event,
+    payload: { detailAvailableOnRequest: true, sizeBytes },
+  };
+}
+
+function eventStreamSql(stream: HoneycrispSessionEventStream): string {
+  if (stream === "transcript") return "AND json_extract(event_json, '$.kind') = 'beale.transcript'";
+  if (stream === "trace") {
+    return `AND json_extract(event_json, '$.kind') NOT IN (
+      'beale.transcript', 'beale.breakout_room', 'beale.breakout_member', 'beale.breakout_message'
+    )`;
+  }
+  return "";
+}
+
+function latestRecordEvents(events: readonly HoneycrispSessionEvent[]): HoneycrispSessionEvent[] {
+  const latest = new Map<string, HoneycrispSessionEvent>();
+  for (const event of events) {
+    const payload = recordValue(event.payload);
+    const record = recordValue(payload?.record);
+    const id = optionalString(record?.id) ?? event.id;
+    latest.set(id, event);
+  }
+  return [...latest.values()];
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
+}
+
+function truncateText(value: string, maximum: number): string {
+  return value.length <= maximum ? value : `${value.slice(0, Math.max(0, maximum - 1))}…`;
+}
+
+function numericOffset(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 function decodeStoredSession(value: unknown): HoneycrispSessionRecord {

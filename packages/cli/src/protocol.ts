@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 export const HONEYCRISP_PROTOCOL_NAME = "honeycrisp" as const;
 export const HONEYCRISP_PROTOCOL_VERSION = 1 as const;
-export const HONEYCRISP_CONTRACT_VERSION = 3 as const;
+export const HONEYCRISP_CONTRACT_VERSION = 4 as const;
 export const HONEYCRISP_RUNTIME_VERSION = "0.1.0" as const;
 export const HONEYCRISP_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX = "HONEYCRISP_TRANSPORT " as const;
@@ -17,6 +17,8 @@ export const HONEYCRISP_PROTOCOL_CAPABILITIES = [
   "knowledge.evidence_gates",
   "session.append_only",
   "session.controls",
+  "session.bounded_reads",
+  "session.targeted_details",
 ] as const;
 
 /** @deprecated Import the protocol-named constants from `honeycrisp/protocol`. */
@@ -28,7 +30,8 @@ export const HONEYCRISP_TRANSPORT_PATH = HONEYCRISP_PROTOCOL_WEBSOCKET_PATH;
 
 export const HONEYCRISP_PROTOCOL_OPERATIONS = [
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
-  "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.list", "session.list_summaries",
+  "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
+  "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",
   "memory.summary", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
   "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.get",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",

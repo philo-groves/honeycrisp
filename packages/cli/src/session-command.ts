@@ -27,7 +27,7 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
 
   let store: HoneycrispSessionStore | undefined;
   try {
-    store = new HoneycrispSessionStore({ readOnly: command === "get" || command === "get-update" || command === "list" || command === "list-summaries" });
+    store = new HoneycrispSessionStore({ readOnly: readOnlySessionCommand(command) });
     const sessionId = option(argv, "--session-id");
     let result: unknown;
     switch (command) {
@@ -38,7 +38,7 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
         result = store.beginAttempt(requiredOption(sessionId, "--session-id"), await readJsonOption<BeginHoneycrispSessionAttemptInput>(argv, "--input"));
         break;
       case "append-event":
-        result = store.appendEvent(requiredOption(sessionId, "--session-id"), await readJsonOption<HoneycrispSessionEvent>(argv, "--input"));
+        result = store.appendEventReceipt(requiredOption(sessionId, "--session-id"), await readJsonOption<HoneycrispSessionEvent>(argv, "--input"));
         break;
       case "append-event-receipt":
         result = store.appendEventReceipt(requiredOption(sessionId, "--session-id"), await readJsonOption<HoneycrispSessionEvent>(argv, "--input"));
@@ -55,22 +55,62 @@ export async function runSessionCommand(argv: readonly string[], requestId?: str
       case "import-capture": {
         const attemptId = requiredOption(option(argv, "--attempt-id"), "--attempt-id");
         const capture = await readJsonFile(requiredOption(option(argv, "--capture"), "--capture"));
-        result = store.importCapture(requiredOption(sessionId, "--session-id"), { attemptId, capture });
+        const session = store.importCapture(requiredOption(sessionId, "--session-id"), { attemptId, capture });
+        result = {
+          sessionId: session.id,
+          status: session.status,
+          revision: session.revision,
+          updatedAt: session.updatedAt,
+        };
         break;
       }
       case "get":
-        result = store.get(requiredOption(sessionId, "--session-id"));
+        result = store.getSummary(requiredOption(sessionId, "--session-id"));
         if (!result) throw new Error(`Session not found: ${sessionId}`);
         break;
       case "get-update":
         result = store.getUpdate(
           requiredOption(sessionId, "--session-id"),
           option(argv, "--after-event-id"),
+          {
+            ...eventPageNumericOptions(argv),
+            tail: argv.includes("--tail"),
+          },
         );
         if (!result) throw new Error(`Session not found: ${sessionId}`);
         break;
+      case "events":
+        result = store.getEventPage(requiredOption(sessionId, "--session-id"), {
+          ...(option(argv, "--after-event-id") ? { afterEventId: option(argv, "--after-event-id")! } : {}),
+          stream: sessionEventStream(option(argv, "--stream")),
+          ...eventPageNumericOptions(argv),
+          tail: argv.includes("--tail"),
+        });
+        break;
+      case "event-details":
+        result = store.getEventDetails(
+          requiredOption(sessionId, "--session-id"),
+          requiredOptions(options(argv, "--event-id"), "--event-id"),
+        );
+        break;
+      case "collaboration":
+        result = store.getCollaborationState(
+          requiredOption(sessionId, "--session-id"),
+          positiveIntegerOption(argv, "--message-limit") ?? 200,
+        );
+        break;
+      case "captures":
+        result = store.listCaptureSummaries(requiredOption(sessionId, "--session-id"));
+        break;
+      case "capture":
+        result = store.getCapture(
+          requiredOption(sessionId, "--session-id"),
+          requiredOption(option(argv, "--attempt-id"), "--attempt-id"),
+        );
+        if (!result) throw new Error(`Capture not found for session ${sessionId}.`);
+        break;
       case "list":
-        result = store.listForWorkspaces(
+        result = store.listSummariesForWorkspaces(
           requiredOptions(options(argv, "--workspace-id"), "--workspace-id"),
           positiveIntegerOption(argv, "--limit") ?? 100,
         );
@@ -104,10 +144,35 @@ function operationForCommand(command: string): HoneycrispProtocolOperation | nul
     case "import-capture": return "session.import_capture";
     case "get": return "session.get";
     case "get-update": return "session.get_update";
+    case "events": return "session.events";
+    case "event-details": return "session.event_details";
+    case "collaboration": return "session.collaboration";
+    case "captures": return "session.captures";
+    case "capture": return "session.capture";
     case "list": return "session.list";
     case "list-summaries": return "session.list_summaries";
     default: return null;
   }
+}
+
+function readOnlySessionCommand(command: string): boolean {
+  return new Set([
+    "get", "get-update", "events", "event-details", "collaboration", "captures", "capture", "list", "list-summaries",
+  ]).has(command);
+}
+
+function sessionEventStream(value: string | undefined): "all" | "transcript" | "trace" {
+  if (value === undefined || value === "all" || value === "transcript" || value === "trace") return value ?? "all";
+  throw new Error("--stream must be all, transcript, or trace.");
+}
+
+function eventPageNumericOptions(argv: readonly string[]): { limit?: number; maxBytes?: number } {
+  const limit = positiveIntegerOption(argv, "--limit");
+  const maxBytes = positiveIntegerOption(argv, "--max-bytes");
+  return {
+    ...(limit !== undefined ? { limit } : {}),
+    ...(maxBytes !== undefined ? { maxBytes } : {}),
+  };
 }
 
 function emitFailure(operation: HoneycrispProtocolOperation, code: string, message: string, requestId?: string): void {
@@ -189,6 +254,12 @@ function sessionUsage(): string {
     "  honeycrisp session recover-interrupted --workspace-id <id> [--input <json>] --json",
     "  honeycrisp session import-capture --session-id <id> --attempt-id <id> --capture <json> --json",
     "  honeycrisp session get --session-id <id> --json",
+    "  honeycrisp session get-update --session-id <id> [--after-event-id <id>] [--tail] [--limit <n>] [--max-bytes <n>] --json",
+    "  honeycrisp session events --session-id <id> [--stream all|transcript|trace] [--after-event-id <id>] [--tail] [--limit <n>] [--max-bytes <n>] --json",
+    "  honeycrisp session event-details --session-id <id> --event-id <id> [--event-id <id> ...] --json",
+    "  honeycrisp session collaboration --session-id <id> [--message-limit <n>] --json",
+    "  honeycrisp session captures --session-id <id> --json",
+    "  honeycrisp session capture --session-id <id> --attempt-id <id> --json",
     "  honeycrisp session list --workspace-id <id> [--workspace-id <id> ...] [--limit <n>] --json",
     "  honeycrisp session list-summaries --workspace-id <id> [--workspace-id <id> ...] [--limit <n>] --json",
   ].join("\n");

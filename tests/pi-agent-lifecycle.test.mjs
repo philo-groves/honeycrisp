@@ -2168,6 +2168,7 @@ test("Pi Agent executor streams live thought and phased message events", async (
   );
   assert.equal(result.agentRun.output.text, "## Result\nPrepared parser inspection plan.");
   const contextComposed = agentEvents.find((event) => event.payload.type === "context_composed");
+  assert.equal(agentEvents.filter((event) => event.payload.type === "context_composed").length, 1);
   assert.equal(contextComposed.payload.phase, "model_request");
   assert.equal(contextComposed.payload.turn, 1);
   assert.ok(contextComposed.payload.estimatedTokens > 0);

@@ -26,7 +26,7 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v3 contract for CLI and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v4 contract for CLI and WebSocket clients", () => {
   const result = spawnSync(process.execPath, [
     cliPath, "protocol", "describe", "--json", "--request-id", "describe-1",
   ], {
@@ -39,13 +39,15 @@ test("protocol describe exposes a runtime-bound v3 contract for CLI and WebSocke
   assert.equal(envelope.operation, "protocol.describe");
   assert.equal(envelope.requestId, "describe-1");
   assert.deepEqual(envelope.result.operations, HONEYCRISP_PROTOCOL_OPERATIONS);
-  assert.equal(envelope.result.contractVersion, 3);
+  assert.equal(envelope.result.contractVersion, 4);
   assert.match(envelope.result.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(envelope.result.schemas.memorySummary, 3);
   assert.equal(envelope.result.schemas.finding, 1);
   assert.equal(envelope.result.schemas.campaignGraph, 1);
   assert.ok(envelope.result.capabilities.includes("knowledge.findings"));
   assert.ok(envelope.result.capabilities.includes("knowledge.campaign_graph"));
+  assert.ok(envelope.result.capabilities.includes("session.bounded_reads"));
+  assert.ok(envelope.result.capabilities.includes("session.targeted_details"));
   assert.equal(envelope.result.transports.websocket.path, "/v1/session");
   assert.equal(envelope.result.transports.cli.framing, "single-json-envelope");
   assert.equal(envelope.result.transports.cli.correlation, "request-id");

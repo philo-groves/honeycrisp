@@ -1848,7 +1848,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)) {
     const sessionStore = args.sessionId && args.attemptId
       ? new HoneycrispSessionStore()
       : undefined;
-    if (sessionStore && !sessionStore.get(args.sessionId!)) {
+    if (sessionStore && !sessionStore.getSummary(args.sessionId!)) {
       sessionStore.close();
       throw new Error(`Honeycrisp session was not created before launch: ${args.sessionId}`);
     }
@@ -4284,23 +4284,32 @@ function createPersistedSessionEventSink(
   downstream: ResearchLiveEventSink | undefined,
 ): ResearchLiveEventSink {
   return async (event) => {
-    const payload = isRecord(event.payload) ? event.payload : {};
-    const nestedEvent = isRecord(payload.event) ? payload.event : {};
-    store.appendEvent(sessionId, {
-      id: nonEmptySessionText(payload.eventId)
-        ?? nonEmptySessionText(nestedEvent.id)
-        ?? nonEmptySessionText(payload.approvalRequestId)
-        ?? randomUUID(),
-      kind: event.kind,
-      timestamp: event.timestamp,
-      summary: nonEmptySessionText(payload.summary) ?? nonEmptySessionText(payload.eventType) ?? event.kind,
-      payload: event.payload,
-      ...(nonEmptySessionText(payload.agentId) ? { agentId: nonEmptySessionText(payload.agentId)! } : {}),
-      ...(nonEmptySessionText(payload.agentPath) ? { agentPath: nonEmptySessionText(payload.agentPath)! } : {}),
-      ...(nonEmptySessionText(payload.parentAgentId) ? { parentAgentId: nonEmptySessionText(payload.parentAgentId)! } : {}),
-    });
+    if (shouldPersistSessionEvent(event)) {
+      const payload = isRecord(event.payload) ? event.payload : {};
+      const nestedEvent = isRecord(payload.event) ? payload.event : {};
+      store.appendEventReceipt(sessionId, {
+        id: nonEmptySessionText(payload.eventId)
+          ?? nonEmptySessionText(nestedEvent.id)
+          ?? nonEmptySessionText(payload.approvalRequestId)
+          ?? randomUUID(),
+        kind: event.kind,
+        timestamp: event.timestamp,
+        summary: nonEmptySessionText(payload.summary) ?? nonEmptySessionText(payload.eventType) ?? event.kind,
+        payload: event.payload,
+        ...(nonEmptySessionText(payload.agentId) ? { agentId: nonEmptySessionText(payload.agentId)! } : {}),
+        ...(nonEmptySessionText(payload.agentPath) ? { agentPath: nonEmptySessionText(payload.agentPath)! } : {}),
+        ...(nonEmptySessionText(payload.parentAgentId) ? { parentAgentId: nonEmptySessionText(payload.parentAgentId)! } : {}),
+      });
+    }
     await downstream?.(event);
   };
+}
+
+function shouldPersistSessionEvent(event: Parameters<ResearchLiveEventSink>[0]): boolean {
+  if (event.kind !== "model.output" && event.kind !== "model.thought") return true;
+  const payload = isRecord(event.payload) ? event.payload : {};
+  const phase = nonEmptySessionText(payload.phase);
+  return phase !== "started" && phase !== "delta";
 }
 
 function nonEmptySessionText(value: unknown): string | undefined {

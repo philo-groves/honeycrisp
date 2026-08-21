@@ -54,7 +54,7 @@ test("WebSocket transport authenticates and exchanges versioned session messages
     type: "server.hello",
     sessionId: "session-1",
     server: { name: "honeycrisp", version: "test", buildId: "[build]" },
-    contractVersion: 3,
+    contractVersion: 4,
     schemas: { protocol: 1, session: 1, memorySummary: 3, finding: 1, campaignGraph: 1 },
     capabilities: ["session.events", "session.controls"],
   });
